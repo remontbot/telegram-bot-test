@@ -1,15 +1,16 @@
 import os
-from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "test-token")
+TOKEN = os.getenv("BOT_TOKEN")
 
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Привет! Бот запущен и работает ✅")
 
-@dp.message_handler(commands=["start"])
-async def start_command(message: types.Message):
-    await message.answer("Привет! 👋 Бот работает. Тестовая версия активна.")
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.run_polling()
 
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+    main()
