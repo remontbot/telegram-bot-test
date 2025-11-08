@@ -1,3 +1,9 @@
+import os
+
+print("--- Environment Variables ---")
+for key, value in os.environ.items():
+    print(f"{key}={value}")
+print("----------------------------")
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
