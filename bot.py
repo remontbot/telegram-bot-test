@@ -14,7 +14,7 @@ from telegram import Update
 import db
 import handlers
 
-# --- НАЧАЛО ИСПРАВЛЕННОГО БЛОКА ДЛЯ ИМПОРТА CONFIG.PY ---
+# --- НАЧАЛО ИСПРАВЛЕННОГО БЛОКА ДЛЯ ИМПОРТА CONFIG.PY И ЗАГРУЗКИ ENV ---
 # Попытка импортировать config, если он есть рядом (локально)
 config = None
 try:
@@ -23,14 +23,15 @@ try:
 except ModuleNotFoundError:
     # В Railway или другой среде config.py может не быть — это ок, пойдём через ENV
     pass
-# --- КОНЕЦ ИСПРАВЛЕННОГО БЛОКА ---
 
 # Если локально используешь .env, подхватим (не мешает Railway)
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
+    # Если python-dotenv не установлен, это не критично для Railway, где ENV уже есть
     pass
+# --- КОНЕЦ ИСПРАВЛЕННОГО БЛОКА ---
 
 # Логирование
 logging.basicConfig(
@@ -47,11 +48,13 @@ def get_bot_token() -> str:
     """
     # Вариант 1: из config.py
     if config is not None and getattr(config, "BOT_TOKEN", None):
+        logger.info("BOT_TOKEN взят из config.py")
         return config.BOT_TOKEN
 
     # Вариант 2: из ENV (Railway Variables / .env)
     token = os.getenv("BOT_TOKEN")
     if token:
+        logger.info("BOT_TOKEN взят из переменных окружения")
         return token
 
     # Если не нашли вообще — кидаем в лог и падаем с ошибкой
