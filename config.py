@@ -14,7 +14,6 @@ from telegram import Update
 import db
 import handlers
 
-# --- НАЧАЛО ИСПРАВЛЕННОГО БЛОКА ДЛЯ ИМПОРТА CONFIG.PY ---
 # Попытка импортировать config, если он есть рядом (локально)
 config = None
 try:
@@ -23,7 +22,6 @@ try:
 except ModuleNotFoundError:
     # В Railway или другой среде config.py может не быть — это ок, пойдём через ENV
     pass
-# --- КОНЕЦ ИСПРАВЛЕННОГО БЛОКА ---
 
 # Если локально используешь .env, подхватим (не мешает Railway)
 try:
