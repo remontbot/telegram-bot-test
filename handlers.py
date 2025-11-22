@@ -219,29 +219,27 @@ async def register_master_categories_select(update: Update, context: ContextType
         await query.edit_message_text(text)
         return REGISTER_MASTER_EXPERIENCE
 
-    if selected == "Другое":
+    elif selected == "Другое":
         await query.edit_message_text(
-            "Введите ваши виды работ через запятую.\n"
-            "Пример: «Натяжные потолки, вентиляция, кондиционеры»."
+            "Введите свои виды работ через запятую.\n"
+            "Например: «Покраска фасадов, декорирование, гипсокартонные конструкции»"
         )
         return REGISTER_MASTER_CATEGORIES_OTHER
 
-    if selected not in context.user_data["categories"]:
-        context.user_data["categories"].append(selected)
+    else:
+        if selected not in context.user_data["categories"]:
+            context.user_data["categories"].append(selected)
+            await query.answer(f"Добавлено: {selected}")
+        else:
+            await query.answer(f"{selected} уже выбрана")
 
-    chosen = ", ".join(context.user_data["categories"])
-    await query.edit_message_text(
-        f"Добавлено: {selected}\n"
-        f"Текущий список: {chosen}\n\n"
-        f"Можете выбрать ещё или нажать «✅ Завершить выбор».",
-        reply_markup=query.message.reply_markup,
-    )
-    return REGISTER_MASTER_CATEGORIES_SELECT
+        return REGISTER_MASTER_CATEGORIES_SELECT
 
 
 async def register_master_categories_other(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    extra = [c.strip() for c in update.message.text.split(",") if c.strip()]
-    context.user_data["categories"].extend(extra)
+    user_cats = update.message.text.strip()
+    custom_list = [c.strip() for c in user_cats.split(",") if c.strip()]
+    context.user_data["categories"].extend(custom_list)
 
     await update.message.reply_text(
         "Отлично 👍\n\n"
@@ -402,35 +400,41 @@ async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE
     # 2) user_id корректно берём из строки users.id
     user_id = user["id"]
 
-    # 3) Берём профиль мастера по user_id (у тебя уже есть эта функция)
+    # 3) Берём профиль мастера по user_id
     worker_profile = db.get_worker_profile(user_id)
 
     if not worker_profile:
         await query.edit_message_text(
-            "Похоже, ваш профиль мастера ещё не заполнен."
+            "Похоже, ваш профиль мастера ещё не заполнен.\n\n"
+            "Если вы только что регистрировались, попробуйте использовать команду /reset_profile для очистки и повторной регистрации."
         )
         return
 
-    name = worker_profile.get("name", "—")
-    phone = worker_profile.get("phone", "—")
-    city = worker_profile.get("city", "—")
-    regions = worker_profile.get("regions", "—")
-    categories = worker_profile.get("categories", "—")
-    experience = worker_profile.get("experience", "—")
-    description = worker_profile.get("description", "—")
-    rating = worker_profile.get("rating", None)
-    rating_text = rating if rating not in (None, "", 0) else "нет отзывов"
+    name = worker_profile.get("name", "—") or "—"
+    phone = worker_profile.get("phone", "—") or "—"
+    city = worker_profile.get("city", "—") or "—"
+    regions = worker_profile.get("regions", "—") or "—"
+    categories = worker_profile.get("categories", "—") or "—"
+    experience = worker_profile.get("experience", "—") or "—"
+    description = worker_profile.get("description", "—") or "—"
+    rating = worker_profile.get("rating", 0)
+    rating_count = worker_profile.get("rating_count", 0)
+    
+    if rating and rating > 0:
+        rating_text = f"⭐ {rating:.1f} ({rating_count} отзывов)"
+    else:
+        rating_text = "Нет отзывов"
 
     text = (
         "👤 <b>Ваш профиль мастера</b>\n\n"
-        f"Имя: {name}\n"
-        f"Телефон: {phone}\n"
-        f"Город: {city}\n"
-        f"Районы: {regions}\n"
-        f"Виды работ: {categories}\n"
-        f"Опыт: {experience}\n"
-        f"Описание: {description}\n"
-        f"Рейтинг: {rating_text}\n"
+        f"<b>Имя:</b> {name}\n"
+        f"<b>Телефон:</b> {phone}\n"
+        f"<b>Город:</b> {city}\n"
+        f"<b>Районы:</b> {regions}\n"
+        f"<b>Виды работ:</b> {categories}\n"
+        f"<b>Опыт:</b> {experience}\n"
+        f"<b>Описание:</b> {description}\n"
+        f"<b>Рейтинг:</b> {rating_text}\n"
     )
 
     keyboard = [
@@ -457,6 +461,30 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_invalid_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Не вижу тут ожидаемого ответа. Попробуйте ещё раз или введите /start."
-    )
+    if update.message:
+        await update.message.reply_text(
+            "Не вижу тут ожидаемого ответа. Попробуйте ещё раз или введите /start."
+        )
+    elif update.callback_query:
+        await update.callback_query.answer("Неверное действие. Используйте /start для начала.")
+
+
+# ------- НОВАЯ ФУНКЦИЯ: ОЧИСТКА ПРОФИЛЯ -------
+
+async def reset_profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда для полной очистки профиля пользователя из базы данных"""
+    telegram_id = update.effective_user.id
+    
+    # Удаляем профиль из базы
+    success = db.delete_user_profile(telegram_id)
+    
+    if success:
+        await update.message.reply_text(
+            "✅ Ваш профиль успешно удалён из базы данных.\n\n"
+            "Теперь вы можете зарегистрироваться заново, используя команду /start"
+        )
+    else:
+        await update.message.reply_text(
+            "⚠️ Профиль не найден или уже удалён.\n\n"
+            "Используйте /start для регистрации."
+        )
