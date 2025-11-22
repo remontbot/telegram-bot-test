@@ -145,6 +145,36 @@ def create_user(telegram_id, role):
         return cursor.lastrowid
 
 
+def delete_user_profile(telegram_id):
+    """
+    Полностью удаляет профиль пользователя из базы данных.
+    Возвращает True, если удаление прошло успешно, False если пользователь не найден.
+    """
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        cursor = conn.cursor()
+        
+        # Сначала получаем user_id
+        cursor.execute("SELECT id, role FROM users WHERE telegram_id = ?", (telegram_id,))
+        user_row = cursor.fetchone()
+        
+        if not user_row:
+            return False
+        
+        user_id, role = user_row
+        
+        # Удаляем из таблицы профиля (workers или clients)
+        if role == "worker":
+            cursor.execute("DELETE FROM workers WHERE user_id = ?", (user_id,))
+        elif role == "client":
+            cursor.execute("DELETE FROM clients WHERE user_id = ?", (user_id,))
+        
+        # Удаляем пользователя из таблицы users
+        cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        
+        conn.commit()
+        return True
+
+
 # --- Профили мастеров и заказчиков ---
 
 def create_worker_profile(user_id, name, phone, city, regions, categories, experience, description):
