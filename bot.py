@@ -192,6 +192,11 @@ def main():
         )
     )
 
+    # Команда для очистки профиля
+    application.add_handler(
+        CommandHandler("reset_profile", handlers.reset_profile_command)
+    )
+
     # Обработчик неизвестных команд
     application.add_handler(
         MessageHandler(filters.COMMAND, handlers.unknown_command)
