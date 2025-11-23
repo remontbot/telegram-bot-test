@@ -130,6 +130,17 @@ def main():
                     handlers.register_master_description,
                 )
             ],
+            # НОВОЕ: Обработка фото работ
+            handlers.REGISTER_MASTER_PHOTOS: [
+                CallbackQueryHandler(
+                    handlers.register_master_photos,
+                    pattern="^add_photos_",
+                ),
+                MessageHandler(
+                    filters.PHOTO | (filters.TEXT & ~filters.COMMAND),
+                    handlers.handle_master_photos,
+                ),
+            ],
 
             # Регистрация заказчика
             handlers.REGISTER_CLIENT_NAME: [
