@@ -28,11 +28,12 @@ logger = logging.getLogger(__name__)
     REGISTER_MASTER_CATEGORIES_OTHER,
     REGISTER_MASTER_EXPERIENCE,
     REGISTER_MASTER_DESCRIPTION,
+    REGISTER_MASTER_PHOTOS,
     REGISTER_CLIENT_NAME,
     REGISTER_CLIENT_PHONE,
     REGISTER_CLIENT_CITY,
     REGISTER_CLIENT_DESCRIPTION,
-) = range(13)
+) = range(14)
 
 
 def is_valid_name(name: str) -> bool:
@@ -153,7 +154,6 @@ async def register_master_city(update: Update, context: ContextTypes.DEFAULT_TYP
     city = update.message.text.strip()
     context.user_data["city"] = city
     
-    # НОВОЕ: Кнопки для выбора районов Минска
     keyboard = [
         [
             InlineKeyboardButton("Центральный", callback_data="region_Центральный"),
@@ -204,7 +204,6 @@ async def register_master_regions(update: Update, context: ContextTypes.DEFAULT_
             await query.answer("Выберите хотя бы один район!", show_alert=True)
             return REGISTER_MASTER_REGIONS
         
-        # Переходим к выбору категорий
         keyboard = [
             [
                 InlineKeyboardButton("Электрика", callback_data="cat_Электрика"),
@@ -248,14 +247,12 @@ async def register_master_regions(update: Update, context: ContextTypes.DEFAULT_
         return REGISTER_MASTER_REGIONS
     
     else:
-        # Добавляем/убираем район
         selected_region = data.replace("region_", "")
         
         if selected_region in context.user_data["regions"]:
             context.user_data["regions"].remove(selected_region)
             await query.answer(f"Убрано: {selected_region}")
         else:
-            # Если выбрали конкретный район, убираем "Весь Минск"
             if "Весь Минск" in context.user_data["regions"]:
                 context.user_data["regions"].remove("Весь Минск")
             context.user_data["regions"].append(selected_region)
@@ -275,7 +272,6 @@ async def register_master_categories_select(update: Update, context: ContextType
             await query.answer("Выберите хотя бы один вид работ!", show_alert=True)
             return REGISTER_MASTER_CATEGORIES_SELECT
 
-        # НОВОЕ: Кнопки для выбора опыта работы
         keyboard = [
             [InlineKeyboardButton("Начинающий (до 1 года)", callback_data="exp_Начинающий")],
             [InlineKeyboardButton("1-3 года", callback_data="exp_1-3 года")],
@@ -315,7 +311,6 @@ async def register_master_categories_other(update: Update, context: ContextTypes
     custom_list = [c.strip() for c in user_cats.split(",") if c.strip()]
     context.user_data["categories"].extend(custom_list)
 
-    # НОВОЕ: Кнопки для выбора опыта работы
     keyboard = [
         [InlineKeyboardButton("Начинающий (до 1 года)", callback_data="exp_Начинающий")],
         [InlineKeyboardButton("1-3 года", callback_data="exp_1-3 года")],
@@ -332,7 +327,6 @@ async def register_master_categories_other(update: Update, context: ContextTypes
 
 
 async def register_master_experience(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # НОВОЕ: Обработка кнопок опыта
     query = update.callback_query
     await query.answer()
     
@@ -354,9 +348,89 @@ async def register_master_experience(update: Update, context: ContextTypes.DEFAU
 
 async def register_master_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["description"] = update.message.text.strip()
+    
+    # НОВОЕ: Предлагаем добавить фото работ
+    keyboard = [
+        [InlineKeyboardButton("📸 Да, добавить фото работ", callback_data="add_photos_yes")],
+        [InlineKeyboardButton("⏭ Пропустить (добавлю позже)", callback_data="add_photos_no")],
+    ]
+    
+    await update.message.reply_text(
+        "📸 <b>Портфолио работ</b>\n\n"
+        "Хотите добавить фотографии ваших работ?\n\n"
+        "Фото помогут клиентам увидеть качество ваших работ и повысят доверие к вам.\n"
+        "Вы сможете добавить до 10 фотографий.\n\n"
+        "💡 <i>Совет: Фото работ значительно увеличивают количество откликов!</i>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML",
+    )
+    return REGISTER_MASTER_PHOTOS
 
-    telegram_id = update.effective_user.id
+
+async def register_master_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора: добавлять фото или нет"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "add_photos_yes":
+        context.user_data["portfolio_photos"] = []
+        await query.edit_message_text(
+            "📸 <b>Загрузка фото работ</b>\n\n"
+            "Отправьте фотографии ваших работ (до 10 штук).\n"
+            "Можно отправлять по одной или группой.\n\n"
+            "Когда загрузите все фото, отправьте команду:\n"
+            "/done_photos",
+            parse_mode="HTML",
+        )
+        return REGISTER_MASTER_PHOTOS
+    else:
+        # Пропускаем фото, завершаем регистрацию
+        return await finalize_master_registration(update, context)
+
+
+async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка загруженных фотографий"""
+    if update.message.text and update.message.text == "/done_photos":
+        return await finalize_master_registration(update, context)
+    
+    if update.message.photo:
+        if "portfolio_photos" not in context.user_data:
+            context.user_data["portfolio_photos"] = []
+        
+        photo = update.message.photo[-1]  # Берём самое большое разрешение
+        file_id = photo.file_id
+        
+        if len(context.user_data["portfolio_photos"]) < 10:
+            context.user_data["portfolio_photos"].append(file_id)
+            count = len(context.user_data["portfolio_photos"])
+            await update.message.reply_text(
+                f"✅ Фото {count}/10 добавлено!\n\n"
+                f"Загружено фотографий: {count}\n"
+                f"Можно ещё: {10 - count}\n\n"
+                f"Отправьте /done_photos когда закончите."
+            )
+        else:
+            await update.message.reply_text(
+                "⚠️ Максимум 10 фотографий.\n\n"
+                "Отправьте /done_photos для завершения."
+            )
+        
+        return REGISTER_MASTER_PHOTOS
+    
+    await update.message.reply_text(
+        "Пожалуйста, отправьте фото или /done_photos для завершения."
+    )
+    return REGISTER_MASTER_PHOTOS
+
+
+async def finalize_master_registration(update, context):
+    """Финальное создание профиля мастера"""
+    telegram_id = update.effective_user.id if update.message else update.callback_query.from_user.id
     user_id = db.create_user(telegram_id, "worker")
+
+    # Сохраняем фото работ (если есть)
+    portfolio_photos = context.user_data.get("portfolio_photos", [])
+    photos_json = ",".join(portfolio_photos) if portfolio_photos else ""
 
     db.create_worker_profile(
         user_id=user_id,
@@ -367,14 +441,34 @@ async def register_master_description(update: Update, context: ContextTypes.DEFA
         categories=", ".join(context.user_data["categories"]),
         experience=context.user_data["experience"],
         description=context.user_data["description"],
+        portfolio_photos=photos_json,
     )
 
     keyboard = [[InlineKeyboardButton("Моё меню мастера", callback_data="show_worker_menu")]]
-    await update.message.reply_text(
-        "🥳 Профиль мастера создан!\n\n"
-        "Теперь вы можете открыть меню мастера, посмотреть свой профиль и в будущем получать заказы.",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+    
+    photos_count = len(portfolio_photos)
+    photos_text = f"\n📸 Добавлено фотографий: {photos_count}" if photos_count > 0 else ""
+    
+    message_text = (
+        f"🥳 <b>Профиль мастера создан!</b>{photos_text}\n\n"
+        "Теперь вы можете:\n"
+        "• Посмотреть свой профиль\n"
+        "• Получать заказы от клиентов\n"
+        "• Добавить больше фото работ в любое время"
     )
+    
+    if update.message:
+        await update.message.reply_text(
+            message_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML",
+        )
+    else:
+        await update.callback_query.message.reply_text(
+            message_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML",
+        )
 
     context.user_data.clear()
     return ConversationHandler.END
@@ -448,7 +542,8 @@ async def show_worker_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
-        # сюда позже можно добавить: "Доступные заказы", "Мои отклики"
+        [InlineKeyboardButton("📸 Добавить фото работ", callback_data="worker_add_photos")],
+        # сюда позже: "Доступные заказы", "Мои отклики"
     ]
     await query.edit_message_text(
         "🧰 Меню мастера.\nВыберите действие:",
@@ -473,7 +568,7 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------- ПРОФИЛЬ МАСТЕРА -------
 
 async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ИСПРАВЛЕННАЯ ВЕРСИЯ: улучшена обработка ошибок и логирование"""
+    """ИСПРАВЛЕНО: Правильный доступ к sqlite3.Row объектам"""
     query = update.callback_query
     await query.answer()
 
@@ -491,17 +586,20 @@ async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             return
 
-        logger.info(f"Найден пользователь: id={user['id']}, role={user['role']}")
+        # ИСПРАВЛЕНО: sqlite3.Row доступ через индекс, а не через .get()
+        user_id = user["id"]
+        role = user["role"]
         
-        if user["role"] != "worker":
-            logger.error(f"Пользователь не является мастером: role={user['role']}")
+        logger.info(f"Найден пользователь: id={user_id}, role={role}")
+        
+        if role != "worker":
+            logger.error(f"Пользователь не является мастером: role={role}")
             await query.edit_message_text(
                 "❌ Вы не зарегистрированы как мастер.\n\n"
                 "Используйте /reset_profile для перерегистрации."
             )
             return
 
-        user_id = user["id"]
         worker_profile = db.get_worker_profile(user_id)
 
         if not worker_profile:
@@ -512,22 +610,32 @@ async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             return
 
-        logger.info(f"Профиль мастера найден: {dict(worker_profile)}")
+        logger.info(f"Профиль мастера найден для user_id={user_id}")
 
-        name = worker_profile.get("name") or "—"
-        phone = worker_profile.get("phone") or "—"
-        city = worker_profile.get("city") or "—"
-        regions = worker_profile.get("regions") or "—"
-        categories = worker_profile.get("categories") or "—"
-        experience = worker_profile.get("experience") or "—"
-        description = worker_profile.get("description") or "—"
-        rating = worker_profile.get("rating", 0)
-        rating_count = worker_profile.get("rating_count", 0)
+        # ИСПРАВЛЕНО: Правильный доступ к полям sqlite3.Row
+        name = worker_profile["name"] or "—"
+        phone = worker_profile["phone"] or "—"
+        city = worker_profile["city"] or "—"
+        regions = worker_profile["regions"] or "—"
+        categories = worker_profile["categories"] or "—"
+        experience = worker_profile["experience"] or "—"
+        description = worker_profile["description"] or "—"
+        rating = worker_profile["rating"] or 0
+        rating_count = worker_profile["rating_count"] or 0
+        verified_reviews = worker_profile["verified_reviews"] or 0
+        portfolio_photos = worker_profile["portfolio_photos"] or ""
+        
+        # Подсчёт фотографий
+        photos_count = len(portfolio_photos.split(",")) if portfolio_photos else 0
         
         if rating and rating > 0:
-            rating_text = f"⭐ {rating:.1f} ({rating_count} отзывов)"
+            rating_text = f"⭐ {rating:.1f}/5.0"
+            reviews_text = f"📊 Отзывов: {rating_count} (проверенных: {verified_reviews})"
         else:
-            rating_text = "Нет отзывов"
+            rating_text = "⭐ Нет отзывов"
+            reviews_text = "📊 Отзывов пока нет"
+        
+        photos_text = f"📸 Фото работ: {photos_count}" if photos_count > 0 else "📸 Фото работ: не добавлено"
 
         text = (
             "👤 <b>Ваш профиль мастера</b>\n\n"
@@ -536,20 +644,33 @@ async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"<b>Город:</b> {city}\n"
             f"<b>Районы:</b> {regions}\n"
             f"<b>Виды работ:</b> {categories}\n"
-            f"<b>Опыт:</b> {experience}\n"
-            f"<b>Описание:</b> {description}\n"
-            f"<b>Рейтинг:</b> {rating_text}\n"
+            f"<b>Опыт:</b> {experience}\n\n"
+            f"<b>Описание:</b>\n{description}\n\n"
+            f"{rating_text}\n"
+            f"{reviews_text}\n"
+            f"{photos_text}"
         )
 
         keyboard = [
-            [InlineKeyboardButton("⬅️ Назад в меню мастера", callback_data="show_worker_menu")],
+            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")],
         ]
-
-        await query.edit_message_text(
-            text=text,
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
+        
+        # Если есть фото - показываем первое
+        if portfolio_photos:
+            first_photo = portfolio_photos.split(",")[0]
+            await query.message.reply_photo(
+                photo=first_photo,
+                caption=text,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+            await query.message.delete()
+        else:
+            await query.edit_message_text(
+                text=text,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
         
         logger.info(f"Профиль успешно отображён для telegram_id={telegram_id}")
 
@@ -583,13 +704,10 @@ async def handle_invalid_input(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.callback_query.answer("Неверное действие. Используйте /start для начала.")
 
 
-# ------- НОВАЯ ФУНКЦИЯ: ОЧИСТКА ПРОФИЛЯ -------
-
 async def reset_profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда для полной очистки профиля пользователя из базы данных"""
     telegram_id = update.effective_user.id
     
-    # Удаляем профиль из базы
     success = db.delete_user_profile(telegram_id)
     
     if success:
