@@ -30,8 +30,10 @@ def init_db():
                 categories TEXT,
                 experience TEXT,
                 description TEXT,
+                portfolio_photos TEXT,
                 rating REAL DEFAULT 0.0,
                 rating_count INTEGER DEFAULT 0,
+                verified_reviews INTEGER DEFAULT 0,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
         """)
@@ -177,13 +179,13 @@ def delete_user_profile(telegram_id):
 
 # --- Профили мастеров и заказчиков ---
 
-def create_worker_profile(user_id, name, phone, city, regions, categories, experience, description):
+def create_worker_profile(user_id, name, phone, city, regions, categories, experience, description, portfolio_photos=""):
     with sqlite3.connect(DATABASE_NAME) as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO workers (user_id, name, phone, city, regions, categories, experience, description)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, name, phone, city, regions, categories, experience, description))
+            INSERT INTO workers (user_id, name, phone, city, regions, categories, experience, description, portfolio_photos)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, name, phone, city, regions, categories, experience, description, portfolio_photos))
         conn.commit()
 
 
