@@ -130,9 +130,8 @@ def main():
                     handlers.register_master_photos,
                     pattern="^add_photos_",
                 ),
-                CommandHandler("done_photos", handlers.handle_master_photos),
                 MessageHandler(
-                    filters.PHOTO | (filters.TEXT & ~filters.COMMAND),
+                    filters.PHOTO | filters.TEXT,
                     handlers.handle_master_photos,
                 ),
             ],
