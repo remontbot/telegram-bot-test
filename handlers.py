@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
     REGISTER_MASTER_NAME,
     REGISTER_MASTER_PHONE,
     REGISTER_MASTER_CITY,
-    REGISTER_MASTER_REGIONS,
     REGISTER_MASTER_CATEGORIES_SELECT,
     REGISTER_MASTER_CATEGORIES_OTHER,
     REGISTER_MASTER_EXPERIENCE,
@@ -33,7 +32,7 @@ logger = logging.getLogger(__name__)
     REGISTER_CLIENT_PHONE,
     REGISTER_CLIENT_CITY,
     REGISTER_CLIENT_DESCRIPTION,
-) = range(14)
+) = range(13)
 
 
 def is_valid_name(name: str) -> bool:
@@ -153,113 +152,49 @@ async def register_master_phone(update: Update, context: ContextTypes.DEFAULT_TY
 async def register_master_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = update.message.text.strip()
     context.user_data["city"] = city
+    context.user_data["regions"] = city  # Просто сохраняем город как регион
     
+    # Переходим сразу к выбору категорий
     keyboard = [
         [
-            InlineKeyboardButton("Центральный", callback_data="region_Центральный"),
-            InlineKeyboardButton("Советский", callback_data="region_Советский"),
+            InlineKeyboardButton("Электрика", callback_data="cat_Электрика"),
+            InlineKeyboardButton("Сантехника", callback_data="cat_Сантехника"),
         ],
         [
-            InlineKeyboardButton("Первомайский", callback_data="region_Первомайский"),
-            InlineKeyboardButton("Партизанский", callback_data="region_Партизанский"),
+            InlineKeyboardButton("Отделка", callback_data="cat_Отделка"),
+            InlineKeyboardButton("Сборка мебели", callback_data="cat_Сборка мебели"),
         ],
         [
-            InlineKeyboardButton("Заводской", callback_data="region_Заводской"),
-            InlineKeyboardButton("Ленинский", callback_data="region_Ленинский"),
+            InlineKeyboardButton("Окна/двери", callback_data="cat_Окна/двери"),
+            InlineKeyboardButton("Бытовая техника", callback_data="cat_Бытовая техника"),
         ],
         [
-            InlineKeyboardButton("Октябрьский", callback_data="region_Октябрьский"),
-            InlineKeyboardButton("Московский", callback_data="region_Московский"),
+            InlineKeyboardButton("Напольные покрытия", callback_data="cat_Напольные покрытия"),
+            InlineKeyboardButton("Мелкий ремонт", callback_data="cat_Мелкий ремонт"),
         ],
         [
-            InlineKeyboardButton("Фрунзенский", callback_data="region_Фрунзенский"),
+            InlineKeyboardButton("Дизайн", callback_data="cat_Дизайн"),
+            InlineKeyboardButton("Другое", callback_data="cat_Другое"),
         ],
-        [
-            InlineKeyboardButton("✅ Весь Минск", callback_data="region_all_minsk"),
-        ],
-        [
-            InlineKeyboardButton("✅ Завершить выбор", callback_data="region_done"),
-        ],
+        [InlineKeyboardButton("✅ Завершить выбор", callback_data="cat_done")],
     ]
     
-    context.user_data["regions"] = []
+    context.user_data["categories"] = []
     
     await update.message.reply_text(
-        "📍 В каких районах Минска вы работаете?\n\n"
+        f"Город: {city}\n\n"
+        "💡 <i>Сейчас платформа работает по всей Беларуси</i>\n\n"
+        "🔧 Какие виды работ вы выполняете?\n\n"
         "Нажимайте подходящие кнопки (можно несколько).\n"
-        "Если работаете по всему Минску — нажмите «✅ Весь Минск».\n"
+        "Если нужного варианта нет — выберите «Другое» и впишите свои.\n"
         "Когда закончите — нажмите «✅ Завершить выбор».",
         reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML",
     )
-    return REGISTER_MASTER_REGIONS
+    return REGISTER_MASTER_CATEGORIES_SELECT
 
 
-async def register_master_regions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    
-    if data == "region_done":
-        if not context.user_data["regions"]:
-            await query.answer("Выберите хотя бы один район!", show_alert=True)
-            return REGISTER_MASTER_REGIONS
-        
-        keyboard = [
-            [
-                InlineKeyboardButton("Электрика", callback_data="cat_Электрика"),
-                InlineKeyboardButton("Сантехника", callback_data="cat_Сантехника"),
-            ],
-            [
-                InlineKeyboardButton("Отделка", callback_data="cat_Отделка"),
-                InlineKeyboardButton("Сборка мебели", callback_data="cat_Сборка мебели"),
-            ],
-            [
-                InlineKeyboardButton("Окна/двери", callback_data="cat_Окна/двери"),
-                InlineKeyboardButton("Бытовая техника", callback_data="cat_Бытовая техника"),
-            ],
-            [
-                InlineKeyboardButton("Напольные покрытия", callback_data="cat_Напольные покрытия"),
-                InlineKeyboardButton("Мелкий ремонт", callback_data="cat_Мелкий ремонт"),
-            ],
-            [
-                InlineKeyboardButton("Дизайн", callback_data="cat_Дизайн"),
-                InlineKeyboardButton("Другое", callback_data="cat_Другое"),
-            ],
-            [InlineKeyboardButton("✅ Завершить выбор", callback_data="cat_done")],
-        ]
-        
-        context.user_data["categories"] = []
-        regions_text = ", ".join(context.user_data["regions"])
-        
-        await query.edit_message_text(
-            f"Выбранные районы: {regions_text}\n\n"
-            "🔧 Какие виды работ вы выполняете?\n\n"
-            "Нажимайте подходящие кнопки (можно несколько).\n"
-            "Если нужного варианта нет — выберите «Другое» и впишите свои.\n"
-            "Когда закончите — нажмите «✅ Завершить выбор».",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-        return REGISTER_MASTER_CATEGORIES_SELECT
-    
-    elif data == "region_all_minsk":
-        context.user_data["regions"] = ["Весь Минск"]
-        await query.answer("Выбран весь Минск")
-        return REGISTER_MASTER_REGIONS
-    
-    else:
-        selected_region = data.replace("region_", "")
-        
-        if selected_region in context.user_data["regions"]:
-            context.user_data["regions"].remove(selected_region)
-            await query.answer(f"Убрано: {selected_region}")
-        else:
-            if "Весь Минск" in context.user_data["regions"]:
-                context.user_data["regions"].remove("Весь Минск")
-            context.user_data["regions"].append(selected_region)
-            await query.answer(f"Добавлено: {selected_region}")
-        
-        return REGISTER_MASTER_REGIONS
-
+# Функция register_master_regions удалена - районы больше не используются
 
 async def register_master_categories_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -390,7 +325,8 @@ async def register_master_photos(update: Update, context: ContextTypes.DEFAULT_T
 
 async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка загруженных фотографий"""
-    if update.message.text and update.message.text == "/done_photos":
+    # Проверяем команду /done_photos
+    if update.message.text and (update.message.text == "/done_photos" or update.message.text.startswith("/done_photos")):
         return await finalize_master_registration(update, context)
     
     if update.message.photo:
@@ -407,7 +343,7 @@ async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"✅ Фото {count}/10 добавлено!\n\n"
                 f"Загружено фотографий: {count}\n"
                 f"Можно ещё: {10 - count}\n\n"
-                f"Отправьте /done_photos когда закончите."
+                f"Отправьте команду /done_photos когда закончите."
             )
         else:
             await update.message.reply_text(
@@ -418,7 +354,7 @@ async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYP
         return REGISTER_MASTER_PHOTOS
     
     await update.message.reply_text(
-        "Пожалуйста, отправьте фото или /done_photos для завершения."
+        "Пожалуйста, отправьте фото или команду /done_photos для завершения."
     )
     return REGISTER_MASTER_PHOTOS
 
@@ -437,7 +373,7 @@ async def finalize_master_registration(update, context):
         name=context.user_data["name"],
         phone=context.user_data["phone"],
         city=context.user_data["city"],
-        regions=", ".join(context.user_data["regions"]),
+        regions=context.user_data["regions"],  # Теперь это просто город
         categories=", ".join(context.user_data["categories"]),
         experience=context.user_data["experience"],
         description=context.user_data["description"],
