@@ -98,13 +98,7 @@ def main():
                     handlers.register_master_city,
                 )
             ],
-            # ОБНОВЛЕНО: Теперь районы выбираются кнопками
-            handlers.REGISTER_MASTER_REGIONS: [
-                CallbackQueryHandler(
-                    handlers.register_master_regions,
-                    pattern="^region_",
-                )
-            ],
+            # Районы больше не используются - переходим сразу к категориям
             handlers.REGISTER_MASTER_CATEGORIES_SELECT: [
                 CallbackQueryHandler(
                     handlers.register_master_categories_select,
@@ -136,6 +130,7 @@ def main():
                     handlers.register_master_photos,
                     pattern="^add_photos_",
                 ),
+                CommandHandler("done_photos", handlers.handle_master_photos),
                 MessageHandler(
                     filters.PHOTO | (filters.TEXT & ~filters.COMMAND),
                     handlers.handle_master_photos,
