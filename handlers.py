@@ -150,51 +150,118 @@ async def register_master_phone(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def register_master_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["city"] = update.message.text.strip()
+    city = update.message.text.strip()
+    context.user_data["city"] = city
+    
+    # НОВОЕ: Кнопки для выбора районов Минска
+    keyboard = [
+        [
+            InlineKeyboardButton("Центральный", callback_data="region_Центральный"),
+            InlineKeyboardButton("Советский", callback_data="region_Советский"),
+        ],
+        [
+            InlineKeyboardButton("Первомайский", callback_data="region_Первомайский"),
+            InlineKeyboardButton("Партизанский", callback_data="region_Партизанский"),
+        ],
+        [
+            InlineKeyboardButton("Заводской", callback_data="region_Заводской"),
+            InlineKeyboardButton("Ленинский", callback_data="region_Ленинский"),
+        ],
+        [
+            InlineKeyboardButton("Октябрьский", callback_data="region_Октябрьский"),
+            InlineKeyboardButton("Московский", callback_data="region_Московский"),
+        ],
+        [
+            InlineKeyboardButton("Фрунзенский", callback_data="region_Фрунзенский"),
+        ],
+        [
+            InlineKeyboardButton("✅ Весь Минск", callback_data="region_all_minsk"),
+        ],
+        [
+            InlineKeyboardButton("✅ Завершить выбор", callback_data="region_done"),
+        ],
+    ]
+    
+    context.user_data["regions"] = []
+    
     await update.message.reply_text(
-        "📍 В каких районах/территориях вы работаете?\n"
-        "Введите через запятую.\n\n"
-        "Например: «Фрунзенский, Центральный» или «Все районы Минска»."
+        "📍 В каких районах Минска вы работаете?\n\n"
+        "Нажимайте подходящие кнопки (можно несколько).\n"
+        "Если работаете по всему Минску — нажмите «✅ Весь Минск».\n"
+        "Когда закончите — нажмите «✅ Завершить выбор».",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return REGISTER_MASTER_REGIONS
 
 
 async def register_master_regions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["regions"] = update.message.text.strip()
-
-    keyboard = [
-        [
-            InlineKeyboardButton("Электрика", callback_data="cat_Электрика"),
-            InlineKeyboardButton("Сантехника", callback_data="cat_Сантехника"),
-        ],
-        [
-            InlineKeyboardButton("Отделка", callback_data="cat_Отделка"),
-            InlineKeyboardButton("Сборка мебели", callback_data="cat_Сборка мебели"),
-        ],
-        [
-            InlineKeyboardButton("Окна/двери", callback_data="cat_Окна/двери"),
-            InlineKeyboardButton("Бытовая техника", callback_data="cat_Бытовая техника"),
-        ],
-        [
-            InlineKeyboardButton("Напольные покрытия", callback_data="cat_Напольные покрытия"),
-            InlineKeyboardButton("Мелкий ремонт", callback_data="cat_Мелкий ремонт"),
-        ],
-        [
-            InlineKeyboardButton("Дизайн", callback_data="cat_Дизайн"),
-            InlineKeyboardButton("Другое", callback_data="cat_Другое"),
-        ],
-        [InlineKeyboardButton("✅ Завершить выбор", callback_data="cat_done")],
-    ]
-
-    context.user_data["categories"] = []
-    await update.message.reply_text(
-        "🔧 Какие виды работ вы выполняете?\n\n"
-        "Нажимайте подходящие кнопки (можно несколько).\n"
-        "Если нужного варианта нет — выберите «Другое» и впишите свои.\n"
-        "Когда закончите — нажмите «✅ Завершить выбор».",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-    return REGISTER_MASTER_CATEGORIES_SELECT
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    
+    if data == "region_done":
+        if not context.user_data["regions"]:
+            await query.answer("Выберите хотя бы один район!", show_alert=True)
+            return REGISTER_MASTER_REGIONS
+        
+        # Переходим к выбору категорий
+        keyboard = [
+            [
+                InlineKeyboardButton("Электрика", callback_data="cat_Электрика"),
+                InlineKeyboardButton("Сантехника", callback_data="cat_Сантехника"),
+            ],
+            [
+                InlineKeyboardButton("Отделка", callback_data="cat_Отделка"),
+                InlineKeyboardButton("Сборка мебели", callback_data="cat_Сборка мебели"),
+            ],
+            [
+                InlineKeyboardButton("Окна/двери", callback_data="cat_Окна/двери"),
+                InlineKeyboardButton("Бытовая техника", callback_data="cat_Бытовая техника"),
+            ],
+            [
+                InlineKeyboardButton("Напольные покрытия", callback_data="cat_Напольные покрытия"),
+                InlineKeyboardButton("Мелкий ремонт", callback_data="cat_Мелкий ремонт"),
+            ],
+            [
+                InlineKeyboardButton("Дизайн", callback_data="cat_Дизайн"),
+                InlineKeyboardButton("Другое", callback_data="cat_Другое"),
+            ],
+            [InlineKeyboardButton("✅ Завершить выбор", callback_data="cat_done")],
+        ]
+        
+        context.user_data["categories"] = []
+        regions_text = ", ".join(context.user_data["regions"])
+        
+        await query.edit_message_text(
+            f"Выбранные районы: {regions_text}\n\n"
+            "🔧 Какие виды работ вы выполняете?\n\n"
+            "Нажимайте подходящие кнопки (можно несколько).\n"
+            "Если нужного варианта нет — выберите «Другое» и впишите свои.\n"
+            "Когда закончите — нажмите «✅ Завершить выбор».",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return REGISTER_MASTER_CATEGORIES_SELECT
+    
+    elif data == "region_all_minsk":
+        context.user_data["regions"] = ["Весь Минск"]
+        await query.answer("Выбран весь Минск")
+        return REGISTER_MASTER_REGIONS
+    
+    else:
+        # Добавляем/убираем район
+        selected_region = data.replace("region_", "")
+        
+        if selected_region in context.user_data["regions"]:
+            context.user_data["regions"].remove(selected_region)
+            await query.answer(f"Убрано: {selected_region}")
+        else:
+            # Если выбрали конкретный район, убираем "Весь Минск"
+            if "Весь Минск" in context.user_data["regions"]:
+                context.user_data["regions"].remove("Весь Минск")
+            context.user_data["regions"].append(selected_region)
+            await query.answer(f"Добавлено: {selected_region}")
+        
+        return REGISTER_MASTER_REGIONS
 
 
 async def register_master_categories_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -205,18 +272,24 @@ async def register_master_categories_select(update: Update, context: ContextType
 
     if selected == "done":
         if not context.user_data["categories"]:
-            await query.edit_message_text(
-                "Нужно выбрать хотя бы один вид работ или указать «Другое»."
-            )
+            await query.answer("Выберите хотя бы один вид работ!", show_alert=True)
             return REGISTER_MASTER_CATEGORIES_SELECT
 
-        text = (
-            "Выбранные категории: "
-            + ", ".join(context.user_data["categories"])
-            + "\n\nТеперь укажем ваш опыт работы.\n"
-              "Напишите, например: «Начинающий», «1–3 года», «3–5 лет», «Более 5 лет»."
+        # НОВОЕ: Кнопки для выбора опыта работы
+        keyboard = [
+            [InlineKeyboardButton("Начинающий (до 1 года)", callback_data="exp_Начинающий")],
+            [InlineKeyboardButton("1-3 года", callback_data="exp_1-3 года")],
+            [InlineKeyboardButton("3-5 лет", callback_data="exp_3-5 лет")],
+            [InlineKeyboardButton("Более 5 лет", callback_data="exp_Более 5 лет")],
+        ]
+        
+        categories_text = ", ".join(context.user_data["categories"])
+        
+        await query.edit_message_text(
+            f"Выбранные категории: {categories_text}\n\n"
+            "📅 Укажите ваш опыт работы:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
-        await query.edit_message_text(text)
         return REGISTER_MASTER_EXPERIENCE
 
     elif selected == "Другое":
@@ -231,7 +304,8 @@ async def register_master_categories_select(update: Update, context: ContextType
             context.user_data["categories"].append(selected)
             await query.answer(f"Добавлено: {selected}")
         else:
-            await query.answer(f"{selected} уже выбрана")
+            context.user_data["categories"].remove(selected)
+            await query.answer(f"Убрано: {selected}")
 
         return REGISTER_MASTER_CATEGORIES_SELECT
 
@@ -241,17 +315,32 @@ async def register_master_categories_other(update: Update, context: ContextTypes
     custom_list = [c.strip() for c in user_cats.split(",") if c.strip()]
     context.user_data["categories"].extend(custom_list)
 
+    # НОВОЕ: Кнопки для выбора опыта работы
+    keyboard = [
+        [InlineKeyboardButton("Начинающий (до 1 года)", callback_data="exp_Начинающий")],
+        [InlineKeyboardButton("1-3 года", callback_data="exp_1-3 года")],
+        [InlineKeyboardButton("3-5 лет", callback_data="exp_3-5 лет")],
+        [InlineKeyboardButton("Более 5 лет", callback_data="exp_Более 5 лет")],
+    ]
+    
     await update.message.reply_text(
         "Отлично 👍\n\n"
-        "Теперь укажите ваш опыт работы.\n"
-        "Пример: «Начинающий», «1–3 года», «3–5 лет», «Более 5 лет»."
+        "📅 Укажите ваш опыт работы:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return REGISTER_MASTER_EXPERIENCE
 
 
 async def register_master_experience(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["experience"] = update.message.text.strip()
-    await update.message.reply_text(
+    # НОВОЕ: Обработка кнопок опыта
+    query = update.callback_query
+    await query.answer()
+    
+    experience = query.data.replace("exp_", "")
+    context.user_data["experience"] = experience
+    
+    await query.edit_message_text(
+        f"Опыт работы: {experience}\n\n"
         "📝 Теперь расскажите немного о себе.\n\n"
         "Это описание увидят ваши потенциальные заказчики, поэтому пишите по делу:\n"
         "— стаж и специализация;\n"
@@ -274,8 +363,8 @@ async def register_master_description(update: Update, context: ContextTypes.DEFA
         name=context.user_data["name"],
         phone=context.user_data["phone"],
         city=context.user_data["city"],
-        regions=context.user_data["regions"],
-        categories=",".join(context.user_data["categories"]),
+        regions=", ".join(context.user_data["regions"]),
+        categories=", ".join(context.user_data["categories"]),
         experience=context.user_data["experience"],
         description=context.user_data["description"],
     )
@@ -384,68 +473,93 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------- ПРОФИЛЬ МАСТЕРА -------
 
 async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ИСПРАВЛЕННАЯ ВЕРСИЯ: улучшена обработка ошибок и логирование"""
     query = update.callback_query
     await query.answer()
 
     telegram_id = query.from_user.id
-    user = db.get_user(telegram_id)
-
-    # 1) Проверяем, что вообще есть пользователь и он мастер
-    if not user or user["role"] != "worker":
-        await query.edit_message_text(
-            "Профиль мастера не найден. Попробуйте пройти регистрацию заново через /start."
-        )
-        return
-
-    # 2) user_id корректно берём из строки users.id
-    user_id = user["id"]
-
-    # 3) Берём профиль мастера по user_id
-    worker_profile = db.get_worker_profile(user_id)
-
-    if not worker_profile:
-        await query.edit_message_text(
-            "Похоже, ваш профиль мастера ещё не заполнен.\n\n"
-            "Если вы только что регистрировались, попробуйте использовать команду /reset_profile для очистки и повторной регистрации."
-        )
-        return
-
-    name = worker_profile.get("name", "—") or "—"
-    phone = worker_profile.get("phone", "—") or "—"
-    city = worker_profile.get("city", "—") or "—"
-    regions = worker_profile.get("regions", "—") or "—"
-    categories = worker_profile.get("categories", "—") or "—"
-    experience = worker_profile.get("experience", "—") or "—"
-    description = worker_profile.get("description", "—") or "—"
-    rating = worker_profile.get("rating", 0)
-    rating_count = worker_profile.get("rating_count", 0)
+    logger.info(f"Запрос профиля мастера для telegram_id: {telegram_id}")
     
-    if rating and rating > 0:
-        rating_text = f"⭐ {rating:.1f} ({rating_count} отзывов)"
-    else:
-        rating_text = "Нет отзывов"
+    try:
+        user = db.get_user(telegram_id)
+        
+        if not user:
+            logger.error(f"Пользователь не найден: telegram_id={telegram_id}")
+            await query.edit_message_text(
+                "❌ Профиль не найден в базе данных.\n\n"
+                "Попробуйте использовать /reset_profile и зарегистрируйтесь заново."
+            )
+            return
 
-    text = (
-        "👤 <b>Ваш профиль мастера</b>\n\n"
-        f"<b>Имя:</b> {name}\n"
-        f"<b>Телефон:</b> {phone}\n"
-        f"<b>Город:</b> {city}\n"
-        f"<b>Районы:</b> {regions}\n"
-        f"<b>Виды работ:</b> {categories}\n"
-        f"<b>Опыт:</b> {experience}\n"
-        f"<b>Описание:</b> {description}\n"
-        f"<b>Рейтинг:</b> {rating_text}\n"
-    )
+        logger.info(f"Найден пользователь: id={user['id']}, role={user['role']}")
+        
+        if user["role"] != "worker":
+            logger.error(f"Пользователь не является мастером: role={user['role']}")
+            await query.edit_message_text(
+                "❌ Вы не зарегистрированы как мастер.\n\n"
+                "Используйте /reset_profile для перерегистрации."
+            )
+            return
 
-    keyboard = [
-        [InlineKeyboardButton("⬅️ Назад в меню мастера", callback_data="show_worker_menu")],
-    ]
+        user_id = user["id"]
+        worker_profile = db.get_worker_profile(user_id)
 
-    await query.edit_message_text(
-        text=text,
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
+        if not worker_profile:
+            logger.error(f"Профиль мастера не найден для user_id={user_id}")
+            await query.edit_message_text(
+                "❌ Профиль мастера не заполнен.\n\n"
+                "Используйте /reset_profile и пройдите регистрацию заново."
+            )
+            return
+
+        logger.info(f"Профиль мастера найден: {dict(worker_profile)}")
+
+        name = worker_profile.get("name") or "—"
+        phone = worker_profile.get("phone") or "—"
+        city = worker_profile.get("city") or "—"
+        regions = worker_profile.get("regions") or "—"
+        categories = worker_profile.get("categories") or "—"
+        experience = worker_profile.get("experience") or "—"
+        description = worker_profile.get("description") or "—"
+        rating = worker_profile.get("rating", 0)
+        rating_count = worker_profile.get("rating_count", 0)
+        
+        if rating and rating > 0:
+            rating_text = f"⭐ {rating:.1f} ({rating_count} отзывов)"
+        else:
+            rating_text = "Нет отзывов"
+
+        text = (
+            "👤 <b>Ваш профиль мастера</b>\n\n"
+            f"<b>Имя:</b> {name}\n"
+            f"<b>Телефон:</b> {phone}\n"
+            f"<b>Город:</b> {city}\n"
+            f"<b>Районы:</b> {regions}\n"
+            f"<b>Виды работ:</b> {categories}\n"
+            f"<b>Опыт:</b> {experience}\n"
+            f"<b>Описание:</b> {description}\n"
+            f"<b>Рейтинг:</b> {rating_text}\n"
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("⬅️ Назад в меню мастера", callback_data="show_worker_menu")],
+        ]
+
+        await query.edit_message_text(
+            text=text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        
+        logger.info(f"Профиль успешно отображён для telegram_id={telegram_id}")
+
+    except Exception as e:
+        logger.error(f"Ошибка при отображении профиля: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Произошла ошибка при загрузке профиля.\n\n"
+            f"Детали: {str(e)}\n\n"
+            f"Используйте /reset_profile для сброса профиля."
+        )
 
 
 # ------- СЛУЖЕБНЫЕ -------
