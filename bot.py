@@ -98,10 +98,11 @@ def main():
                     handlers.register_master_city,
                 )
             ],
+            # ОБНОВЛЕНО: Теперь районы выбираются кнопками
             handlers.REGISTER_MASTER_REGIONS: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
+                CallbackQueryHandler(
                     handlers.register_master_regions,
+                    pattern="^region_",
                 )
             ],
             handlers.REGISTER_MASTER_CATEGORIES_SELECT: [
@@ -116,10 +117,11 @@ def main():
                     handlers.register_master_categories_other,
                 )
             ],
+            # ОБНОВЛЕНО: Теперь опыт выбирается кнопками
             handlers.REGISTER_MASTER_EXPERIENCE: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
+                CallbackQueryHandler(
                     handlers.register_master_experience,
+                    pattern="^exp_",
                 )
             ],
             handlers.REGISTER_MASTER_DESCRIPTION: [
