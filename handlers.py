@@ -325,11 +325,21 @@ async def register_master_photos(update: Update, context: ContextTypes.DEFAULT_T
 
 async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка загруженных фотографий"""
-    # Проверяем команду /done_photos
-    if update.message.text and (update.message.text == "/done_photos" or update.message.text.startswith("/done_photos")):
-        return await finalize_master_registration(update, context)
+    logger.info(f"handle_master_photos вызван. Текст: {update.message.text if update.message.text else 'фото'}")
     
+    # Проверяем текст сообщения
+    if update.message.text:
+        text = update.message.text.strip().lower()
+        logger.info(f"Получен текст: '{text}'")
+        
+        # Проверяем различные варианты команды
+        if text in ['/done_photos', 'done_photos', '/donephotos', 'donephotos', 'готово']:
+            logger.info("Команда завершения фото распознана, вызываем finalize")
+            return await finalize_master_registration(update, context)
+    
+    # Обработка фото
     if update.message.photo:
+        logger.info("Получено фото")
         if "portfolio_photos" not in context.user_data:
             context.user_data["portfolio_photos"] = []
         
@@ -339,11 +349,15 @@ async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYP
         if len(context.user_data["portfolio_photos"]) < 10:
             context.user_data["portfolio_photos"].append(file_id)
             count = len(context.user_data["portfolio_photos"])
+            logger.info(f"Фото добавлено. Всего: {count}")
             await update.message.reply_text(
                 f"✅ Фото {count}/10 добавлено!\n\n"
                 f"Загружено фотографий: {count}\n"
                 f"Можно ещё: {10 - count}\n\n"
-                f"Отправьте команду /done_photos когда закончите."
+                f"📝 Отправьте команду:\n"
+                f"/done_photos\n\n"
+                f"или просто напишите:\n"
+                f"готово"
             )
         else:
             await update.message.reply_text(
@@ -353,8 +367,13 @@ async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYP
         
         return REGISTER_MASTER_PHOTOS
     
+    # Если пришло что-то другое
+    logger.warning(f"Неожиданный ввод: {update.message.text}")
     await update.message.reply_text(
-        "Пожалуйста, отправьте фото или команду /done_photos для завершения."
+        "⚠️ Пожалуйста, отправьте:\n"
+        "• Фотографии ваших работ, или\n"
+        "• Команду /done_photos для завершения\n"
+        "• Или напишите: готово"
     )
     return REGISTER_MASTER_PHOTOS
 
