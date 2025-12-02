@@ -523,7 +523,7 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------- ПРОФИЛЬ МАСТЕРА -------
 
 async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ИСПРАВЛЕНО: Правильный доступ к sqlite3.Row объектам"""
+    """Показ профиля мастера с правильным доступом к базе данных"""
     query = update.callback_query
     await query.answer()
 
@@ -541,9 +541,10 @@ async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             return
 
-        # ИСПРАВЛЕНО: sqlite3.Row доступ через индекс, а не через .get()
-        user_id = user["id"]
-        role = user["role"]
+        # ИСПРАВЛЕНО: Используем dict() для безопасного доступа к sqlite3.Row
+        user_dict = dict(user)
+        user_id = user_dict.get("id")
+        role = user_dict.get("role")
         
         logger.info(f"Найден пользователь: id={user_id}, role={role}")
         
@@ -567,18 +568,20 @@ async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         logger.info(f"Профиль мастера найден для user_id={user_id}")
 
-        # ИСПРАВЛЕНО: Правильный доступ к полям sqlite3.Row
-        name = worker_profile["name"] or "—"
-        phone = worker_profile["phone"] or "—"
-        city = worker_profile["city"] or "—"
-        regions = worker_profile["regions"] or "—"
-        categories = worker_profile["categories"] or "—"
-        experience = worker_profile["experience"] or "—"
-        description = worker_profile["description"] or "—"
-        rating = worker_profile["rating"] or 0
-        rating_count = worker_profile["rating_count"] or 0
-        verified_reviews = worker_profile["verified_reviews"] or 0
-        portfolio_photos = worker_profile["portfolio_photos"] or ""
+        # ИСПРАВЛЕНО: Конвертируем в dict для безопасного доступа к sqlite3.Row
+        profile_dict = dict(worker_profile)
+        
+        name = profile_dict.get("name") or "—"
+        phone = profile_dict.get("phone") or "—"
+        city = profile_dict.get("city") or "—"
+        regions = profile_dict.get("regions") or "—"
+        categories = profile_dict.get("categories") or "—"
+        experience = profile_dict.get("experience") or "—"
+        description = profile_dict.get("description") or "—"
+        rating = profile_dict.get("rating") or 0
+        rating_count = profile_dict.get("rating_count") or 0
+        verified_reviews = profile_dict.get("verified_reviews") or 0
+        portfolio_photos = profile_dict.get("portfolio_photos") or ""
         
         # Подсчёт фотографий
         photos_count = len(portfolio_photos.split(",")) if portfolio_photos else 0
