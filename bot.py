@@ -155,9 +155,21 @@ def main():
                 )
             ],
             handlers.REGISTER_CLIENT_CITY: [
+                CallbackQueryHandler(
+                    handlers.register_client_city_select,
+                    pattern="^clientcity_",
+                )
+            ],
+            handlers.REGISTER_CLIENT_CITY_SELECT: [
+                CallbackQueryHandler(
+                    handlers.register_client_city_select,
+                    pattern="^clientcity_",
+                )
+            ],
+            handlers.REGISTER_CLIENT_CITY_OTHER: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
-                    handlers.register_client_city,
+                    handlers.register_client_city_other,
                 )
             ],
             # REGISTER_CLIENT_DESCRIPTION удалено - регистрация завершается сразу после города
