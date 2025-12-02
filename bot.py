@@ -229,6 +229,7 @@ def main():
         ],
         states={
             handlers.ADD_PHOTOS_UPLOAD: [
+                CallbackQueryHandler(handlers.worker_add_photos_upload, pattern="^finish_adding_photos$"),
                 MessageHandler(filters.PHOTO | filters.TEXT, handlers.worker_add_photos_upload),
             ],
         },
