@@ -222,26 +222,22 @@ def main():
     
     application.add_handler(edit_profile_handler)
 
-    # --- ConversationHandler для добавления фото ---
+    # --- Обработчики для добавления фото (БЕЗ ConversationHandler) ---
     
-    add_photos_handler = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(handlers.worker_add_photos_start, pattern="^worker_add_photos$")
-        ],
-        states={
-            handlers.ADD_PHOTOS_UPLOAD: [
-                CallbackQueryHandler(handlers.worker_add_photos_upload, pattern="^finish_adding_photos$"),
-                MessageHandler(filters.PHOTO | filters.TEXT, handlers.worker_add_photos_upload),
-            ],
-        },
-        fallbacks=[
-            CommandHandler("cancel", handlers.cancel),
-            CallbackQueryHandler(handlers.show_worker_menu, pattern="^show_worker_menu$"),
-        ],
-        allow_reentry=True,
+    # Начало добавления фото
+    application.add_handler(
+        CallbackQueryHandler(handlers.worker_add_photos_start, pattern="^worker_add_photos$")
     )
     
-    application.add_handler(add_photos_handler)
+    # Завершение добавления фото
+    application.add_handler(
+        CallbackQueryHandler(handlers.worker_add_photos_finish_callback, pattern="^finish_adding_photos$")
+    )
+    
+    # Загрузка фото (только когда активен режим добавления)
+    application.add_handler(
+        MessageHandler(filters.PHOTO, handlers.worker_add_photos_upload)
+    )
 
     # --- Меню мастера и заказчика ---
 
