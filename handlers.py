@@ -1733,3 +1733,35 @@ async def go_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
+
+
+async def add_second_role_worker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Добавление роли мастера к существующему аккаунту"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Запускаем регистрацию мастера
+    await query.edit_message_text(
+        "🧰 <b>Регистрация мастера</b>\n\n"
+        "Как вас зовут? Введите ваше имя:",
+        parse_mode="HTML"
+    )
+    
+    # Переходим в состояние ввода имени мастера
+    return REGISTER_MASTER_NAME
+
+
+async def add_second_role_client(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Добавление роли заказчика к существующему аккаунту"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Запускаем регистрацию заказчика
+    await query.edit_message_text(
+        "🏠 <b>Регистрация заказчика</b>\n\n"
+        "Как вас зовут? Введите ваше имя:",
+        parse_mode="HTML"
+    )
+    
+    # Переходим в состояние ввода имени клиента
+    return REGISTER_CLIENT_NAME
