@@ -795,10 +795,18 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
 async def worker_add_photos_finish(update, context: ContextTypes.DEFAULT_TYPE):
     """Завершение добавления фото - сохранение в БД"""
     
+    logger.info("=== worker_add_photos_finish вызвана ===")
+    logger.info(f"update.callback_query: {update.callback_query is not None}")
+    logger.info(f"update.message: {update.message is not None}")
+    
     new_photos = context.user_data.get("new_photos", [])
     existing_photos = context.user_data.get("existing_photos", [])
     
+    logger.info(f"new_photos count: {len(new_photos)}")
+    logger.info(f"existing_photos count: {len(existing_photos)}")
+    
     if not new_photos:
+        logger.warning("Нет новых фото для сохранения")
         keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]]
         
         message_text = "⚠️ Вы не добавили ни одного фото.\n\nОперация отменена."
@@ -817,49 +825,96 @@ async def worker_add_photos_finish(update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         return ConversationHandler.END
     
-    # Объединяем старые и новые фото
-    all_photos = existing_photos + new_photos
-    photos_string = ",".join(all_photos)
-    
-    # Обновляем в БД
-    telegram_id = update.effective_user.id if update.message else update.callback_query.from_user.id
-    user = db.get_user(telegram_id)
-    user_dict = dict(user)
-    user_id = user_dict.get("id")
-    
-    db.update_worker_field(user_id, "portfolio_photos", photos_string)
-    
-    logger.info(f"Фото сохранены в БД для user_id={user_id}. Всего фото: {len(all_photos)}")
-    
-    keyboard = [[InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
-                [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]]
-    
-    added_count = len(new_photos)
-    total_count = len(all_photos)
-    
-    message_text = (
-        f"✅ <b>Фото успешно добавлены!</b>\n\n"
-        f"📊 Итого:\n"
-        f"• Добавлено новых: {added_count}\n"
-        f"• Всего в портфолио: {total_count}/10\n\n"
-        f"Теперь клиенты увидят ваши работы!"
-    )
-    
-    if update.callback_query:
-        await update.callback_query.edit_message_text(
-            message_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
+    try:
+        # Объединяем старые и новые фото
+        all_photos = existing_photos + new_photos
+        photos_string = ",".join(all_photos)
+        
+        logger.info(f"Объединённые фото (всего {len(all_photos)}): {photos_string[:100]}...")
+        
+        # Получаем telegram_id
+        if update.callback_query:
+            telegram_id = update.callback_query.from_user.id
+            logger.info(f"telegram_id из callback_query: {telegram_id}")
+        elif update.message:
+            telegram_id = update.message.from_user.id
+            logger.info(f"telegram_id из message: {telegram_id}")
+        else:
+            logger.error("Не удалось получить telegram_id!")
+            raise ValueError("No telegram_id available")
+        
+        # Получаем user из БД
+        user = db.get_user(telegram_id)
+        if not user:
+            logger.error(f"Пользователь не найден в БД: telegram_id={telegram_id}")
+            raise ValueError(f"User not found: {telegram_id}")
+        
+        user_dict = dict(user)
+        user_id = user_dict.get("id")
+        logger.info(f"user_id из БД: {user_id}")
+        
+        # Обновляем в БД
+        result = db.update_worker_field(user_id, "portfolio_photos", photos_string)
+        logger.info(f"Результат обновления БД: {result}")
+        
+        keyboard = [[InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
+                    [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]]
+        
+        added_count = len(new_photos)
+        total_count = len(all_photos)
+        
+        message_text = (
+            f"✅ <b>Фото успешно добавлены!</b>\n\n"
+            f"📊 Итого:\n"
+            f"• Добавлено новых: {added_count}\n"
+            f"• Всего в портфолио: {total_count}/10\n\n"
+            f"Теперь клиенты увидят ваши работы!"
         )
-    elif update.message:
-        await update.message.reply_text(
-            message_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
+        
+        logger.info("Отправка успешного сообщения пользователю")
+        
+        if update.callback_query:
+            await update.callback_query.answer()  # Отвечаем на callback
+            await update.callback_query.edit_message_text(
+                message_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
+            )
+        elif update.message:
+            await update.message.reply_text(
+                message_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
+            )
+        
+        logger.info("Фото успешно сохранены и сообщение отправлено")
+        context.user_data.clear()
+        return ConversationHandler.END
+        
+    except Exception as e:
+        logger.error(f"Ошибка в worker_add_photos_finish: {e}", exc_info=True)
+        
+        error_text = (
+            f"❌ Произошла ошибка при сохранении фото.\n\n"
+            f"Детали: {str(e)}\n\n"
+            f"Попробуйте ещё раз или обратитесь в поддержку."
         )
-    
-    context.user_data.clear()
-    return ConversationHandler.END
+        
+        keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]]
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(
+                error_text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        elif update.message:
+            await update.message.reply_text(
+                error_text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        
+        context.user_data.clear()
+        return ConversationHandler.END
 
 
 # ------- РЕДАКТИРОВАНИЕ ПРОФИЛЯ -------
