@@ -803,7 +803,13 @@ async def worker_add_photos_finish(query, context: ContextTypes.DEFAULT_TYPE):
         logger.warning("Нет новых фото для сохранения")
         keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]]
         
-        await query.edit_message_text(
+        # Удаляем старое сообщение и отправляем новое
+        try:
+            await query.message.delete()
+        except:
+            pass
+        
+        await query.message.reply_text(
             "⚠️ Вы не добавили ни одного фото.\n\nОперация отменена.",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -853,7 +859,15 @@ async def worker_add_photos_finish(query, context: ContextTypes.DEFAULT_TYPE):
         
         logger.info("Отправка успешного сообщения пользователю")
         
-        await query.edit_message_text(
+        # ВАЖНО: Удаляем старое сообщение и отправляем НОВОЕ
+        # Потому что последнее сообщение может быть фото (которое нельзя редактировать на текст)
+        try:
+            await query.message.delete()
+        except:
+            pass  # Если не получилось удалить - не страшно
+        
+        # Отправляем НОВОЕ сообщение с результатом
+        await query.message.reply_text(
             message_text,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
@@ -875,7 +889,13 @@ async def worker_add_photos_finish(query, context: ContextTypes.DEFAULT_TYPE):
         
         keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]]
         
-        await query.edit_message_text(
+        # Удаляем старое и отправляем новое
+        try:
+            await query.message.delete()
+        except:
+            pass
+        
+        await query.message.reply_text(
             error_text,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
