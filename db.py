@@ -125,6 +125,27 @@ def init_db():
         conn.commit()
 
 
+def migrate_add_portfolio_photos():
+    """Миграция: добавляет колонку portfolio_photos если её нет"""
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        cursor = conn.cursor()
+        
+        # Проверяем существует ли колонка
+        cursor.execute("PRAGMA table_info(workers)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'portfolio_photos' not in columns:
+            print("⚠️  Колонка 'portfolio_photos' отсутствует, добавляю...")
+            cursor.execute("""
+                ALTER TABLE workers 
+                ADD COLUMN portfolio_photos TEXT DEFAULT ''
+            """)
+            conn.commit()
+            print("✅ Колонка 'portfolio_photos' успешно добавлена!")
+        else:
+            print("✅ Колонка 'portfolio_photos' уже существует")
+
+
 # --- Пользователи ---
 
 def get_user(telegram_id):
