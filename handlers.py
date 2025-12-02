@@ -508,7 +508,7 @@ async def show_worker_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
-        [InlineKeyboardButton("📸 Добавить фото работ", callback_data="worker_add_photos")],
+        # [InlineKeyboardButton("📸 Добавить фото работ", callback_data="worker_add_photos")],  # Временно отключено
         # сюда позже: "Доступные заказы", "Мои отклики"
     ]
     await query.edit_message_text(
@@ -522,6 +522,7 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     keyboard = [
+        [InlineKeyboardButton("🔍 Найти мастера", callback_data="client_browse_workers")],
         [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
         [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
     ]
@@ -1407,3 +1408,243 @@ async def reset_profile_command(update: Update, context: ContextTypes.DEFAULT_TY
             "⚠️ Профиль не найден или уже удалён.\n\n"
             "Используйте /start для регистрации."
         )
+# ------- ЛИСТАНИЕ МАСТЕРОВ ДЛЯ КЛИЕНТОВ -------
+
+async def client_browse_workers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало просмотра мастеров - выбор фильтров"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Сбрасываем фильтры
+    context.user_data.pop("browse_city", None)
+    context.user_data.pop("browse_category", None)
+    
+    keyboard = [
+        [InlineKeyboardButton("▶️ Начать просмотр", callback_data="browse_start_now")],
+        [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")],
+    ]
+    
+    await query.edit_message_text(
+        "🔍 <b>Поиск мастера</b>\n\n"
+        "Сейчас показываем всех мастеров.\n\n"
+        "(Фильтры по городу и категориям добавим в следующей версии)\n\n"
+        "Нажмите \"Начать просмотр\" чтобы увидеть карточки мастеров:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def browse_start_viewing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало просмотра карточек мастеров"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Получаем фильтры из context (если есть)
+    city_filter = context.user_data.get("browse_city")
+    category_filter = context.user_data.get("browse_category")
+    
+    # Получаем список мастеров
+    workers = db.get_all_workers(city=city_filter, category=category_filter)
+    
+    if not workers:
+        await query.edit_message_text(
+            "😔 <b>Мастера не найдены</b>\n\n"
+            "Пока ни один мастер не зарегистрировался.\n"
+            "Попробуйте зайти позже!",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")],
+            ])
+        )
+        return
+    
+    # Сохраняем список и индекс текущего мастера
+    context.user_data["workers_list"] = [dict(w) for w in workers]
+    context.user_data["current_worker_index"] = 0
+    context.user_data["current_photo_index"] = 0
+    
+    logger.info(f"Найдено мастеров: {len(workers)}")
+    
+    # Показываем первого мастера
+    await show_worker_card(query, context, edit=True)
+
+
+async def show_worker_card(query_or_message, context: ContextTypes.DEFAULT_TYPE, edit=False):
+    """Показывает карточку мастера"""
+    
+    workers_list = context.user_data.get("workers_list", [])
+    worker_index = context.user_data.get("current_worker_index", 0)
+    photo_index = context.user_data.get("current_photo_index", 0)
+    
+    if worker_index >= len(workers_list):
+        # Все мастера просмотрены
+        keyboard = [
+            [InlineKeyboardButton("🔄 Начать сначала", callback_data="browse_restart")],
+            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")],
+        ]
+        
+        text = (
+            "✅ <b>Вы просмотрели всех мастеров!</b>\n\n"
+            "Можете начать сначала или вернуться в меню."
+        )
+        
+        if hasattr(query_or_message, 'edit_message_text'):
+            await query_or_message.edit_message_text(
+                text,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await query_or_message.reply_text(
+                text,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        return
+    
+    worker = workers_list[worker_index]
+    
+    # Формируем текст карточки
+    name = worker.get("name", "Без имени")
+    city = worker.get("city", "Не указан")
+    categories = worker.get("categories", "Не указаны")
+    experience = worker.get("experience", "Не указан")
+    description = worker.get("description", "Нет описания")
+    rating = worker.get("rating", 0.0)
+    rating_count = worker.get("rating_count", 0)
+    portfolio_photos = worker.get("portfolio_photos", "")
+    
+    # Обрабатываем фото
+    photos_list = [p for p in portfolio_photos.split(",") if p] if portfolio_photos else []
+    
+    card_text = f"👤 <b>{name}</b>\n\n"
+    card_text += f"📍 Город: {city}\n"
+    card_text += f"🔧 Категории: {categories}\n"
+    card_text += f"💼 Опыт: {experience}\n"
+    card_text += f"⭐ Рейтинг: {rating:.1f} ({rating_count} отзывов)\n\n"
+    card_text += f"📝 {description}\n\n"
+    
+    if photos_list:
+        card_text += f"📸 Фото работ: {photo_index + 1}/{len(photos_list)}"
+    else:
+        card_text += "📸 Нет фото работ"
+    
+    # Кнопки навигации
+    keyboard = []
+    
+    # Навигация по фото
+    if photos_list and len(photos_list) > 1:
+        photo_nav = []
+        if photo_index > 0:
+            photo_nav.append(InlineKeyboardButton("⬅️ Фото", callback_data="browse_photo_prev"))
+        if photo_index < len(photos_list) - 1:
+            photo_nav.append(InlineKeyboardButton("Фото ➡️", callback_data="browse_photo_next"))
+        
+        if photo_nav:
+            keyboard.append(photo_nav)
+    
+    # Действия с мастером
+    keyboard.append([
+        InlineKeyboardButton("💬 Написать", url=f"tg://user?id={worker.get('telegram_id')}")
+    ])
+    
+    # Навигация по мастерам
+    nav_buttons = []
+    if worker_index < len(workers_list) - 1:
+        nav_buttons.append(InlineKeyboardButton("➡️ Следующий мастер", callback_data="browse_next_worker"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")])
+    
+    # Отправляем карточку
+    if photos_list:
+        # Отправляем фото
+        current_photo = photos_list[photo_index]
+        
+        if edit and hasattr(query_or_message, 'message'):
+            # Удаляем старое сообщение и отправляем новое с фото
+            try:
+                await query_or_message.message.delete()
+            except:
+                pass
+            
+            await query_or_message.message.reply_photo(
+                photo=current_photo,
+                caption=card_text,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            # Просто отправляем фото
+            await query_or_message.reply_photo(
+                photo=current_photo,
+                caption=card_text,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    else:
+        # Нет фото - отправляем только текст
+        if edit and hasattr(query_or_message, 'edit_message_text'):
+            await query_or_message.edit_message_text(
+                card_text,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await query_or_message.reply_text(
+                card_text,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+
+
+async def browse_next_worker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Переключение на следующего мастера"""
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data["current_worker_index"] = context.user_data.get("current_worker_index", 0) + 1
+    context.user_data["current_photo_index"] = 0  # Сбрасываем индекс фото
+    
+    await show_worker_card(query, context, edit=True)
+
+
+async def browse_photo_prev(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Предыдущее фото мастера"""
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data["current_photo_index"] = max(0, context.user_data.get("current_photo_index", 0) - 1)
+    
+    await show_worker_card(query, context, edit=True)
+
+
+async def browse_photo_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Следующее фото мастера"""
+    query = update.callback_query
+    await query.answer()
+    
+    workers_list = context.user_data.get("workers_list", [])
+    worker_index = context.user_data.get("current_worker_index", 0)
+    
+    if worker_index < len(workers_list):
+        worker = workers_list[worker_index]
+        photos_list = [p for p in worker.get("portfolio_photos", "").split(",") if p]
+        
+        current_photo_index = context.user_data.get("current_photo_index", 0)
+        context.user_data["current_photo_index"] = min(len(photos_list) - 1, current_photo_index + 1)
+    
+    await show_worker_card(query, context, edit=True)
+
+
+async def browse_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начать просмотр мастеров сначала"""
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data["current_worker_index"] = 0
+    context.user_data["current_photo_index"] = 0
+    
+    await show_worker_card(query, context, edit=True)
