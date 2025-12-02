@@ -221,6 +221,26 @@ def main():
     
     application.add_handler(edit_profile_handler)
 
+    # --- ConversationHandler для добавления фото ---
+    
+    add_photos_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(handlers.worker_add_photos_start, pattern="^worker_add_photos$")
+        ],
+        states={
+            handlers.ADD_PHOTOS_UPLOAD: [
+                MessageHandler(filters.PHOTO | filters.TEXT, handlers.worker_add_photos_upload),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", handlers.cancel),
+            CallbackQueryHandler(handlers.show_worker_menu, pattern="^show_worker_menu$"),
+        ],
+        allow_reentry=True,
+    )
+    
+    application.add_handler(add_photos_handler)
+
     # --- Меню мастера и заказчика ---
 
     application.add_handler(
@@ -242,14 +262,6 @@ def main():
         CallbackQueryHandler(
             handlers.show_worker_profile,
             pattern="^worker_profile$",
-        )
-    )
-
-    # ✅ ИСПРАВЛЕНО: Добавлен обработчик для кнопки "Добавить фото работ"
-    application.add_handler(
-        CallbackQueryHandler(
-            handlers.worker_add_photos_menu,
-            pattern="^worker_add_photos$",
         )
     )
 
