@@ -65,6 +65,7 @@ def get_bot_token() -> str:
 def main():
     db.init_db()
     db.migrate_add_portfolio_photos()  # Добавляем колонку если её нет
+    db.migrate_add_order_photos()  # Добавляем колонку photos в orders
 
     token = get_bot_token()
 
@@ -198,6 +199,37 @@ def main():
     )
 
     application.add_handler(reg_conv_handler)
+
+    # --- ConversationHandler для создания заказа ---
+    
+    create_order_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(handlers.client_create_order, pattern="^client_create_order$")
+        ],
+        states={
+            handlers.CREATE_ORDER_CITY: [
+                CallbackQueryHandler(handlers.create_order_city_select, pattern="^ordercity_"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.create_order_city_select),
+            ],
+            handlers.CREATE_ORDER_CATEGORIES: [
+                CallbackQueryHandler(handlers.create_order_categories_select, pattern="^ordercat_"),
+            ],
+            handlers.CREATE_ORDER_DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.create_order_description),
+            ],
+            handlers.CREATE_ORDER_PHOTOS: [
+                MessageHandler(filters.PHOTO, handlers.create_order_photo_upload),
+                CallbackQueryHandler(handlers.create_order_skip_photos, pattern="^order_skip_photos$"),
+                CallbackQueryHandler(handlers.create_order_publish, pattern="^order_publish$"),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", handlers.cancel),
+        ],
+        allow_reentry=True,
+    )
+    
+    application.add_handler(create_order_handler)
 
     # --- ConversationHandler для редактирования профиля ---
     
