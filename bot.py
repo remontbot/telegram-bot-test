@@ -160,12 +160,7 @@ def main():
                     handlers.register_client_city,
                 )
             ],
-            handlers.REGISTER_CLIENT_DESCRIPTION: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    handlers.register_client_description,
-                )
-            ],
+            # REGISTER_CLIENT_DESCRIPTION удалено - регистрация завершается сразу после города
         },
         fallbacks=[
             CommandHandler("cancel", handlers.cancel),
