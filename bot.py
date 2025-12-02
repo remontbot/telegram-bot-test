@@ -65,7 +65,7 @@ def get_bot_token() -> str:
 def main():
     db.init_db()
     db.migrate_add_portfolio_photos()  # Добавляем колонку если её нет
-    db.migrate_add_order_photos()  # Добавляем колонку photos в orders
+    # db.migrate_add_order_photos()  # TODO: добавить после обновления db.py
 
     token = get_bot_token()
 
