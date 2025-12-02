@@ -614,20 +614,37 @@ async def register_client_city_select(update: Update, context: ContextTypes.DEFA
         # Создаём профиль
         telegram_id = query.from_user.id
         
+        logger.info(f"=== Создание профиля клиента ===")
+        logger.info(f"Telegram ID: {telegram_id}")
+        logger.info(f"Имя: {context.user_data.get('name')}")
+        logger.info(f"Телефон: {context.user_data.get('phone')}")
+        logger.info(f"Город: {city}")
+        
         # Проверяем есть ли уже user (если добавляет вторую роль)
         existing_user = db.get_user(telegram_id)
         if existing_user:
             user_id = existing_user["id"]
+            logger.info(f"Существующий user_id: {user_id}")
         else:
             user_id = db.create_user(telegram_id, "client")
+            logger.info(f"Создан новый user_id: {user_id}")
 
-        db.create_client_profile(
-            user_id=user_id,
-            name=context.user_data["name"],
-            phone=context.user_data["phone"],
-            city=context.user_data["city"],
-            description="",
-        )
+        try:
+            db.create_client_profile(
+                user_id=user_id,
+                name=context.user_data["name"],
+                phone=context.user_data["phone"],
+                city=context.user_data["city"],
+                description="",
+            )
+            logger.info("✅ Профиль клиента успешно создан в БД!")
+        except Exception as e:
+            logger.error(f"❌ Ошибка создания профиля клиента: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Ошибка создания профиля: {e}\n\nПопробуйте ещё раз."
+            )
+            context.user_data.clear()
+            return ConversationHandler.END
 
         keyboard = [[InlineKeyboardButton("🏠 Моё меню заказчика", callback_data="show_client_menu")]]
         await query.edit_message_text(
@@ -642,6 +659,7 @@ async def register_client_city_select(update: Update, context: ContextTypes.DEFA
         )
 
         context.user_data.clear()
+        logger.info("✅ Context очищен")
         return ConversationHandler.END
 
 
@@ -1930,3 +1948,277 @@ async def add_second_role_client(update: Update, context: ContextTypes.DEFAULT_T
     
     # Переходим в состояние ввода имени клиента
     return REGISTER_CLIENT_NAME
+
+
+# ------- СОЗДАНИЕ ЗАКАЗА -------
+
+# Константы для создания заказа
+(
+    CREATE_ORDER_CITY,
+    CREATE_ORDER_CATEGORIES,
+    CREATE_ORDER_DESCRIPTION,
+    CREATE_ORDER_PHOTOS,
+) = range(27, 31)
+
+
+async def client_create_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало создания заказа - выбор города"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Получаем профиль клиента
+    user = db.get_user(query.from_user.id)
+    if not user:
+        await query.edit_message_text("Ошибка: пользователь не найден")
+        return ConversationHandler.END
+    
+    client_profile = db.get_client_profile(user["id"])
+    if not client_profile:
+        await query.edit_message_text("Ошибка: профиль клиента не найден")
+        return ConversationHandler.END
+    
+    # Сохраняем client_id
+    context.user_data["order_client_id"] = client_profile["id"]
+    
+    # Предлагаем выбор города
+    cities = [
+        "Минск", "Гомель", "Могилёв", "Витебск",
+        "Гродно", "Брест", "Бобруйск", "Барановичи",
+        "Борисов", "Пинск", "Орша", "Мозырь",
+        "Новополоцк", "Лида", "Солигорск",
+        "Другой город"
+    ]
+    
+    keyboard = []
+    row = []
+    for i, city in enumerate(cities):
+        row.append(InlineKeyboardButton(city, callback_data=f"ordercity_{city}"))
+        if len(row) == 2 or i == len(cities) - 1:
+            keyboard.append(row)
+            row = []
+    
+    await query.edit_message_text(
+        "📝 <b>Создание заказа</b>\n\n"
+        "🏙 <b>Шаг 1:</b> В каком городе нужна работа?",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return CREATE_ORDER_CITY
+
+
+async def create_order_city_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора города для заказа"""
+    query = update.callback_query
+    await query.answer()
+    
+    city = query.data.replace("ordercity_", "")
+    
+    if city == "Другой город":
+        await query.edit_message_text(
+            "🏙 Напишите название города:"
+        )
+        return CREATE_ORDER_CITY
+    else:
+        context.user_data["order_city"] = city
+        
+        # Переходим к выбору категорий
+        keyboard = [
+            [
+                InlineKeyboardButton("Электрика", callback_data="ordercat_Электрика"),
+                InlineKeyboardButton("Сантехника", callback_data="ordercat_Сантехника"),
+            ],
+            [
+                InlineKeyboardButton("Отделка", callback_data="ordercat_Отделка"),
+                InlineKeyboardButton("Сборка мебели", callback_data="ordercat_Сборка мебели"),
+            ],
+            [
+                InlineKeyboardButton("Окна/двери", callback_data="ordercat_Окна/двери"),
+                InlineKeyboardButton("Бытовая техника", callback_data="ordercat_Бытовая техника"),
+            ],
+            [
+                InlineKeyboardButton("Напольные покрытия", callback_data="ordercat_Напольные покрытия"),
+                InlineKeyboardButton("Мелкий ремонт", callback_data="ordercat_Мелкий ремонт"),
+            ],
+            [
+                InlineKeyboardButton("Дизайн", callback_data="ordercat_Дизайн"),
+            ],
+            [InlineKeyboardButton("✅ Завершить выбор", callback_data="ordercat_done")],
+        ]
+        
+        context.user_data["order_categories"] = []
+        
+        await query.edit_message_text(
+            f"Город: <b>{city}</b>\n\n"
+            "🔧 <b>Шаг 2:</b> Какие работы нужны?\n\n"
+            "Выберите 1-3 категории.\n"
+            "💡 <i>Выбирайте категории как можно точнее - так мастера быстрее увидят ваш заказ!</i>\n\n"
+            "Нажмите «✅ Завершить выбор» когда готово.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return CREATE_ORDER_CATEGORIES
+
+
+async def create_order_categories_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора категорий для заказа"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    selected = data.replace("ordercat_", "")
+    
+    if selected == "done":
+        if not context.user_data.get("order_categories"):
+            await query.answer("Выберите хотя бы одну категорию!", show_alert=True)
+            return CREATE_ORDER_CATEGORIES
+        
+        # Переходим к описанию
+        categories_text = ", ".join(context.user_data["order_categories"])
+        
+        await query.edit_message_text(
+            f"Город: <b>{context.user_data['order_city']}</b>\n"
+            f"Категории: <b>{categories_text}</b>\n\n"
+            "📝 <b>Шаг 3:</b> Опишите что нужно сделать\n\n"
+            "Например:\n"
+            "• Заменить розетки в 3 комнатах\n"
+            "• Установить смеситель на кухне\n"
+            "• Повесить люстру\n\n"
+            "Чем подробнее - тем точнее мастер назовёт цену!",
+            parse_mode="HTML"
+        )
+        return CREATE_ORDER_DESCRIPTION
+    
+    else:
+        # Добавляем/убираем категорию
+        if "order_categories" not in context.user_data:
+            context.user_data["order_categories"] = []
+        
+        if selected not in context.user_data["order_categories"]:
+            if len(context.user_data["order_categories"]) >= 3:
+                await query.answer("Максимум 3 категории!", show_alert=True)
+                return CREATE_ORDER_CATEGORIES
+            
+            context.user_data["order_categories"].append(selected)
+            await query.answer(f"✅ Добавлено: {selected}")
+        else:
+            context.user_data["order_categories"].remove(selected)
+            await query.answer(f"❌ Убрано: {selected}")
+        
+        return CREATE_ORDER_CATEGORIES
+
+
+async def create_order_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка описания заказа"""
+    description = update.message.text.strip()
+    
+    if len(description) < 10:
+        await update.message.reply_text(
+            "⚠️ Опишите подробнее (минимум 10 символов)"
+        )
+        return CREATE_ORDER_DESCRIPTION
+    
+    context.user_data["order_description"] = description
+    
+    # Предлагаем загрузить фото
+    keyboard = [[InlineKeyboardButton("⏭ Пропустить фото", callback_data="order_skip_photos")]]
+    
+    await update.message.reply_text(
+        "📸 <b>Шаг 4:</b> Загрузите фото объекта (до 5 штук)\n\n"
+        "Фото помогут мастеру точнее оценить работу.\n"
+        "Можете пропустить этот шаг.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    context.user_data["order_photos"] = []
+    return CREATE_ORDER_PHOTOS
+
+
+async def create_order_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка загрузки фото для заказа"""
+    
+    if "order_photos" not in context.user_data:
+        context.user_data["order_photos"] = []
+    
+    photos = context.user_data["order_photos"]
+    
+    if len(photos) >= 5:
+        await update.message.reply_text(
+            "⚠️ Максимум 5 фото. Нажмите кнопку для завершения."
+        )
+        return CREATE_ORDER_PHOTOS
+    
+    # Сохраняем file_id
+    file_id = update.message.photo[-1].file_id
+    photos.append(file_id)
+    
+    keyboard = [[InlineKeyboardButton("✅ Завершить и опубликовать", callback_data="order_publish")]]
+    
+    await update.message.reply_text(
+        f"✅ Фото {len(photos)}/5 добавлено!\n\n"
+        f"Можете добавить ещё или завершить.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    return CREATE_ORDER_PHOTOS
+
+
+async def create_order_skip_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пропуск загрузки фото"""
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data["order_photos"] = []
+    
+    await create_order_publish(update, context)
+
+
+async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Публикация заказа"""
+    
+    if hasattr(update, 'callback_query'):
+        query = update.callback_query
+        await query.answer()
+        message = query.message
+    else:
+        message = update.message
+    
+    try:
+        # Создаём заказ в БД
+        order_id = db.create_order(
+            client_id=context.user_data["order_client_id"],
+            city=context.user_data["order_city"],
+            categories=context.user_data["order_categories"],
+            description=context.user_data["order_description"],
+            photos=context.user_data.get("order_photos", [])
+        )
+        
+        categories_text = ", ".join(context.user_data["order_categories"])
+        photos_count = len(context.user_data.get("order_photos", []))
+        
+        keyboard = [
+            [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
+            [InlineKeyboardButton("⬅️ В меню", callback_data="show_client_menu")],
+        ]
+        
+        await message.reply_text(
+            "🎉 <b>Заказ опубликован!</b>\n\n"
+            f"📍 Город: {context.user_data['order_city']}\n"
+            f"🔧 Категории: {categories_text}\n"
+            f"📸 Фото: {photos_count}\n\n"
+            "Мастера увидят ваш заказ и начнут откликаться с предложениями цен.\n"
+            "Вы сможете выбрать лучшего!",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+        context.user_data.clear()
+        return ConversationHandler.END
+        
+    except Exception as e:
+        logger.error(f"Ошибка создания заказа: {e}", exc_info=True)
+        await message.reply_text(
+            f"❌ Ошибка при создании заказа: {e}\n\nПопробуйте ещё раз."
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
