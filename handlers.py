@@ -715,12 +715,16 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
     # Проверяем команду завершения
     if update.message.text:
         text = update.message.text.strip().lower()
+        logger.info(f"Получен текст при загрузке фото: '{text}'")
         
-        if text in ['/done', 'done', '/donephotos', 'donephotos', 'готово', '/готово']:
+        # Расширенная проверка команды завершения
+        if text in ['/done', 'done', '/donephotos', 'donephotos', 'готово', '/готово', 'дан', '/дан']:
+            logger.info("Команда завершения распознана, вызываем worker_add_photos_finish")
             return await worker_add_photos_finish(update, context)
     
     # Обработка фото
     if update.message.photo:
+        logger.info("Получено фото для добавления в портфолио")
         existing_count = len(context.user_data.get("existing_photos", []))
         new_count = len(context.user_data.get("new_photos", []))
         total_count = existing_count + new_count
@@ -742,6 +746,8 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
         total_count = existing_count + new_count
         remaining = max_photos - total_count
         
+        logger.info(f"Фото добавлено. Новых: {new_count}, Всего: {total_count}")
+        
         await update.message.reply_text(
             f"✅ Фото добавлено!\n\n"
             f"📊 Статус:\n"
@@ -750,16 +756,17 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
             f"• Всего будет: {total_count}/{max_photos}\n"
             f"• Можно ещё: {remaining}\n\n"
             f"Отправьте ещё фото или напишите:\n"
-            f"<b>/done</b> или <b>готово</b>",
+            f"<b>/done</b> или <b>готово</b> или просто <b>дан</b>",
             parse_mode="HTML"
         )
         return ADD_PHOTOS_UPLOAD
     
     # Если пришло что-то другое
+    logger.warning(f"Неожиданный ввод при загрузке фото: {update.message.text}")
     await update.message.reply_text(
         "⚠️ Пожалуйста, отправьте:\n"
         "• Фотографии ваших работ, или\n"
-        "• Команду <b>/done</b> или <b>готово</b> для завершения\n"
+        "• Команду <b>/done</b> или <b>готово</b> или <b>дан</b> для завершения\n"
         "• Команду /cancel для отмены",
         parse_mode="HTML"
     )
