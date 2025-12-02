@@ -199,6 +199,29 @@ def main():
         )
     )
 
+    # ✅ ИСПРАВЛЕНО: Добавлен обработчик для кнопки "Добавить фото работ"
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_add_photos_menu,
+            pattern="^worker_add_photos$",
+        )
+    )
+
+    # ✅ НОВОЕ: Обработчик для кнопок создания заказа и просмотра заказов
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_create_order,
+            pattern="^client_create_order$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_my_orders,
+            pattern="^client_my_orders$",
+        )
+    )
+
     # Команда для очистки профиля
     application.add_handler(
         CommandHandler("reset_profile", handlers.reset_profile_command)
