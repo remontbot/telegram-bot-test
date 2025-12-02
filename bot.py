@@ -282,6 +282,13 @@ def main():
     
     application.add_handler(
         CallbackQueryHandler(
+            handlers.go_main_menu,
+            pattern="^go_main_menu$",
+        )
+    )
+    
+    application.add_handler(
+        CallbackQueryHandler(
             handlers.client_browse_workers,
             pattern="^client_browse_workers$",
         )
