@@ -712,8 +712,18 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
 async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка загружаемых фото"""
     
+    # Проверка callback от кнопки "Завершить"
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        
+        if query.data == "finish_adding_photos":
+            logger.info("Нажата кнопка завершения загрузки фото")
+            # Создаём фейковый update с message для функции finish
+            return await worker_add_photos_finish(update, context)
+    
     # Проверяем команду завершения
-    if update.message.text:
+    if update.message and update.message.text:
         text = update.message.text.strip().lower()
         logger.info(f"Получен текст при загрузке фото: '{text}'")
         
@@ -723,7 +733,7 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
             return await worker_add_photos_finish(update, context)
     
     # Обработка фото
-    if update.message.photo:
+    if update.message and update.message.photo:
         logger.info("Получено фото для добавления в портфолио")
         existing_count = len(context.user_data.get("existing_photos", []))
         new_count = len(context.user_data.get("new_photos", []))
@@ -731,9 +741,11 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
         max_photos = 10
         
         if total_count >= max_photos:
+            keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]
             await update.message.reply_text(
                 f"⚠️ Достигнут лимит в {max_photos} фотографий.\n\n"
-                f"Отправьте <b>/done</b> или <b>готово</b> для завершения.",
+                f"Нажмите кнопку ниже для завершения:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode="HTML"
             )
             return ADD_PHOTOS_UPLOAD
@@ -748,6 +760,9 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
         
         logger.info(f"Фото добавлено. Новых: {new_count}, Всего: {total_count}")
         
+        # ДОБАВЛЯЕМ КНОПКУ для завершения
+        keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]
+        
         await update.message.reply_text(
             f"✅ Фото добавлено!\n\n"
             f"📊 Статус:\n"
@@ -755,21 +770,25 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
             f"• Добавлено новых: {new_count}\n"
             f"• Всего будет: {total_count}/{max_photos}\n"
             f"• Можно ещё: {remaining}\n\n"
-            f"Отправьте ещё фото или напишите:\n"
-            f"<b>/done</b> или <b>готово</b> или просто <b>дан</b>",
+            f"Отправьте ещё фото или нажмите кнопку ниже:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
         return ADD_PHOTOS_UPLOAD
     
     # Если пришло что-то другое
-    logger.warning(f"Неожиданный ввод при загрузке фото: {update.message.text}")
-    await update.message.reply_text(
-        "⚠️ Пожалуйста, отправьте:\n"
-        "• Фотографии ваших работ, или\n"
-        "• Команду <b>/done</b> или <b>готово</b> или <b>дан</b> для завершения\n"
-        "• Команду /cancel для отмены",
-        parse_mode="HTML"
-    )
+    if update.message:
+        logger.warning(f"Неожиданный ввод при загрузке фото: {update.message.text}")
+        keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]
+        await update.message.reply_text(
+            "⚠️ Пожалуйста, отправьте:\n"
+            "• Фотографии ваших работ, или\n"
+            "• Нажмите кнопку ниже для завершения\n"
+            "• Команду /cancel для отмены",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+    
     return ADD_PHOTOS_UPLOAD
 
 
@@ -782,10 +801,16 @@ async def worker_add_photos_finish(update, context: ContextTypes.DEFAULT_TYPE):
     if not new_photos:
         keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]]
         
-        if update.message:
+        message_text = "⚠️ Вы не добавили ни одного фото.\n\nОперация отменена."
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(
+                message_text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        elif update.message:
             await update.message.reply_text(
-                "⚠️ Вы не добавили ни одного фото.\n\n"
-                "Операция отменена.",
+                message_text,
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
         
@@ -797,12 +822,14 @@ async def worker_add_photos_finish(update, context: ContextTypes.DEFAULT_TYPE):
     photos_string = ",".join(all_photos)
     
     # Обновляем в БД
-    telegram_id = update.effective_user.id
+    telegram_id = update.effective_user.id if update.message else update.callback_query.from_user.id
     user = db.get_user(telegram_id)
     user_dict = dict(user)
     user_id = user_dict.get("id")
     
     db.update_worker_field(user_id, "portfolio_photos", photos_string)
+    
+    logger.info(f"Фото сохранены в БД для user_id={user_id}. Всего фото: {len(all_photos)}")
     
     keyboard = [[InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
                 [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]]
@@ -818,7 +845,13 @@ async def worker_add_photos_finish(update, context: ContextTypes.DEFAULT_TYPE):
         f"Теперь клиенты увидят ваши работы!"
     )
     
-    if update.message:
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            message_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+    elif update.message:
         await update.message.reply_text(
             message_text,
             reply_markup=InlineKeyboardMarkup(keyboard),
