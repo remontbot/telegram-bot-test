@@ -2191,14 +2191,16 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.info(f"description: {context.user_data.get('order_description')}")
         logger.info(f"photos: {len(context.user_data.get('order_photos', []))}")
         
-        # TODO: Раскомментировать когда db.py обновится
-        # order_id = db.create_order(
-        #     client_id=context.user_data["order_client_id"],
-        #     city=context.user_data["order_city"],
-        #     categories=context.user_data["order_categories"],
-        #     description=context.user_data["order_description"],
-        #     photos=context.user_data.get("order_photos", [])
-        # )
+        # Создаём заказ в БД
+        order_id = db.create_order(
+            client_id=context.user_data["order_client_id"],
+            city=context.user_data["order_city"],
+            categories=context.user_data["order_categories"],
+            description=context.user_data["order_description"],
+            photos=context.user_data.get("order_photos", [])
+        )
+        
+        logger.info(f"✅ Заказ #{order_id} успешно сохранён в БД!")
         
         categories_text = ", ".join(context.user_data["order_categories"])
         photos_count = len(context.user_data.get("order_photos", []))
@@ -2209,18 +2211,18 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
         ]
         
         await message.reply_text(
-            "🎉 <b>Заказ создан!</b> (тестовый режим)\n\n"
+            "🎉 <b>Заказ опубликован!</b>\n\n"
             f"📍 Город: {context.user_data['order_city']}\n"
             f"🔧 Категории: {categories_text}\n"
             f"📸 Фото: {photos_count}\n"
             f"📝 Описание: {context.user_data['order_description'][:50]}...\n\n"
-            "⚠️ Сохранение в БД временно отключено\n"
-            "После обновления db.py заказы будут сохраняться!",
+            "Мастера увидят ваш заказ и начнут откликаться с предложениями цен!\n"
+            "Вы сможете выбрать лучшего!",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
-        logger.info("✅ Заказ успешно создан (тестовый режим)")
+        logger.info("✅ Сообщение отправлено клиенту")
         context.user_data.clear()
         return ConversationHandler.END
         
