@@ -352,3 +352,63 @@ def update_client_field(user_id, field_name, new_value):
         conn.commit()
         
         return cursor.rowcount > 0
+
+
+# --- Поиск мастеров ---
+
+def get_all_workers(city=None, category=None):
+    """
+    Получает список всех мастеров с фильтрами.
+    
+    Args:
+        city: Фильтр по городу (опционально)
+        category: Фильтр по категории (опционально)
+    
+    Returns:
+        List of worker profiles with user info
+    """
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        query = """
+            SELECT 
+                w.*,
+                u.telegram_id
+            FROM workers w
+            JOIN users u ON w.user_id = u.id
+            WHERE 1=1
+        """
+        params = []
+        
+        if city:
+            query += " AND w.city LIKE ?"
+            params.append(f"%{city}%")
+        
+        if category:
+            query += " AND w.categories LIKE ?"
+            params.append(f"%{category}%")
+        
+        query += " ORDER BY w.rating DESC, w.rating_count DESC"
+        
+        cursor.execute(query, params)
+        return cursor.fetchall()
+
+
+def get_worker_by_id(worker_id):
+    """Получает профиль мастера по ID"""
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                w.*,
+                u.telegram_id
+            FROM workers w
+            JOIN users u ON w.user_id = u.id
+            WHERE w.id = ?
+        """, (worker_id,))
+        
+        return cursor.fetchone()
+
