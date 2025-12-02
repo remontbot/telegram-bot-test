@@ -64,6 +64,7 @@ def get_bot_token() -> str:
 
 def main():
     db.init_db()
+    db.migrate_add_portfolio_photos()  # Добавляем колонку если её нет
 
     token = get_bot_token()
 
