@@ -494,34 +494,39 @@ async def register_client_phone(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def register_client_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["city"] = update.message.text.strip()
-    await update.message.reply_text(
-        "Кратко о себе (можете пропустить, отправив «-»).\n"
-        "Например: «Ищу мастера для ремонта квартиры, важно аккуратно и по договору»."
-    )
-    return REGISTER_CLIENT_DESCRIPTION
-
-
-async def register_client_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    desc = update.message.text.strip()
-    context.user_data["description"] = desc if desc != "-" else ""
-
+    
+    # Сразу создаём профиль БЕЗ "кратко о себе"
     telegram_id = update.effective_user.id
-    user_id = db.create_user(telegram_id, "client")
+    
+    # Проверяем есть ли уже user (если добавляет вторую роль)
+    existing_user = db.get_user(telegram_id)
+    if existing_user:
+        user_id = existing_user["id"]
+    else:
+        user_id = db.create_user(telegram_id, "client")
 
     db.create_client_profile(
         user_id=user_id,
         name=context.user_data["name"],
         phone=context.user_data["phone"],
         city=context.user_data["city"],
-        description=context.user_data["description"],
+        description="",  # Пустое описание
     )
 
-    keyboard = [[InlineKeyboardButton("Моё меню заказчика", callback_data="show_client_menu")]]
+    keyboard = [[InlineKeyboardButton("🏠 Моё меню заказчика", callback_data="show_client_menu")]]
     await update.message.reply_text(
-        "🥳 Профиль заказчика создан!\n\n"
-        "Теперь вы можете создавать заказы и выбирать мастеров.",
+        "🥳 <b>Профиль заказчика создан!</b>\n\n"
+        "Теперь вы можете:\n"
+        "• 🔍 Искать мастеров\n"
+        "• 📝 Создавать заказы\n"
+        "• 💬 Общаться с мастерами\n\n"
+        "Детали о задаче вы опишете при создании заказа!",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
+
+    context.user_data.clear()
+    return ConversationHandler.END
 
     context.user_data.clear()
     return ConversationHandler.END
