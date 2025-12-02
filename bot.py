@@ -278,6 +278,50 @@ def main():
         )
     )
 
+    # --- Обработчики для листания мастеров ---
+    
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_browse_workers,
+            pattern="^client_browse_workers$",
+        )
+    )
+    
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.browse_start_viewing,
+            pattern="^browse_start_now$",
+        )
+    )
+    
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.browse_next_worker,
+            pattern="^browse_next_worker$",
+        )
+    )
+    
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.browse_photo_prev,
+            pattern="^browse_photo_prev$",
+        )
+    )
+    
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.browse_photo_next,
+            pattern="^browse_photo_next$",
+        )
+    )
+    
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.browse_restart,
+            pattern="^browse_restart$",
+        )
+    )
+
     # Команда для очистки профиля
     application.add_handler(
         CommandHandler("reset_profile", handlers.reset_profile_command)
