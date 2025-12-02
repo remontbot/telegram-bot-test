@@ -67,32 +67,59 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = db.get_user(user_telegram_id)
 
     if user:
-        role = user["role"]
-        if role == "worker":
-            keyboard = [[InlineKeyboardButton("Моё меню мастера", callback_data="show_worker_menu")]]
-            await update.message.reply_text(
-                "Вы уже зарегистрированы как мастер.",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-            )
-        elif role == "client":
-            keyboard = [[InlineKeyboardButton("Моё меню заказчика", callback_data="show_client_menu")]]
-            await update.message.reply_text(
-                "Вы уже зарегистрированы как заказчик.",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-            )
-        return ConversationHandler.END
-
-    keyboard = [
-        [InlineKeyboardButton("🧰 Я мастер (ищу заказы)", callback_data="select_role_worker")],
-        [InlineKeyboardButton("🏠 Я заказчик (ищу мастера)", callback_data="select_role_client")],
-    ]
-    await update.message.reply_text(
-        "👋 Добро пожаловать в <b>Ремонт Бот</b>.\n\n"
-        "Здесь мы соединяем мастеров по ремонту и клиентов, которым нужны надёжные исполнители.\n\n"
-        "Если вы мастер — бот помогает получать новые заказы.\n"
-        "Если вы заказчик — вы быстро находите мастера под свою задачу.\n\n"
-        "Выберите, в какой роли вы хотите продолжить:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        user_dict = dict(user)
+        role = user_dict["role"]
+        user_id = user_dict["id"]
+        
+        # Проверяем есть ли профиль мастера
+        worker_profile = db.get_worker_profile(user_id)
+        # Проверяем есть ли профиль клиента
+        client_profile = db.get_client_profile(user_id)
+        
+        has_worker = worker_profile is not None
+        has_client = client_profile is not None
+        
+        keyboard = []
+        
+        if has_worker:
+            keyboard.append([InlineKeyboardButton("🧰 Меню мастера", callback_data="show_worker_menu")])
+        
+        if has_client:
+            keyboard.append([InlineKeyboardButton("🏠 Меню заказчика", callback_data="show_client_menu")])
+        
+        # Кнопка для создания второго профиля
+        if not has_worker:
+            keyboard.append([InlineKeyboardButton("➕ Стать мастером", callback_data="role_worker")])
+        
+        if not has_client:
+            keyboard.append([InlineKeyboardButton("➕ Стать заказчиком", callback_data="role_client")])
+        
+        message = "👋 Добро пожаловать!\n\n"
+        
+        if has_worker and has_client:
+            message += "У вас есть оба профиля.\nВыберите какой использовать:"
+        elif has_worker:
+            message += "Вы зарегистрированы как мастер.\n\nХотите также стать заказчиком?"
+        elif has_client:
+            message += "Вы зарегистрированы как заказчик.\n\nХотите также стать мастером?"
+        
+        await update.message.reply_text(
+            message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+    else:
+        # Новый пользователь - выбор первой роли
+        keyboard = [
+            [InlineKeyboardButton("🧰 Я мастер (ищу заказы)", callback_data="select_role_worker")],
+            [InlineKeyboardButton("🏠 Я заказчик (ищу мастера)", callback_data="select_role_client")],
+        ]
+        await update.message.reply_text(
+            "👋 Добро пожаловать в <b>Ремонт Бот</b>.\n\n"
+            "Здесь мы соединяем мастеров по ремонту и клиентов, которым нужны надёжные исполнители.\n\n"
+            "Если вы мастер — бот помогает получать новые заказы.\n"
+            "Если вы заказчик — вы быстро находите мастера под свою задачу.\n\n"
+            "Выберите, в какой роли вы хотите продолжить:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
     return SELECTING_ROLE
@@ -510,6 +537,7 @@ async def show_worker_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
         # [InlineKeyboardButton("📸 Добавить фото работ", callback_data="worker_add_photos")],  # Временно отключено
         # сюда позже: "Доступные заказы", "Мои отклики"
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")],
     ]
     await query.edit_message_text(
         "🧰 Меню мастера.\nВыберите действие:",
@@ -525,6 +553,7 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔍 Найти мастера", callback_data="client_browse_workers")],
         [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
         [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
+        [InlineKeyboardButton("🧰 Главное меню", callback_data="go_main_menu")],
     ]
     await query.edit_message_text(
         "🏠 Меню заказчика.\nВыберите действие:",
@@ -1648,3 +1677,59 @@ async def browse_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["current_photo_index"] = 0
     
     await show_worker_card(query, context, edit=True)
+
+
+# ------- ПЕРЕКЛЮЧЕНИЕ МЕЖДУ РОЛЯМИ -------
+
+async def go_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат в главное меню с выбором роли"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_telegram_id = query.from_user.id
+    user = db.get_user(user_telegram_id)
+    
+    if not user:
+        await query.edit_message_text("Ошибка: пользователь не найден")
+        return
+    
+    user_dict = dict(user)
+    user_id = user_dict["id"]
+    
+    # Проверяем есть ли профиль мастера
+    worker_profile = db.get_worker_profile(user_id)
+    # Проверяем есть ли профиль клиента
+    client_profile = db.get_client_profile(user_id)
+    
+    has_worker = worker_profile is not None
+    has_client = client_profile is not None
+    
+    keyboard = []
+    
+    if has_worker:
+        keyboard.append([InlineKeyboardButton("🧰 Меню мастера", callback_data="show_worker_menu")])
+    
+    if has_client:
+        keyboard.append([InlineKeyboardButton("🏠 Меню заказчика", callback_data="show_client_menu")])
+    
+    # Кнопка для создания второго профиля
+    if not has_worker:
+        keyboard.append([InlineKeyboardButton("➕ Стать мастером", callback_data="role_worker")])
+    
+    if not has_client:
+        keyboard.append([InlineKeyboardButton("➕ Стать заказчиком", callback_data="role_client")])
+    
+    message = "🏠 <b>Главное меню</b>\n\n"
+    
+    if has_worker and has_client:
+        message += "У вас есть оба профиля.\nВыберите какой использовать:"
+    elif has_worker:
+        message += "Вы зарегистрированы как мастер.\n\nХотите также стать заказчиком?"
+    elif has_client:
+        message += "Вы зарегистрированы как заказчик.\n\nХотите также стать мастером?"
+    
+    await query.edit_message_text(
+        message,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
