@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
     REGISTER_CLIENT_NAME,
     REGISTER_CLIENT_PHONE,
     REGISTER_CLIENT_CITY,
+    REGISTER_CLIENT_CITY_SELECT,
+    REGISTER_CLIENT_CITY_OTHER,
     REGISTER_CLIENT_DESCRIPTION,
     # Новые состояния для редактирования профиля
     EDIT_PROFILE_MENU,
@@ -43,7 +45,7 @@ logger = logging.getLogger(__name__)
     EDIT_DESCRIPTION,
     ADD_PHOTOS_MENU,
     ADD_PHOTOS_UPLOAD,
-) = range(23)
+) = range(25)
 
 
 def is_valid_name(name: str) -> bool:
@@ -488,14 +490,87 @@ async def register_client_phone(update: Update, context: ContextTypes.DEFAULT_TY
         return REGISTER_CLIENT_PHONE
 
     context.user_data["phone"] = phone
-    await update.message.reply_text("🏙 В каком городе вы находитесь?")
-    return REGISTER_CLIENT_CITY
-
-
-async def register_client_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["city"] = update.message.text.strip()
     
-    # Сразу создаём профиль БЕЗ "кратко о себе"
+    # Предлагаем выбор города
+    cities = [
+        "Москва", "Санкт-Петербург", "Новосибирск", "Екатеринбург",
+        "Казань", "Нижний Новгород", "Челябинск", "Самара",
+        "Омск", "Ростов-на-Дону", "Уфа", "Красноярск",
+        "Минск", "Киев", "Другой город"
+    ]
+    
+    keyboard = []
+    row = []
+    for i, city in enumerate(cities):
+        row.append(InlineKeyboardButton(city, callback_data=f"clientcity_{city}"))
+        if len(row) == 2 or i == len(cities) - 1:
+            keyboard.append(row)
+            row = []
+    
+    await update.message.reply_text(
+        "🏙 <b>Выберите ваш город:</b>\n\n"
+        "Если вашего города нет в списке - нажмите \"Другой город\"",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return REGISTER_CLIENT_CITY_SELECT
+
+
+async def register_client_city_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора города из списка"""
+    query = update.callback_query
+    await query.answer()
+    
+    city = query.data.replace("clientcity_", "")
+    
+    if city == "Другой город":
+        await query.edit_message_text(
+            "🏙 Напишите название вашего города:"
+        )
+        return REGISTER_CLIENT_CITY_OTHER
+    else:
+        context.user_data["city"] = city
+        
+        # Создаём профиль
+        telegram_id = query.from_user.id
+        
+        # Проверяем есть ли уже user (если добавляет вторую роль)
+        existing_user = db.get_user(telegram_id)
+        if existing_user:
+            user_id = existing_user["id"]
+        else:
+            user_id = db.create_user(telegram_id, "client")
+
+        db.create_client_profile(
+            user_id=user_id,
+            name=context.user_data["name"],
+            phone=context.user_data["phone"],
+            city=context.user_data["city"],
+            description="",
+        )
+
+        keyboard = [[InlineKeyboardButton("🏠 Моё меню заказчика", callback_data="show_client_menu")]]
+        await query.edit_message_text(
+            "🥳 <b>Профиль заказчика создан!</b>\n\n"
+            "Теперь вы можете:\n"
+            "• 📝 Создавать заказы\n"
+            "• 🔍 Искать мастеров\n"
+            "• 💬 Общаться с мастерами\n\n"
+            "Детали о задаче вы опишете при создании заказа!",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+        context.user_data.clear()
+        return ConversationHandler.END
+
+
+async def register_client_city_other(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ввод другого города вручную"""
+    city = update.message.text.strip()
+    context.user_data["city"] = city
+    
+    # Создаём профиль
     telegram_id = update.effective_user.id
     
     # Проверяем есть ли уже user (если добавляет вторую роль)
@@ -510,15 +585,15 @@ async def register_client_city(update: Update, context: ContextTypes.DEFAULT_TYP
         name=context.user_data["name"],
         phone=context.user_data["phone"],
         city=context.user_data["city"],
-        description="",  # Пустое описание
+        description="",
     )
 
     keyboard = [[InlineKeyboardButton("🏠 Моё меню заказчика", callback_data="show_client_menu")]]
     await update.message.reply_text(
         "🥳 <b>Профиль заказчика создан!</b>\n\n"
         "Теперь вы можете:\n"
-        "• 🔍 Искать мастеров\n"
         "• 📝 Создавать заказы\n"
+        "• 🔍 Искать мастеров\n"
         "• 💬 Общаться с мастерами\n\n"
         "Детали о задаче вы опишете при создании заказа!",
         parse_mode="HTML",
@@ -527,6 +602,8 @@ async def register_client_city(update: Update, context: ContextTypes.DEFAULT_TYP
 
     context.user_data.clear()
     return ConversationHandler.END
+
+
 
     context.user_data.clear()
     return ConversationHandler.END
@@ -555,13 +632,16 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     keyboard = [
-        [InlineKeyboardButton("🔍 Найти мастера", callback_data="client_browse_workers")],
         [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
         [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
+        [InlineKeyboardButton("🔍 Найти мастера", callback_data="client_browse_workers")],
         [InlineKeyboardButton("🧰 Главное меню", callback_data="go_main_menu")],
     ]
     await query.edit_message_text(
-        "🏠 Меню заказчика.\nВыберите действие:",
+        "🏠 <b>Меню заказчика</b>\n\n"
+        "Создайте заказ - мастера увидят его и откликнутся!\n"
+        "Или найдите мастера самостоятельно.",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
