@@ -98,9 +98,21 @@ def main():
                 )
             ],
             handlers.REGISTER_MASTER_CITY: [
+                CallbackQueryHandler(
+                    handlers.register_master_city_select,
+                    pattern="^mastercity_",
+                )
+            ],
+            handlers.REGISTER_MASTER_CITY_SELECT: [
+                CallbackQueryHandler(
+                    handlers.register_master_city_select,
+                    pattern="^mastercity_",
+                )
+            ],
+            handlers.REGISTER_MASTER_CITY_OTHER: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
-                    handlers.register_master_city,
+                    handlers.register_master_city_other,
                 )
             ],
             # Районы больше не используются - переходим сразу к категориям
