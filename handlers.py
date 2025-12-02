@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
     REGISTER_MASTER_NAME,
     REGISTER_MASTER_PHONE,
     REGISTER_MASTER_CITY,
+    REGISTER_MASTER_CITY_SELECT,
+    REGISTER_MASTER_CITY_OTHER,
     REGISTER_MASTER_CATEGORIES_SELECT,
     REGISTER_MASTER_CATEGORIES_OTHER,
     REGISTER_MASTER_EXPERIENCE,
@@ -45,7 +47,7 @@ logger = logging.getLogger(__name__)
     EDIT_DESCRIPTION,
     ADD_PHOTOS_MENU,
     ADD_PHOTOS_UPLOAD,
-) = range(25)
+) = range(27)
 
 
 def is_valid_name(name: str) -> bool:
@@ -181,20 +183,96 @@ async def register_master_phone(update: Update, context: ContextTypes.DEFAULT_TY
             "Пожалуйста, укажите номер в формате: +375 29 123 45 67"
         )
         return REGISTER_MASTER_PHONE
+    
     context.user_data["phone"] = phone
+    
+    # Предлагаем выбор города из Беларуси
+    cities = [
+        "Минск", "Гомель", "Могилёв", "Витебск",
+        "Гродно", "Брест", "Бобруйск", "Барановичи",
+        "Борисов", "Пинск", "Орша", "Мозырь",
+        "Новополоцк", "Лида", "Солигорск",
+        "Вся Беларусь", "Другой город"
+    ]
+    
+    keyboard = []
+    row = []
+    for i, city in enumerate(cities):
+        row.append(InlineKeyboardButton(city, callback_data=f"mastercity_{city}"))
+        if len(row) == 2 or i == len(cities) - 1:
+            keyboard.append(row)
+            row = []
+    
     await update.message.reply_text(
-        "🏙 В каком городе вы работаете?\n\n"
-        "Сейчас бот в первую очередь ориентирован на Минск, но вы можете указать любой город."
+        "🏙 <b>Где вы работаете?</b>\n\n"
+        "Можете выбрать \"Вся Беларусь\" если работаете по всей стране.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return REGISTER_MASTER_CITY
+    return REGISTER_MASTER_CITY_SELECT
 
 
-async def register_master_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def register_master_city_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора города мастером"""
+    query = update.callback_query
+    await query.answer()
+    
+    city = query.data.replace("mastercity_", "")
+    
+    if city == "Другой город":
+        await query.edit_message_text(
+            "🏙 Напишите где вы работаете:"
+        )
+        return REGISTER_MASTER_CITY_OTHER
+    else:
+        context.user_data["city"] = city
+        context.user_data["regions"] = city
+        
+        # Переходим к выбору категорий
+        keyboard = [
+            [
+                InlineKeyboardButton("Электрика", callback_data="cat_Электрика"),
+                InlineKeyboardButton("Сантехника", callback_data="cat_Сантехника"),
+            ],
+            [
+                InlineKeyboardButton("Отделка", callback_data="cat_Отделка"),
+                InlineKeyboardButton("Сборка мебели", callback_data="cat_Сборка мебели"),
+            ],
+            [
+                InlineKeyboardButton("Окна/двери", callback_data="cat_Окна/двери"),
+                InlineKeyboardButton("Бытовая техника", callback_data="cat_Бытовая техника"),
+            ],
+            [
+                InlineKeyboardButton("Напольные покрытия", callback_data="cat_Напольные покрытия"),
+                InlineKeyboardButton("Мелкий ремонт", callback_data="cat_Мелкий ремонт"),
+            ],
+            [
+                InlineKeyboardButton("Дизайн", callback_data="cat_Дизайн"),
+                InlineKeyboardButton("Другое", callback_data="cat_Другое"),
+            ],
+            [InlineKeyboardButton("✅ Завершить выбор", callback_data="cat_done")],
+        ]
+        
+        context.user_data["categories"] = []
+        
+        await query.edit_message_text(
+            f"Город: {city}\n\n"
+            "🔧 Какие виды работ вы выполняете?\n\n"
+            "Нажимайте подходящие кнопки (можно несколько).\n"
+            "Если нужного варианта нет — выберите «Другое» и впишите свои.\n"
+            "Когда закончите — нажмите «✅ Завершить выбор».",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return REGISTER_MASTER_CATEGORIES_SELECT
+
+
+async def register_master_city_other(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ввод другого города мастером"""
     city = update.message.text.strip()
     context.user_data["city"] = city
-    context.user_data["regions"] = city  # Просто сохраняем город как регион
+    context.user_data["regions"] = city
     
-    # Переходим сразу к выбору категорий
+    # Переходим к выбору категорий
     keyboard = [
         [
             InlineKeyboardButton("Электрика", callback_data="cat_Электрика"),
@@ -223,15 +301,15 @@ async def register_master_city(update: Update, context: ContextTypes.DEFAULT_TYP
     
     await update.message.reply_text(
         f"Город: {city}\n\n"
-        "💡 <i>Сейчас платформа работает по всей Беларуси</i>\n\n"
         "🔧 Какие виды работ вы выполняете?\n\n"
         "Нажимайте подходящие кнопки (можно несколько).\n"
         "Если нужного варианта нет — выберите «Другое» и впишите свои.\n"
         "Когда закончите — нажмите «✅ Завершить выбор».",
         reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML",
     )
     return REGISTER_MASTER_CATEGORIES_SELECT
+
+
 
 
 # Функция register_master_regions удалена - районы больше не используются
@@ -491,12 +569,13 @@ async def register_client_phone(update: Update, context: ContextTypes.DEFAULT_TY
 
     context.user_data["phone"] = phone
     
-    # Предлагаем выбор города
+    # Предлагаем выбор города из Беларуси
     cities = [
-        "Москва", "Санкт-Петербург", "Новосибирск", "Екатеринбург",
-        "Казань", "Нижний Новгород", "Челябинск", "Самара",
-        "Омск", "Ростов-на-Дону", "Уфа", "Красноярск",
-        "Минск", "Киев", "Другой город"
+        "Минск", "Гомель", "Могилёв", "Витебск",
+        "Гродно", "Брест", "Бобруйск", "Барановичи",
+        "Борисов", "Пинск", "Орша", "Мозырь",
+        "Новополоцк", "Лида", "Солигорск",
+        "Вся Беларусь", "Другой город"
     ]
     
     keyboard = []
@@ -509,7 +588,8 @@ async def register_client_phone(update: Update, context: ContextTypes.DEFAULT_TY
     
     await update.message.reply_text(
         "🏙 <b>Выберите ваш город:</b>\n\n"
-        "Если вашего города нет в списке - нажмите \"Другой город\"",
+        "Можете выбрать \"Вся Беларусь\" если работаете по всей стране.\n"
+        "Если вашего города нет - нажмите \"Другой город\"",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
