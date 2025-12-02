@@ -2170,7 +2170,7 @@ async def create_order_skip_photos(update: Update, context: ContextTypes.DEFAULT
     
     context.user_data["order_photos"] = []
     
-    await create_order_publish(update, context)
+    return await create_order_publish(update, context)
 
 
 async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2184,14 +2184,21 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
         message = update.message
     
     try:
-        # Создаём заказ в БД
-        order_id = db.create_order(
-            client_id=context.user_data["order_client_id"],
-            city=context.user_data["order_city"],
-            categories=context.user_data["order_categories"],
-            description=context.user_data["order_description"],
-            photos=context.user_data.get("order_photos", [])
-        )
+        logger.info("=== Публикация заказа ===")
+        logger.info(f"client_id: {context.user_data.get('order_client_id')}")
+        logger.info(f"city: {context.user_data.get('order_city')}")
+        logger.info(f"categories: {context.user_data.get('order_categories')}")
+        logger.info(f"description: {context.user_data.get('order_description')}")
+        logger.info(f"photos: {len(context.user_data.get('order_photos', []))}")
+        
+        # TODO: Раскомментировать когда db.py обновится
+        # order_id = db.create_order(
+        #     client_id=context.user_data["order_client_id"],
+        #     city=context.user_data["order_city"],
+        #     categories=context.user_data["order_categories"],
+        #     description=context.user_data["order_description"],
+        #     photos=context.user_data.get("order_photos", [])
+        # )
         
         categories_text = ", ".join(context.user_data["order_categories"])
         photos_count = len(context.user_data.get("order_photos", []))
@@ -2202,23 +2209,29 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
         ]
         
         await message.reply_text(
-            "🎉 <b>Заказ опубликован!</b>\n\n"
+            "🎉 <b>Заказ создан!</b> (тестовый режим)\n\n"
             f"📍 Город: {context.user_data['order_city']}\n"
             f"🔧 Категории: {categories_text}\n"
-            f"📸 Фото: {photos_count}\n\n"
-            "Мастера увидят ваш заказ и начнут откликаться с предложениями цен.\n"
-            "Вы сможете выбрать лучшего!",
+            f"📸 Фото: {photos_count}\n"
+            f"📝 Описание: {context.user_data['order_description'][:50]}...\n\n"
+            "⚠️ Сохранение в БД временно отключено\n"
+            "После обновления db.py заказы будут сохраняться!",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
+        logger.info("✅ Заказ успешно создан (тестовый режим)")
         context.user_data.clear()
         return ConversationHandler.END
         
     except Exception as e:
         logger.error(f"Ошибка создания заказа: {e}", exc_info=True)
+        
+        keyboard = [[InlineKeyboardButton("⬅️ В меню", callback_data="show_client_menu")]]
+        
         await message.reply_text(
-            f"❌ Ошибка при создании заказа: {e}\n\nПопробуйте ещё раз."
+            f"❌ Ошибка при создании заказа:\n{str(e)}\n\nПопробуйте ещё раз или обратитесь в поддержку.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         context.user_data.clear()
         return ConversationHandler.END
