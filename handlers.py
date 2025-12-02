@@ -1568,19 +1568,123 @@ async def client_create_order(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Просмотр заказов (пока заглушка)"""
+    """Просмотр заказов клиента"""
     query = update.callback_query
     await query.answer()
     
-    await query.edit_message_text(
-        "📂 <b>Мои заказы</b>\n\n"
-        "У вас пока нет созданных заказов.\n\n"
-        "Создайте первый заказ, чтобы начать получать отклики от мастеров!",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")]
-        ])
-    )
+    try:
+        # Получаем профиль клиента
+        user = db.get_user(query.from_user.id)
+        if not user:
+            logger.error(f"User не найден для telegram_id: {query.from_user.id}")
+            await query.edit_message_text(
+                "❌ Ошибка: пользователь не найден.\n\nНажмите /start для регистрации.",
+                parse_mode="HTML"
+            )
+            return
+        
+        logger.info(f"User найден: id={user['id']}")
+        
+        client_profile = db.get_client_profile(user["id"])
+        if not client_profile:
+            logger.error(f"Client profile не найден для user_id: {user['id']}")
+            await query.edit_message_text(
+                "❌ Ошибка: профиль клиента не найден.\n\n"
+                "Возможно произошла ошибка при регистрации.\n"
+                "Нажмите /start и зарегистрируйтесь заново.",
+                parse_mode="HTML"
+            )
+            return
+        
+        logger.info(f"Client profile найден: id={client_profile['id']}")
+        
+        # Получаем заказы клиента
+        orders = db.get_client_orders(client_profile["id"])
+        
+        logger.info(f"Найдено заказов: {len(orders)}")
+        
+        if not orders:
+            keyboard = [
+                [InlineKeyboardButton("📝 Создать первый заказ", callback_data="client_create_order")],
+                [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")],
+            ]
+            
+            await query.edit_message_text(
+                "📂 <b>Мои заказы</b>\n\n"
+                "У вас пока нет созданных заказов.\n\n"
+                "Создайте первый заказ, чтобы начать получать отклики от мастеров!",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+        
+        # Формируем список заказов
+        orders_text = "📂 <b>Мои заказы</b>\n\n"
+        
+        for i, order in enumerate(orders[:5], 1):  # Показываем последние 5
+            order_dict = dict(order)
+            
+            status_emoji = {
+                "open": "🟢",
+                "pending_choice": "🟡", 
+                "master_selected": "🔵",
+                "contact_shared": "✅",
+                "done": "✅",
+                "canceled": "❌"
+            }
+            
+            status_text = {
+                "open": "Открыт",
+                "pending_choice": "Ожидает выбора",
+                "master_selected": "Мастер выбран",
+                "contact_shared": "Контакт передан",
+                "done": "Выполнен",
+                "canceled": "Отменён"
+            }
+            
+            emoji = status_emoji.get(order_dict.get("status", "open"), "⚪")
+            status = status_text.get(order_dict.get("status", "open"), "Неизвестно")
+            
+            orders_text += f"{emoji} <b>Заказ #{order_dict['id']}</b> - {status}\n"
+            orders_text += f"📍 {order_dict.get('city', 'Не указан')}\n"
+            orders_text += f"🔧 {order_dict.get('category', 'Не указаны')}\n"
+            
+            # Показываем начало описания
+            description = order_dict.get('description', '')
+            if len(description) > 50:
+                description = description[:50] + "..."
+            orders_text += f"📝 {description}\n"
+            
+            # Количество фото
+            photos = order_dict.get('photos', '')
+            photos_count = len([p for p in photos.split(',') if p]) if photos else 0
+            if photos_count > 0:
+                orders_text += f"📸 {photos_count} фото\n"
+            
+            orders_text += f"📅 {order_dict.get('created_at', '')}\n"
+            orders_text += "\n"
+        
+        keyboard = [
+            [InlineKeyboardButton("📝 Создать новый заказ", callback_data="client_create_order")],
+            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")],
+        ]
+        
+        await query.edit_message_text(
+            orders_text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка в client_my_orders: {e}", exc_info=True)
+        
+        keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")]]
+        
+        await query.edit_message_text(
+            f"❌ Ошибка при загрузке заказов:\n{str(e)}\n\nПопробуйте позже.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
 
 # ------- СЛУЖЕБНЫЕ -------
