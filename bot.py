@@ -73,7 +73,11 @@ def main():
     # --- ConversationHandler для регистрации ---
 
     reg_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", handlers.start_command)],
+        entry_points=[
+            CommandHandler("start", handlers.start_command),
+            CallbackQueryHandler(handlers.add_second_role_worker, pattern="^role_worker$"),
+            CallbackQueryHandler(handlers.add_second_role_client, pattern="^role_client$"),
+        ],
         states={
             # Выбор роли
             handlers.SELECTING_ROLE: [
