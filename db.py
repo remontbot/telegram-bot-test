@@ -412,3 +412,84 @@ def get_worker_by_id(worker_id):
         
         return cursor.fetchone()
 
+
+
+def migrate_add_order_photos():
+    """Добавляет колонку photos в таблицу orders"""
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        cursor = conn.cursor()
+        
+        # Проверяем есть ли колонка photos
+        cursor.execute("PRAGMA table_info(orders)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'photos' not in columns:
+            print("➕ Добавляем колонку 'photos' в таблицу orders...")
+            cursor.execute("ALTER TABLE orders ADD COLUMN photos TEXT DEFAULT ''")
+            conn.commit()
+            print("✅ Колонка 'photos' успешно добавлена в orders!")
+        else:
+            print("✅ Колонка 'photos' уже существует в orders")
+
+
+def create_order(client_id, city, categories, description, photos, budget_type="none", budget_value=0):
+    """Создаёт новый заказ"""
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        cursor = conn.cursor()
+        
+        from datetime import datetime
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Преобразуем список категорий в строку
+        categories_str = ", ".join(categories) if isinstance(categories, list) else categories
+        
+        # Преобразуем список фото в строку
+        photos_str = ",".join(photos) if isinstance(photos, list) else photos
+        
+        cursor.execute("""
+            INSERT INTO orders (
+                client_id, city, category, description, photos,
+                budget_type, budget_value, status, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)
+        """, (client_id, city, categories_str, description, photos_str, budget_type, budget_value, now))
+        
+        conn.commit()
+        return cursor.lastrowid
+
+
+def get_orders_by_category(category):
+    """Получает открытые заказы по категории"""
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                o.*,
+                c.name as client_name,
+                c.rating as client_rating,
+                c.rating_count as client_rating_count
+            FROM orders o
+            JOIN clients c ON o.client_id = c.id
+            WHERE o.status = 'open'
+            AND o.category LIKE ?
+            ORDER BY o.created_at DESC
+        """, (f"%{category}%",))
+        
+        return cursor.fetchall()
+
+
+def get_client_orders(client_id):
+    """Получает все заказы клиента"""
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT * FROM orders
+            WHERE client_id = ?
+            ORDER BY created_at DESC
+        """, (client_id,))
+        
+        return cursor.fetchall()
