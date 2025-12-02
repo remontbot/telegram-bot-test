@@ -32,7 +32,18 @@ logger = logging.getLogger(__name__)
     REGISTER_CLIENT_PHONE,
     REGISTER_CLIENT_CITY,
     REGISTER_CLIENT_DESCRIPTION,
-) = range(13)
+    # Новые состояния для редактирования профиля
+    EDIT_PROFILE_MENU,
+    EDIT_NAME,
+    EDIT_PHONE,
+    EDIT_CITY,
+    EDIT_CATEGORIES_SELECT,
+    EDIT_CATEGORIES_OTHER,
+    EDIT_EXPERIENCE,
+    EDIT_DESCRIPTION,
+    ADD_PHOTOS_MENU,
+    ADD_PHOTOS_UPLOAD,
+) = range(23)
 
 
 def is_valid_name(name: str) -> bool:
@@ -610,6 +621,7 @@ async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
         keyboard = [
+            [InlineKeyboardButton("✏️ Редактировать профиль", callback_data="edit_profile_menu")],
             [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")],
         ]
         
@@ -657,6 +669,432 @@ async def worker_add_photos_menu(update: Update, context: ContextTypes.DEFAULT_T
             [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]
         ])
     )
+
+
+# ------- РЕДАКТИРОВАНИЕ ПРОФИЛЯ -------
+
+async def show_edit_profile_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню редактирования профиля"""
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("✏️ Изменить имя", callback_data="edit_name")],
+        [InlineKeyboardButton("📱 Изменить телефон", callback_data="edit_phone")],
+        [InlineKeyboardButton("🏙 Изменить город", callback_data="edit_city")],
+        [InlineKeyboardButton("🔧 Изменить виды работ", callback_data="edit_categories")],
+        [InlineKeyboardButton("📅 Изменить опыт", callback_data="edit_experience")],
+        [InlineKeyboardButton("📝 Изменить описание", callback_data="edit_description")],
+        [InlineKeyboardButton("⬅️ Назад к профилю", callback_data="worker_profile")],
+    ]
+    
+    await query.edit_message_text(
+        "✏️ <b>Редактирование профиля</b>\n\n"
+        "Выберите что хотите изменить:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML",
+    )
+    return EDIT_PROFILE_MENU
+
+
+async def edit_name_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало редактирования имени"""
+    query = update.callback_query
+    await query.answer()
+    
+    telegram_id = query.from_user.id
+    user = db.get_user(telegram_id)
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+    
+    worker_profile = db.get_worker_profile(user_id)
+    profile_dict = dict(worker_profile)
+    current_name = profile_dict.get("name") or "—"
+    
+    await query.edit_message_text(
+        f"✏️ <b>Изменение имени</b>\n\n"
+        f"Текущее имя: <b>{current_name}</b>\n\n"
+        f"Введите новое имя:\n"
+        f"Например: «Александр», «Иван Петров»\n\n"
+        f"Или отправьте /cancel для отмены",
+        parse_mode="HTML",
+    )
+    return EDIT_NAME
+
+
+async def edit_name_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохранение нового имени"""
+    new_name = update.message.text.strip()
+    
+    if not is_valid_name(new_name):
+        await update.message.reply_text(
+            "❌ Неверный формат имени.\n"
+            "Укажите только имя или имя и фамилию, без ссылок.\n\n"
+            "Попробуйте ещё раз или /cancel для отмены"
+        )
+        return EDIT_NAME
+    
+    telegram_id = update.effective_user.id
+    user = db.get_user(telegram_id)
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+    
+    db.update_worker_field(user_id, "name", new_name)
+    
+    keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
+    
+    await update.message.reply_text(
+        f"✅ Имя успешно изменено на: <b>{new_name}</b>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML",
+    )
+    return ConversationHandler.END
+
+
+async def edit_phone_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало редактирования телефона"""
+    query = update.callback_query
+    await query.answer()
+    
+    telegram_id = query.from_user.id
+    user = db.get_user(telegram_id)
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+    
+    worker_profile = db.get_worker_profile(user_id)
+    profile_dict = dict(worker_profile)
+    current_phone = profile_dict.get("phone") or "—"
+    
+    await query.edit_message_text(
+        f"📱 <b>Изменение телефона</b>\n\n"
+        f"Текущий телефон: <b>{current_phone}</b>\n\n"
+        f"Введите новый номер телефона:\n"
+        f"Пример: +375 29 123 45 67\n\n"
+        f"Или отправьте /cancel для отмены",
+        parse_mode="HTML",
+    )
+    return EDIT_PHONE
+
+
+async def edit_phone_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохранение нового телефона"""
+    new_phone = update.message.text.strip()
+    
+    if not is_valid_phone(new_phone):
+        await update.message.reply_text(
+            "❌ Неверный формат телефона.\n"
+            "Пример: +375 29 123 45 67\n\n"
+            "Попробуйте ещё раз или /cancel для отмены"
+        )
+        return EDIT_PHONE
+    
+    telegram_id = update.effective_user.id
+    user = db.get_user(telegram_id)
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+    
+    db.update_worker_field(user_id, "phone", new_phone)
+    
+    keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
+    
+    await update.message.reply_text(
+        f"✅ Телефон успешно изменён на: <b>{new_phone}</b>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML",
+    )
+    return ConversationHandler.END
+
+
+async def edit_city_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало редактирования города"""
+    query = update.callback_query
+    await query.answer()
+    
+    telegram_id = query.from_user.id
+    user = db.get_user(telegram_id)
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+    
+    worker_profile = db.get_worker_profile(user_id)
+    profile_dict = dict(worker_profile)
+    current_city = profile_dict.get("city") or "—"
+    
+    await query.edit_message_text(
+        f"🏙 <b>Изменение города</b>\n\n"
+        f"Текущий город: <b>{current_city}</b>\n\n"
+        f"Введите новый город:\n"
+        f"Например: Минск, Гомель, Брест\n\n"
+        f"Или отправьте /cancel для отмены",
+        parse_mode="HTML",
+    )
+    return EDIT_CITY
+
+
+async def edit_city_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохранение нового города"""
+    new_city = update.message.text.strip()
+    
+    if len(new_city) < 2:
+        await update.message.reply_text(
+            "❌ Слишком короткое название города.\n\n"
+            "Попробуйте ещё раз или /cancel для отмены"
+        )
+        return EDIT_CITY
+    
+    telegram_id = update.effective_user.id
+    user = db.get_user(telegram_id)
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+    
+    db.update_worker_field(user_id, "city", new_city)
+    db.update_worker_field(user_id, "regions", new_city)
+    
+    keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
+    
+    await update.message.reply_text(
+        f"✅ Город успешно изменён на: <b>{new_city}</b>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML",
+    )
+    return ConversationHandler.END
+
+
+async def edit_categories_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало редактирования категорий"""
+    query = update.callback_query
+    await query.answer()
+    
+    telegram_id = query.from_user.id
+    user = db.get_user(telegram_id)
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+    
+    worker_profile = db.get_worker_profile(user_id)
+    profile_dict = dict(worker_profile)
+    current_categories = profile_dict.get("categories") or "—"
+    
+    context.user_data["edit_categories"] = []
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("Электрика", callback_data="editcat_Электрика"),
+            InlineKeyboardButton("Сантехника", callback_data="editcat_Сантехника"),
+        ],
+        [
+            InlineKeyboardButton("Отделка", callback_data="editcat_Отделка"),
+            InlineKeyboardButton("Сборка мебели", callback_data="editcat_Сборка мебели"),
+        ],
+        [
+            InlineKeyboardButton("Окна/двери", callback_data="editcat_Окна/двери"),
+            InlineKeyboardButton("Бытовая техника", callback_data="editcat_Бытовая техника"),
+        ],
+        [
+            InlineKeyboardButton("Напольные покрытия", callback_data="editcat_Напольные покрытия"),
+            InlineKeyboardButton("Мелкий ремонт", callback_data="editcat_Мелкий ремонт"),
+        ],
+        [
+            InlineKeyboardButton("Дизайн", callback_data="editcat_Дизайн"),
+            InlineKeyboardButton("Другое", callback_data="editcat_Другое"),
+        ],
+        [InlineKeyboardButton("✅ Сохранить выбор", callback_data="editcat_done")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="worker_profile")],
+    ]
+    
+    await query.edit_message_text(
+        f"🔧 <b>Изменение видов работ</b>\n\n"
+        f"Текущие категории:\n<b>{current_categories}</b>\n\n"
+        f"Выберите новые категории (можно несколько):\n"
+        f"Нажимайте на кнопки для добавления/удаления.\n"
+        f"Когда закончите — нажмите «✅ Сохранить выбор»",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML",
+    )
+    return EDIT_CATEGORIES_SELECT
+
+
+async def edit_categories_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора категорий"""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    selected = data.split("_", 1)[1]
+    
+    if selected == "done":
+        if not context.user_data["edit_categories"]:
+            await query.answer("❌ Выберите хотя бы одну категорию!", show_alert=True)
+            return EDIT_CATEGORIES_SELECT
+        
+        telegram_id = query.from_user.id
+        user = db.get_user(telegram_id)
+        user_dict = dict(user)
+        user_id = user_dict.get("id")
+        
+        new_categories = ", ".join(context.user_data["edit_categories"])
+        db.update_worker_field(user_id, "categories", new_categories)
+        
+        context.user_data.clear()
+        
+        keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
+        
+        await query.edit_message_text(
+            f"✅ Виды работ успешно изменены на:\n<b>{new_categories}</b>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
+    
+    elif selected == "Другое":
+        await query.edit_message_text(
+            "Введите свои виды работ через запятую.\n"
+            "Например: «Покраска фасадов, декорирование»\n\n"
+            "Или /cancel для отмены"
+        )
+        return EDIT_CATEGORIES_OTHER
+    
+    else:
+        if selected not in context.user_data["edit_categories"]:
+            context.user_data["edit_categories"].append(selected)
+            await query.answer(f"✅ Добавлено: {selected}")
+        else:
+            context.user_data["edit_categories"].remove(selected)
+            await query.answer(f"❌ Убрано: {selected}")
+        
+        return EDIT_CATEGORIES_SELECT
+
+
+async def edit_categories_other(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка кастомных категорий"""
+    user_cats = update.message.text.strip()
+    custom_list = [c.strip() for c in user_cats.split(",") if c.strip()]
+    context.user_data["edit_categories"].extend(custom_list)
+    
+    telegram_id = update.effective_user.id
+    user = db.get_user(telegram_id)
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+    
+    new_categories = ", ".join(context.user_data["edit_categories"])
+    db.update_worker_field(user_id, "categories", new_categories)
+    
+    context.user_data.clear()
+    
+    keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
+    
+    await update.message.reply_text(
+        f"✅ Виды работ успешно изменены на:\n<b>{new_categories}</b>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML",
+    )
+    return ConversationHandler.END
+
+
+async def edit_experience_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало редактирования опыта"""
+    query = update.callback_query
+    await query.answer()
+    
+    telegram_id = query.from_user.id
+    user = db.get_user(telegram_id)
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+    
+    worker_profile = db.get_worker_profile(user_id)
+    profile_dict = dict(worker_profile)
+    current_exp = profile_dict.get("experience") or "—"
+    
+    keyboard = [
+        [InlineKeyboardButton("Начинающий (до 1 года)", callback_data="editexp_Начинающий")],
+        [InlineKeyboardButton("1-3 года", callback_data="editexp_1-3 года")],
+        [InlineKeyboardButton("3-5 лет", callback_data="editexp_3-5 лет")],
+        [InlineKeyboardButton("Более 5 лет", callback_data="editexp_Более 5 лет")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="worker_profile")],
+    ]
+    
+    await query.edit_message_text(
+        f"📅 <b>Изменение опыта работы</b>\n\n"
+        f"Текущий опыт: <b>{current_exp}</b>\n\n"
+        f"Выберите новый опыт:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML",
+    )
+    return EDIT_EXPERIENCE
+
+
+async def edit_experience_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохранение нового опыта"""
+    query = update.callback_query
+    await query.answer()
+    
+    new_exp = query.data.replace("editexp_", "")
+    
+    telegram_id = query.from_user.id
+    user = db.get_user(telegram_id)
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+    
+    db.update_worker_field(user_id, "experience", new_exp)
+    
+    keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
+    
+    await query.edit_message_text(
+        f"✅ Опыт работы успешно изменён на: <b>{new_exp}</b>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML",
+    )
+    return ConversationHandler.END
+
+
+async def edit_description_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало редактирования описания"""
+    query = update.callback_query
+    await query.answer()
+    
+    telegram_id = query.from_user.id
+    user = db.get_user(telegram_id)
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+    
+    worker_profile = db.get_worker_profile(user_id)
+    profile_dict = dict(worker_profile)
+    current_desc = profile_dict.get("description") or "—"
+    
+    await query.edit_message_text(
+        f"📝 <b>Изменение описания</b>\n\n"
+        f"Текущее описание:\n<i>{current_desc}</i>\n\n"
+        f"Введите новое описание профиля:\n"
+        f"Расскажите о своём опыте, специализации, как работаете.\n\n"
+        f"Или отправьте /cancel для отмены",
+        parse_mode="HTML",
+    )
+    return EDIT_DESCRIPTION
+
+
+async def edit_description_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохранение нового описания"""
+    new_desc = update.message.text.strip()
+    
+    if len(new_desc) < 10:
+        await update.message.reply_text(
+            "❌ Описание слишком короткое (минимум 10 символов).\n\n"
+            "Попробуйте ещё раз или /cancel для отмены"
+        )
+        return EDIT_DESCRIPTION
+    
+    telegram_id = update.effective_user.id
+    user = db.get_user(telegram_id)
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+    
+    db.update_worker_field(user_id, "description", new_desc)
+    
+    keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
+    
+    await update.message.reply_text(
+        f"✅ Описание успешно изменено!",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML",
+    )
+    return ConversationHandler.END
 
 
 # ------- ЗАГЛУШКИ ДЛЯ ЗАКАЗЧИКА -------
