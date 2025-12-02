@@ -638,6 +638,61 @@ async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
 
+# ------- ДОБАВЛЕНИЕ ФОТО ПОСЛЕ РЕГИСТРАЦИИ -------
+
+async def worker_add_photos_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню для добавления фото работ после регистрации"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "📸 <b>Добавление фото работ</b>\n\n"
+        "Эта функция в разработке.\n\n"
+        "Скоро вы сможете добавлять новые фотографии своих работ прямо из меню!",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]
+        ])
+    )
+
+
+# ------- ЗАГЛУШКИ ДЛЯ ЗАКАЗЧИКА -------
+
+async def client_create_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Создание заказа (пока заглушка)"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "📝 <b>Создание заказа</b>\n\n"
+        "Эта функция в разработке.\n\n"
+        "Скоро здесь вы сможете:\n"
+        "• Описать задачу\n"
+        "• Указать бюджет и сроки\n"
+        "• Получить отклики от мастеров",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")]
+        ])
+    )
+
+
+async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Просмотр заказов (пока заглушка)"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "📂 <b>Мои заказы</b>\n\n"
+        "У вас пока нет созданных заказов.\n\n"
+        "Создайте первый заказ, чтобы начать получать отклики от мастеров!",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")]
+        ])
+    )
+
+
 # ------- СЛУЖЕБНЫЕ -------
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
