@@ -655,20 +655,171 @@ async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # ------- ДОБАВЛЕНИЕ ФОТО ПОСЛЕ РЕГИСТРАЦИИ -------
 
-async def worker_add_photos_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Меню для добавления фото работ после регистрации"""
+async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало добавления фото работ"""
     query = update.callback_query
     await query.answer()
     
+    telegram_id = query.from_user.id
+    user = db.get_user(telegram_id)
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+    
+    worker_profile = db.get_worker_profile(user_id)
+    profile_dict = dict(worker_profile)
+    current_photos = profile_dict.get("portfolio_photos") or ""
+    
+    # Подсчитываем текущие фото
+    current_photos_list = [p for p in current_photos.split(",") if p] if current_photos else []
+    current_count = len(current_photos_list)
+    max_photos = 10
+    available_slots = max_photos - current_count
+    
+    # Сохраняем текущие фото в context
+    context.user_data["existing_photos"] = current_photos_list
+    context.user_data["new_photos"] = []
+    
+    if available_slots <= 0:
+        await query.edit_message_text(
+            "📸 <b>Портфолио заполнено</b>\n\n"
+            f"У вас уже загружено максимальное количество фото ({max_photos}).\n\n"
+            "Чтобы добавить новые фото, сначала нужно удалить старые.\n"
+            "(Функция удаления будет добавлена в следующем обновлении)",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]
+            ])
+        )
+        return ConversationHandler.END
+    
+    status_text = f"📊 Текущее состояние:\n" \
+                  f"• Загружено фото: {current_count}/{max_photos}\n" \
+                  f"• Можно добавить ещё: {available_slots}"
+    
     await query.edit_message_text(
-        "📸 <b>Добавление фото работ</b>\n\n"
-        "Эта функция в разработке.\n\n"
-        "Скоро вы сможете добавлять новые фотографии своих работ прямо из меню!",
+        f"📸 <b>Добавление фото работ</b>\n\n"
+        f"{status_text}\n\n"
+        f"Отправьте новые фотографии ваших работ (можно до {available_slots} штук).\n"
+        f"Можно отправлять по одной или группой.\n\n"
+        f"Когда загрузите все фото, отправьте:\n"
+        f"<b>/done</b> или напишите <b>готово</b>\n\n"
+        f"Для отмены: /cancel",
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]
-        ])
     )
+    return ADD_PHOTOS_UPLOAD
+
+
+async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка загружаемых фото"""
+    
+    # Проверяем команду завершения
+    if update.message.text:
+        text = update.message.text.strip().lower()
+        
+        if text in ['/done', 'done', '/donephotos', 'donephotos', 'готово', '/готово']:
+            return await worker_add_photos_finish(update, context)
+    
+    # Обработка фото
+    if update.message.photo:
+        existing_count = len(context.user_data.get("existing_photos", []))
+        new_count = len(context.user_data.get("new_photos", []))
+        total_count = existing_count + new_count
+        max_photos = 10
+        
+        if total_count >= max_photos:
+            await update.message.reply_text(
+                f"⚠️ Достигнут лимит в {max_photos} фотографий.\n\n"
+                f"Отправьте <b>/done</b> или <b>готово</b> для завершения.",
+                parse_mode="HTML"
+            )
+            return ADD_PHOTOS_UPLOAD
+        
+        photo = update.message.photo[-1]  # Берём самое большое разрешение
+        file_id = photo.file_id
+        
+        context.user_data["new_photos"].append(file_id)
+        new_count = len(context.user_data["new_photos"])
+        total_count = existing_count + new_count
+        remaining = max_photos - total_count
+        
+        await update.message.reply_text(
+            f"✅ Фото добавлено!\n\n"
+            f"📊 Статус:\n"
+            f"• Было фото: {existing_count}\n"
+            f"• Добавлено новых: {new_count}\n"
+            f"• Всего будет: {total_count}/{max_photos}\n"
+            f"• Можно ещё: {remaining}\n\n"
+            f"Отправьте ещё фото или напишите:\n"
+            f"<b>/done</b> или <b>готово</b>",
+            parse_mode="HTML"
+        )
+        return ADD_PHOTOS_UPLOAD
+    
+    # Если пришло что-то другое
+    await update.message.reply_text(
+        "⚠️ Пожалуйста, отправьте:\n"
+        "• Фотографии ваших работ, или\n"
+        "• Команду <b>/done</b> или <b>готово</b> для завершения\n"
+        "• Команду /cancel для отмены",
+        parse_mode="HTML"
+    )
+    return ADD_PHOTOS_UPLOAD
+
+
+async def worker_add_photos_finish(update, context: ContextTypes.DEFAULT_TYPE):
+    """Завершение добавления фото - сохранение в БД"""
+    
+    new_photos = context.user_data.get("new_photos", [])
+    existing_photos = context.user_data.get("existing_photos", [])
+    
+    if not new_photos:
+        keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]]
+        
+        if update.message:
+            await update.message.reply_text(
+                "⚠️ Вы не добавили ни одного фото.\n\n"
+                "Операция отменена.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        
+        context.user_data.clear()
+        return ConversationHandler.END
+    
+    # Объединяем старые и новые фото
+    all_photos = existing_photos + new_photos
+    photos_string = ",".join(all_photos)
+    
+    # Обновляем в БД
+    telegram_id = update.effective_user.id
+    user = db.get_user(telegram_id)
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+    
+    db.update_worker_field(user_id, "portfolio_photos", photos_string)
+    
+    keyboard = [[InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
+                [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]]
+    
+    added_count = len(new_photos)
+    total_count = len(all_photos)
+    
+    message_text = (
+        f"✅ <b>Фото успешно добавлены!</b>\n\n"
+        f"📊 Итого:\n"
+        f"• Добавлено новых: {added_count}\n"
+        f"• Всего в портфолио: {total_count}/10\n\n"
+        f"Теперь клиенты увидят ваши работы!"
+    )
+    
+    if update.message:
+        await update.message.reply_text(
+            message_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
 
 
 # ------- РЕДАКТИРОВАНИЕ ПРОФИЛЯ -------
