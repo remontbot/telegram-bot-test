@@ -281,3 +281,53 @@ def add_review(from_user_id, to_user_id, order_id, role_from, role_to, rating, c
             return True
         except sqlite3.IntegrityError:
             return False
+
+
+# --- Обновление полей профиля мастера ---
+
+def update_worker_field(user_id, field_name, new_value):
+    """
+    Универсальная функция для обновления любого поля профиля мастера.
+    Используется для редактирования профиля без потери рейтинга и истории.
+    
+    Args:
+        user_id: ID пользователя
+        field_name: Название поля (name, phone, city, etc.)
+        new_value: Новое значение
+    """
+    allowed_fields = ["name", "phone", "city", "regions", "categories", 
+                      "experience", "description", "portfolio_photos"]
+    
+    if field_name not in allowed_fields:
+        raise ValueError(f"Недопустимое поле: {field_name}")
+    
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        cursor = conn.cursor()
+        query = f"UPDATE workers SET {field_name} = ? WHERE user_id = ?"
+        cursor.execute(query, (new_value, user_id))
+        conn.commit()
+        
+        return cursor.rowcount > 0
+
+
+def update_client_field(user_id, field_name, new_value):
+    """
+    Универсальная функция для обновления любого поля профиля заказчика.
+    
+    Args:
+        user_id: ID пользователя
+        field_name: Название поля (name, phone, city, description)
+        new_value: Новое значение
+    """
+    allowed_fields = ["name", "phone", "city", "description"]
+    
+    if field_name not in allowed_fields:
+        raise ValueError(f"Недопустимое поле: {field_name}")
+    
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        cursor = conn.cursor()
+        query = f"UPDATE clients SET {field_name} = ? WHERE user_id = ?"
+        cursor.execute(query, (new_value, user_id))
+        conn.commit()
+        
+        return cursor.rowcount > 0
