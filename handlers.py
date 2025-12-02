@@ -653,7 +653,7 @@ async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
 
-# ------- ДОБАВЛЕНИЕ ФОТО ПОСЛЕ РЕГИСТРАЦИИ -------
+# ------- ДОБАВЛЕНИЕ ФОТО ПОСЛЕ РЕГИСТРАЦИИ (БЕЗ ConversationHandler) -------
 
 async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало добавления фото работ"""
@@ -675,9 +675,12 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
     max_photos = 10
     available_slots = max_photos - current_count
     
-    # Сохраняем текущие фото в context
+    # Сохраняем в context - РЕЖИМ ДОБАВЛЕНИЯ ФОТО АКТИВЕН
+    context.user_data["adding_photos"] = True
     context.user_data["existing_photos"] = current_photos_list
     context.user_data["new_photos"] = []
+    
+    logger.info(f"Запущен режим добавления фото для user_id={user_id}")
     
     if available_slots <= 0:
         await query.edit_message_text(
@@ -690,7 +693,8 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
                 [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]
             ])
         )
-        return ConversationHandler.END
+        context.user_data.clear()
+        return
     
     status_text = f"📊 Текущее состояние:\n" \
                   f"• Загружено фото: {current_count}/{max_photos}\n" \
@@ -701,36 +705,22 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
         f"{status_text}\n\n"
         f"Отправьте новые фотографии ваших работ (можно до {available_slots} штук).\n"
         f"Можно отправлять по одной или группой.\n\n"
-        f"Когда загрузите все фото, отправьте:\n"
-        f"<b>/done</b> или напишите <b>готово</b>\n\n"
-        f"Для отмены: /cancel",
+        f"Когда загрузите все фото, нажмите кнопку ниже:",
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]
+        ])
     )
-    return ADD_PHOTOS_UPLOAD
 
 
 async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка загружаемых фото"""
     
-    # Проверка callback от кнопки "Завершить"
-    if update.callback_query:
-        query = update.callback_query
-        await query.answer()
-        
-        if query.data == "finish_adding_photos":
-            logger.info("Нажата кнопка завершения загрузки фото")
-            # Создаём фейковый update с message для функции finish
-            return await worker_add_photos_finish(update, context)
-    
-    # Проверяем команду завершения
-    if update.message and update.message.text:
-        text = update.message.text.strip().lower()
-        logger.info(f"Получен текст при загрузке фото: '{text}'")
-        
-        # Расширенная проверка команды завершения
-        if text in ['/done', 'done', '/donephotos', 'donephotos', 'готово', '/готово', 'дан', '/дан']:
-            logger.info("Команда завершения распознана, вызываем worker_add_photos_finish")
-            return await worker_add_photos_finish(update, context)
+    # Проверяем активен ли режим добавления фото
+    if not context.user_data.get("adding_photos"):
+        # Игнорируем фото если режим не активен
+        logger.info("Получено фото но режим добавления не активен - игнорируем")
+        return
     
     # Обработка фото
     if update.message and update.message.photo:
@@ -748,7 +738,7 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode="HTML"
             )
-            return ADD_PHOTOS_UPLOAD
+            return
         
         photo = update.message.photo[-1]  # Берём самое большое разрешение
         file_id = photo.file_id
@@ -770,34 +760,38 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
             f"• Добавлено новых: {new_count}\n"
             f"• Всего будет: {total_count}/{max_photos}\n"
             f"• Можно ещё: {remaining}\n\n"
-            f"Отправьте ещё фото или нажмите кнопку ниже:",
+            f"Отправьте ещё фото или нажмите кнопку:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
-        return ADD_PHOTOS_UPLOAD
+
+
+async def worker_add_photos_finish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка нажатия кнопки завершения"""
+    query = update.callback_query
+    await query.answer()
     
-    # Если пришло что-то другое
-    if update.message:
-        logger.warning(f"Неожиданный ввод при загрузке фото: {update.message.text}")
-        keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]
-        await update.message.reply_text(
-            "⚠️ Пожалуйста, отправьте:\n"
-            "• Фотографии ваших работ, или\n"
-            "• Нажмите кнопку ниже для завершения\n"
-            "• Команду /cancel для отмены",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
+    logger.info("Нажата кнопка завершения добавления фото")
+    
+    # Проверяем активен ли режим
+    if not context.user_data.get("adding_photos"):
+        logger.warning("Режим добавления фото не активен!")
+        await query.edit_message_text(
+            "⚠️ Режим добавления фото не активен.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]
+            ])
         )
+        return
     
-    return ADD_PHOTOS_UPLOAD
+    # Вызываем функцию завершения
+    await worker_add_photos_finish(query, context)
 
 
-async def worker_add_photos_finish(update, context: ContextTypes.DEFAULT_TYPE):
+async def worker_add_photos_finish(query, context: ContextTypes.DEFAULT_TYPE):
     """Завершение добавления фото - сохранение в БД"""
     
     logger.info("=== worker_add_photos_finish вызвана ===")
-    logger.info(f"update.callback_query: {update.callback_query is not None}")
-    logger.info(f"update.message: {update.message is not None}")
     
     new_photos = context.user_data.get("new_photos", [])
     existing_photos = context.user_data.get("existing_photos", [])
@@ -809,39 +803,25 @@ async def worker_add_photos_finish(update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning("Нет новых фото для сохранения")
         keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]]
         
-        message_text = "⚠️ Вы не добавили ни одного фото.\n\nОперация отменена."
-        
-        if update.callback_query:
-            await update.callback_query.edit_message_text(
-                message_text,
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        elif update.message:
-            await update.message.reply_text(
-                message_text,
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+        await query.edit_message_text(
+            "⚠️ Вы не добавили ни одного фото.\n\nОперация отменена.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         
         context.user_data.clear()
-        return ConversationHandler.END
+        logger.info("Context очищен")
+        return
     
     try:
         # Объединяем старые и новые фото
         all_photos = existing_photos + new_photos
         photos_string = ",".join(all_photos)
         
-        logger.info(f"Объединённые фото (всего {len(all_photos)}): {photos_string[:100]}...")
+        logger.info(f"Объединённые фото (всего {len(all_photos)})")
         
         # Получаем telegram_id
-        if update.callback_query:
-            telegram_id = update.callback_query.from_user.id
-            logger.info(f"telegram_id из callback_query: {telegram_id}")
-        elif update.message:
-            telegram_id = update.message.from_user.id
-            logger.info(f"telegram_id из message: {telegram_id}")
-        else:
-            logger.error("Не удалось получить telegram_id!")
-            raise ValueError("No telegram_id available")
+        telegram_id = query.from_user.id
+        logger.info(f"telegram_id: {telegram_id}")
         
         # Получаем user из БД
         user = db.get_user(telegram_id)
@@ -873,23 +853,16 @@ async def worker_add_photos_finish(update, context: ContextTypes.DEFAULT_TYPE):
         
         logger.info("Отправка успешного сообщения пользователю")
         
-        if update.callback_query:
-            await update.callback_query.answer()  # Отвечаем на callback
-            await update.callback_query.edit_message_text(
-                message_text,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode="HTML"
-            )
-        elif update.message:
-            await update.message.reply_text(
-                message_text,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode="HTML"
-            )
+        await query.edit_message_text(
+            message_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
         
-        logger.info("Фото успешно сохранены и сообщение отправлено")
+        logger.info("Фото успешно сохранены, ОЧИЩАЮ context.user_data")
+        # ВАЖНО: Очищаем context чтобы выйти из режима добавления фото
         context.user_data.clear()
-        return ConversationHandler.END
+        logger.info("Context очищен - режим добавления фото завершён")
         
     except Exception as e:
         logger.error(f"Ошибка в worker_add_photos_finish: {e}", exc_info=True)
@@ -902,16 +875,13 @@ async def worker_add_photos_finish(update, context: ContextTypes.DEFAULT_TYPE):
         
         keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]]
         
-        if update.callback_query:
-            await update.callback_query.edit_message_text(
-                error_text,
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        elif update.message:
-            await update.message.reply_text(
-                error_text,
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+        await query.edit_message_text(
+            error_text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+        context.user_data.clear()
+        logger.info("Context очищен после ошибки")
         
         context.user_data.clear()
         return ConversationHandler.END
