@@ -175,6 +175,52 @@ def main():
 
     application.add_handler(reg_conv_handler)
 
+    # --- ConversationHandler для редактирования профиля ---
+    
+    edit_profile_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(handlers.show_edit_profile_menu, pattern="^edit_profile_menu$")
+        ],
+        states={
+            handlers.EDIT_PROFILE_MENU: [
+                CallbackQueryHandler(handlers.edit_name_start, pattern="^edit_name$"),
+                CallbackQueryHandler(handlers.edit_phone_start, pattern="^edit_phone$"),
+                CallbackQueryHandler(handlers.edit_city_start, pattern="^edit_city$"),
+                CallbackQueryHandler(handlers.edit_categories_start, pattern="^edit_categories$"),
+                CallbackQueryHandler(handlers.edit_experience_start, pattern="^edit_experience$"),
+                CallbackQueryHandler(handlers.edit_description_start, pattern="^edit_description$"),
+            ],
+            handlers.EDIT_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.edit_name_save),
+            ],
+            handlers.EDIT_PHONE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.edit_phone_save),
+            ],
+            handlers.EDIT_CITY: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.edit_city_save),
+            ],
+            handlers.EDIT_CATEGORIES_SELECT: [
+                CallbackQueryHandler(handlers.edit_categories_select, pattern="^editcat_"),
+            ],
+            handlers.EDIT_CATEGORIES_OTHER: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.edit_categories_other),
+            ],
+            handlers.EDIT_EXPERIENCE: [
+                CallbackQueryHandler(handlers.edit_experience_save, pattern="^editexp_"),
+            ],
+            handlers.EDIT_DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.edit_description_save),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", handlers.cancel),
+            CallbackQueryHandler(handlers.show_worker_profile, pattern="^worker_profile$"),
+        ],
+        allow_reentry=True,
+    )
+    
+    application.add_handler(edit_profile_handler)
+
     # --- Меню мастера и заказчика ---
 
     application.add_handler(
