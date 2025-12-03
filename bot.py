@@ -66,6 +66,7 @@ def main():
     db.init_db()
     db.migrate_add_portfolio_photos()  # Добавляем колонку если её нет
     db.migrate_add_order_photos()  # Добавляем колонку photos в orders
+    db.migrate_add_currency_to_bids()  # Добавляем колонку currency в bids
 
     token = get_bot_token()
 
@@ -275,6 +276,32 @@ def main():
     
     application.add_handler(edit_profile_handler)
 
+    # --- ConversationHandler для откликов мастеров ---
+    
+    bid_conv_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(handlers.worker_bid_on_order, pattern="^bid_on_order_")
+        ],
+        states={
+            handlers.BID_ENTER_PRICE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.worker_bid_enter_price),
+            ],
+            handlers.BID_SELECT_CURRENCY: [
+                CallbackQueryHandler(handlers.worker_bid_select_currency, pattern="^bid_currency_"),
+            ],
+            handlers.BID_ENTER_COMMENT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.worker_bid_enter_comment),
+                CallbackQueryHandler(handlers.worker_bid_skip_comment, pattern="^bid_skip_comment$"),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(handlers.worker_bid_cancel, pattern="^cancel_bid$"),
+        ],
+        allow_reentry=True,
+    )
+    
+    application.add_handler(bid_conv_handler)
+
     # --- Обработчик "Мои заказы" (НЕ в ConversationHandler) ---
     application.add_handler(
         CallbackQueryHandler(
@@ -321,6 +348,30 @@ def main():
         CallbackQueryHandler(
             handlers.show_worker_profile,
             pattern="^worker_profile$",
+        )
+    )
+
+    # "Доступные заказы" для мастера
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_view_orders,
+            pattern="^worker_view_orders$",
+        )
+    )
+    
+    # Детальный просмотр заказа мастером
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_view_order_details,
+            pattern="^view_order_"
+        )
+    )
+    
+    # Навигация по фото заказа
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_order_photo_nav,
+            pattern="^order_photo_(prev|next)_"
         )
     )
 
