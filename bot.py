@@ -71,11 +71,14 @@ def main():
 
     application = ApplicationBuilder().token(token).build()
 
+    # --- Команда /start (ОТДЕЛЬНО от ConversationHandler) ---
+    application.add_handler(CommandHandler("start", handlers.start_command))
+
     # --- ConversationHandler для регистрации ---
 
     reg_conv_handler = ConversationHandler(
         entry_points=[
-            CommandHandler("start", handlers.start_command),
+            CallbackQueryHandler(handlers.select_role, pattern="^select_role_"),
             CallbackQueryHandler(handlers.add_second_role_worker, pattern="^role_worker$"),
             CallbackQueryHandler(handlers.add_second_role_client, pattern="^role_client$"),
         ],
@@ -189,11 +192,6 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", handlers.cancel),
-            MessageHandler(
-                filters.TEXT & ~filters.COMMAND,
-                handlers.handle_invalid_input,
-            ),
-            CallbackQueryHandler(handlers.handle_invalid_input),
         ],
         allow_reentry=True,
     )
@@ -277,6 +275,14 @@ def main():
     
     application.add_handler(edit_profile_handler)
 
+    # --- Обработчик "Мои заказы" (НЕ в ConversationHandler) ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_my_orders,
+            pattern="^client_my_orders$",
+        )
+    )
+
     # --- Обработчики для добавления фото (БЕЗ ConversationHandler) ---
     
     # Начало добавления фото
@@ -315,21 +321,6 @@ def main():
         CallbackQueryHandler(
             handlers.show_worker_profile,
             pattern="^worker_profile$",
-        )
-    )
-
-    # ✅ НОВОЕ: Обработчик для кнопок создания заказа и просмотра заказов
-    application.add_handler(
-        CallbackQueryHandler(
-            handlers.client_create_order,
-            pattern="^client_create_order$",
-        )
-    )
-
-    application.add_handler(
-        CallbackQueryHandler(
-            handlers.client_my_orders,
-            pattern="^client_my_orders$",
         )
     )
 
