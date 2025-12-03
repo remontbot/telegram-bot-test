@@ -47,7 +47,12 @@ logger = logging.getLogger(__name__)
     EDIT_DESCRIPTION,
     ADD_PHOTOS_MENU,
     ADD_PHOTOS_UPLOAD,
-) = range(27)
+    # Состояния для создания заказа
+    CREATE_ORDER_CITY,
+    CREATE_ORDER_CATEGORIES,
+    CREATE_ORDER_DESCRIPTION,
+    CREATE_ORDER_PHOTOS,
+) = range(31)
 
 
 def is_valid_name(name: str) -> bool:
@@ -1548,25 +1553,6 @@ async def edit_description_save(update: Update, context: ContextTypes.DEFAULT_TY
 
 # ------- ЗАГЛУШКИ ДЛЯ ЗАКАЗЧИКА -------
 
-async def client_create_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Создание заказа (пока заглушка)"""
-    query = update.callback_query
-    await query.answer()
-    
-    await query.edit_message_text(
-        "📝 <b>Создание заказа</b>\n\n"
-        "Эта функция в разработке.\n\n"
-        "Скоро здесь вы сможете:\n"
-        "• Описать задачу\n"
-        "• Указать бюджет и сроки\n"
-        "• Получить отклики от мастеров",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")]
-        ])
-    )
-
-
 async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Просмотр заказов клиента"""
     query = update.callback_query
@@ -2055,15 +2041,6 @@ async def add_second_role_client(update: Update, context: ContextTypes.DEFAULT_T
 
 
 # ------- СОЗДАНИЕ ЗАКАЗА -------
-
-# Константы для создания заказа
-(
-    CREATE_ORDER_CITY,
-    CREATE_ORDER_CATEGORIES,
-    CREATE_ORDER_DESCRIPTION,
-    CREATE_ORDER_PHOTOS,
-) = range(27, 31)
-
 
 async def client_create_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало создания заказа - выбор города"""
