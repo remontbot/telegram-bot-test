@@ -79,6 +79,7 @@ def init_db():
                 order_id INTEGER NOT NULL,
                 worker_id INTEGER NOT NULL,
                 proposed_price REAL,
+                currency TEXT DEFAULT 'BYN',
                 proposed_deadline TEXT,
                 comment TEXT,
                 created_at TEXT NOT NULL,
@@ -244,6 +245,28 @@ def get_client_profile(user_id):
             FROM clients c
             JOIN users u ON c.user_id = u.id
             WHERE c.user_id = ?
+        """, (user_id,))
+        return cursor.fetchone()
+
+
+def get_client_by_id(client_id):
+    """Возвращает профиль заказчика по client_id"""
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM clients WHERE id = ?
+        """, (client_id,))
+        return cursor.fetchone()
+
+
+def get_user_by_id(user_id):
+    """Возвращает пользователя по user_id"""
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM users WHERE id = ?
         """, (user_id,))
         return cursor.fetchone()
 
@@ -432,6 +455,23 @@ def migrate_add_order_photos():
             print("✅ Колонка 'photos' уже существует в orders")
 
 
+def migrate_add_currency_to_bids():
+    """Добавляет колонку currency в таблицу bids"""
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        cursor = conn.cursor()
+        
+        # Проверяем есть ли колонка currency
+        cursor.execute("PRAGMA table_info(bids)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'currency' not in columns:
+            print("➕ Добавляем колонку 'currency' в таблицу bids...")
+            cursor.execute("ALTER TABLE bids ADD COLUMN currency TEXT DEFAULT 'BYN'")
+            conn.commit()
+            print("✅ Колонка 'currency' успешно добавлена в bids!")
+        else:
+            print("✅ Колонка 'currency' уже существует в bids")
+
 def create_order(client_id, city, categories, description, photos, budget_type="none", budget_value=0):
     """Создаёт новый заказ"""
     with sqlite3.connect(DATABASE_NAME) as conn:
@@ -493,3 +533,120 @@ def get_client_orders(client_id):
         """, (client_id,))
         
         return cursor.fetchall()
+
+
+def get_order_by_id(order_id):
+    """Получает заказ по ID"""
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                o.*,
+                c.name as client_name,
+                c.phone as client_phone,
+                c.rating as client_rating,
+                c.rating_count as client_rating_count
+            FROM orders o
+            JOIN clients c ON o.client_id = c.id
+            WHERE o.id = ?
+        """, (order_id,))
+        
+        return cursor.fetchone()
+
+
+def create_bid(order_id, worker_id, proposed_price, currency, comment=""):
+    """Создаёт отклик мастера на заказ"""
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        cursor = conn.cursor()
+        
+        from datetime import datetime
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        cursor.execute("""
+            INSERT INTO bids (
+                order_id, worker_id, proposed_price, currency, 
+                comment, created_at, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 'active')
+        """, (order_id, worker_id, proposed_price, currency, comment, now))
+        
+        conn.commit()
+        return cursor.lastrowid
+
+
+def get_bids_for_order(order_id):
+    """Получает все отклики для заказа"""
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                b.*,
+                w.name as worker_name,
+                w.rating as worker_rating,
+                w.rating_count as worker_rating_count,
+                w.experience as worker_experience,
+                w.phone as worker_phone
+            FROM bids b
+            JOIN workers w ON b.worker_id = w.id
+            WHERE b.order_id = ?
+            AND b.status = 'active'
+            ORDER BY b.created_at ASC
+        """, (order_id,))
+        
+        return cursor.fetchall()
+
+
+def check_worker_bid_exists(order_id, worker_id):
+    """Проверяет, откликался ли уже мастер на этот заказ"""
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT COUNT(*) FROM bids
+            WHERE order_id = ? AND worker_id = ?
+        """, (order_id, worker_id))
+        
+        return cursor.fetchone()[0] > 0
+
+
+def select_bid(bid_id):
+    """Отмечает отклик как выбранный"""
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        cursor = conn.cursor()
+        
+        # Получаем order_id из отклика
+        cursor.execute("SELECT order_id FROM bids WHERE id = ?", (bid_id,))
+        result = cursor.fetchone()
+        if not result:
+            return False
+        
+        order_id = result[0]
+        
+        # Обновляем статус выбранного отклика
+        cursor.execute("""
+            UPDATE bids 
+            SET status = 'selected'
+            WHERE id = ?
+        """, (bid_id,))
+        
+        # Остальные отклики отмечаем как rejected
+        cursor.execute("""
+            UPDATE bids 
+            SET status = 'rejected'
+            WHERE order_id = ? AND id != ?
+        """, (order_id, bid_id))
+        
+        # Обновляем статус заказа
+        cursor.execute("""
+            UPDATE orders 
+            SET status = 'master_selected'
+            WHERE id = ?
+        """, (order_id,))
+        
+        conn.commit()
+        return True
+
