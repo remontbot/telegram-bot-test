@@ -22,8 +22,8 @@ def get_connection():
     if USE_POSTGRES:
         return psycopg2.connect(DATABASE_URL)
     else:
-        conn = get_connection()
-        
+        conn = sqlite3.connect(DATABASE_NAME)
+        conn.row_factory = sqlite3.Row
         return conn
 
 
@@ -32,7 +32,7 @@ def get_cursor(conn):
     if USE_POSTGRES:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
     else:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
     return DBCursor(cursor)
 
 
@@ -221,7 +221,7 @@ def init_db():
 def migrate_add_portfolio_photos():
     """Миграция: добавляет колонку portfolio_photos если её нет"""
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         
         # Проверяем существует ли колонка
         cursor.execute("PRAGMA table_info(workers)")
@@ -244,14 +244,14 @@ def migrate_add_portfolio_photos():
 def get_user(telegram_id):
     with get_connection() as conn:
         
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
         return cursor.fetchone()
 
 
 def create_user(telegram_id, role):
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         created_at = datetime.now().isoformat()
         cursor.execute(
             "INSERT INTO users (telegram_id, role, created_at) VALUES (?, ?, ?)",
@@ -267,7 +267,7 @@ def delete_user_profile(telegram_id):
     Возвращает True, если удаление прошло успешно, False если пользователь не найден.
     """
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         
         # Сначала получаем user_id
         cursor.execute("SELECT id, role FROM users WHERE telegram_id = ?", (telegram_id,))
@@ -295,7 +295,7 @@ def delete_user_profile(telegram_id):
 
 def create_worker_profile(user_id, name, phone, city, regions, categories, experience, description, portfolio_photos=""):
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         cursor.execute("""
             INSERT INTO workers (user_id, name, phone, city, regions, categories, experience, description, portfolio_photos)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -305,7 +305,7 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
 
 def create_client_profile(user_id, name, phone, city, description):
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         cursor.execute("""
             INSERT INTO clients (user_id, name, phone, city, description)
             VALUES (?, ?, ?, ?, ?)
@@ -317,7 +317,7 @@ def get_worker_profile(user_id):
     """Возвращает профиль мастера по user_id"""
     with get_connection() as conn:
         
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         cursor.execute("""
             SELECT w.*, u.telegram_id
             FROM workers w
@@ -331,7 +331,7 @@ def get_client_profile(user_id):
     """Возвращает профиль заказчика по user_id"""
     with get_connection() as conn:
         
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         cursor.execute("""
             SELECT c.*, u.telegram_id
             FROM clients c
@@ -345,7 +345,7 @@ def get_client_by_id(client_id):
     """Возвращает профиль заказчика по client_id"""
     with get_connection() as conn:
         
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         cursor.execute("""
             SELECT * FROM clients WHERE id = ?
         """, (client_id,))
@@ -356,7 +356,7 @@ def get_user_by_id(user_id):
     """Возвращает пользователя по user_id"""
     with get_connection() as conn:
         
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         cursor.execute("""
             SELECT * FROM users WHERE id = ?
         """, (user_id,))
@@ -367,7 +367,7 @@ def get_user_by_id(user_id):
 
 def update_user_rating(user_id, new_rating, role_to):
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
 
         if role_to == "worker":
             cursor.execute("SELECT rating, rating_count FROM workers WHERE user_id = ?", (user_id,))
@@ -404,7 +404,7 @@ def update_user_rating(user_id, new_rating, role_to):
 
 def add_review(from_user_id, to_user_id, order_id, role_from, role_to, rating, comment):
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         created_at = datetime.now().isoformat()
         try:
             cursor.execute("""
@@ -438,7 +438,7 @@ def update_worker_field(user_id, field_name, new_value):
         raise ValueError(f"Недопустимое поле: {field_name}")
     
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         query = f"UPDATE workers SET {field_name} = ? WHERE user_id = ?"
         cursor.execute(query, (new_value, user_id))
         conn.commit()
@@ -461,7 +461,7 @@ def update_client_field(user_id, field_name, new_value):
         raise ValueError(f"Недопустимое поле: {field_name}")
     
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         query = f"UPDATE clients SET {field_name} = ? WHERE user_id = ?"
         cursor.execute(query, (new_value, user_id))
         conn.commit()
@@ -484,7 +484,7 @@ def get_all_workers(city=None, category=None):
     """
     with get_connection() as conn:
         
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         
         query = """
             SELECT 
@@ -514,7 +514,7 @@ def get_worker_by_id(worker_id):
     """Получает профиль мастера по ID"""
     with get_connection() as conn:
         
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         
         cursor.execute("""
             SELECT 
@@ -532,7 +532,7 @@ def get_worker_by_id(worker_id):
 def migrate_add_order_photos():
     """Добавляет колонку photos в таблицу orders"""
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         
         # Проверяем есть ли колонка photos
         cursor.execute("PRAGMA table_info(orders)")
@@ -550,7 +550,7 @@ def migrate_add_order_photos():
 def migrate_add_currency_to_bids():
     """Добавляет колонку currency в таблицу bids"""
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         
         # Проверяем есть ли колонка currency
         cursor.execute("PRAGMA table_info(bids)")
@@ -567,7 +567,7 @@ def migrate_add_currency_to_bids():
 def create_order(client_id, city, categories, description, photos, budget_type="none", budget_value=0):
     """Создаёт новый заказ"""
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         
         from datetime import datetime
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -594,7 +594,7 @@ def get_orders_by_category(category):
     """Получает открытые заказы по категории"""
     with get_connection() as conn:
         
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         
         cursor.execute("""
             SELECT 
@@ -616,7 +616,7 @@ def get_client_orders(client_id):
     """Получает все заказы клиента"""
     with get_connection() as conn:
         
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         
         cursor.execute("""
             SELECT * FROM orders
@@ -631,7 +631,7 @@ def get_order_by_id(order_id):
     """Получает заказ по ID"""
     with get_connection() as conn:
         
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         
         cursor.execute("""
             SELECT 
@@ -651,7 +651,7 @@ def get_order_by_id(order_id):
 def create_bid(order_id, worker_id, proposed_price, currency, comment=""):
     """Создаёт отклик мастера на заказ"""
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         
         from datetime import datetime
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -672,7 +672,7 @@ def get_bids_for_order(order_id):
     """Получает все отклики для заказа"""
     with get_connection() as conn:
         
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         
         cursor.execute("""
             SELECT 
@@ -695,7 +695,7 @@ def get_bids_for_order(order_id):
 def check_worker_bid_exists(order_id, worker_id):
     """Проверяет, откликался ли уже мастер на этот заказ"""
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         
         cursor.execute("""
             SELECT COUNT(*) FROM bids
@@ -708,7 +708,7 @@ def check_worker_bid_exists(order_id, worker_id):
 def select_bid(bid_id):
     """Отмечает отклик как выбранный"""
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         
         # Получаем order_id из отклика
         cursor.execute("SELECT order_id FROM bids WHERE id = ?", (bid_id,))
@@ -759,7 +759,7 @@ def add_test_orders(telegram_id):
         return (False, "❌ Эта команда доступна только для администратора.", 0)
 
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
 
         # Получаем или создаем пользователя
         cursor.execute("SELECT id, role FROM users WHERE telegram_id = ?", (telegram_id,))
