@@ -32,7 +32,7 @@ def get_cursor(conn):
     if USE_POSTGRES:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
     else:
-        cursor = get_cursor(conn)
+        cursor = conn.cursor()
     return DBCursor(cursor)
 
 
