@@ -1,19 +1,111 @@
-import sqlite3
+import os
 from datetime import datetime
 
-DATABASE_NAME = "repair_platform.db"
+# Определяем тип базы данных
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if DATABASE_URL:
+    # Используем PostgreSQL
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    import psycopg2.extras
+    USE_POSTGRES = True
+else:
+    # Используем SQLite для локальной разработки
+    import sqlite3
+    DATABASE_NAME = "repair_platform.db"
+    USE_POSTGRES = False
+
+
+def get_connection():
+    """Возвращает подключение к базе данных (PostgreSQL или SQLite)"""
+    if USE_POSTGRES:
+        return psycopg2.connect(DATABASE_URL)
+    else:
+        conn = get_connection()
+        
+        return conn
+
+
+def get_cursor(conn):
+    """Возвращает курсор с правильными настройками"""
+    if USE_POSTGRES:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+    else:
+        cursor = conn.cursor()
+    return DBCursor(cursor)
+
+
+def convert_sql(sql):
+    """Преобразует SQL из SQLite формата в PostgreSQL если нужно"""
+    if USE_POSTGRES:
+        # Заменяем placeholders
+        sql = sql.replace('?', '%s')
+
+        # Преобразуем типы данных
+        sql = sql.replace('INTEGER PRIMARY KEY AUTOINCREMENT', 'SERIAL PRIMARY KEY')
+        sql = sql.replace('AUTOINCREMENT', '')  # Удаляем оставшиеся AUTOINCREMENT
+        sql = sql.replace('TEXT', 'VARCHAR(1000)')
+        sql = sql.replace('REAL', 'NUMERIC')
+        sql = sql.replace('INTEGER', 'INTEGER')  # Оставляем как есть
+
+        # Исправляем telegram_id - он должен быть BIGINT
+        if 'telegram_id' in sql and 'INTEGER' in sql:
+            sql = sql.replace('telegram_id INTEGER', 'telegram_id BIGINT')
+
+    return sql
+
+
+class DBCursor:
+    """Обертка для cursor, автоматически преобразует SQL"""
+    def __init__(self, cursor):
+        self.cursor = cursor
+        self._lastrowid = None
+
+    def execute(self, sql, params=None):
+        sql = convert_sql(sql)
+
+        # Для PostgreSQL INSERT нужно добавить RETURNING id
+        if USE_POSTGRES and sql.strip().upper().startswith('INSERT'):
+            if 'RETURNING' not in sql.upper():
+                sql = sql.rstrip().rstrip(';') + ' RETURNING id'
+
+        if params:
+            result = self.cursor.execute(sql, params)
+        else:
+            result = self.cursor.execute(sql)
+
+        # Получаем lastrowid для PostgreSQL
+        if USE_POSTGRES and sql.strip().upper().startswith('INSERT'):
+            row = self.cursor.fetchone()
+            if row:
+                self._lastrowid = row['id'] if isinstance(row, dict) else row[0]
+
+        return result
+
+    def fetchone(self):
+        return self.cursor.fetchone()
+
+    def fetchall(self):
+        return self.cursor.fetchall()
+
+    @property
+    def lastrowid(self):
+        if USE_POSTGRES:
+            return self._lastrowid
+        return self.cursor.lastrowid
 
 
 def init_db():
-    with sqlite3.connect(DATABASE_NAME) as conn:
-        cursor = conn.cursor()
+    with get_connection() as conn:
+        cursor = get_cursor(conn)
 
-        # Пользователи
+        # Пользователи (convert_sql автоматически преобразует в PostgreSQL формат)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 telegram_id INTEGER UNIQUE NOT NULL,
-                role TEXT NOT NULL, -- 'worker' или 'client'
+                role TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
         """)
@@ -128,7 +220,7 @@ def init_db():
 
 def migrate_add_portfolio_photos():
     """Миграция: добавляет колонку portfolio_photos если её нет"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         
         # Проверяем существует ли колонка
@@ -150,15 +242,15 @@ def migrate_add_portfolio_photos():
 # --- Пользователи ---
 
 def get_user(telegram_id):
-    with sqlite3.connect(DATABASE_NAME) as conn:
-        conn.row_factory = sqlite3.Row
+    with get_connection() as conn:
+        
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
         return cursor.fetchone()
 
 
 def create_user(telegram_id, role):
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         created_at = datetime.now().isoformat()
         cursor.execute(
@@ -174,7 +266,7 @@ def delete_user_profile(telegram_id):
     Полностью удаляет профиль пользователя из базы данных.
     Возвращает True, если удаление прошло успешно, False если пользователь не найден.
     """
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         
         # Сначала получаем user_id
@@ -202,7 +294,7 @@ def delete_user_profile(telegram_id):
 # --- Профили мастеров и заказчиков ---
 
 def create_worker_profile(user_id, name, phone, city, regions, categories, experience, description, portfolio_photos=""):
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO workers (user_id, name, phone, city, regions, categories, experience, description, portfolio_photos)
@@ -212,7 +304,7 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
 
 
 def create_client_profile(user_id, name, phone, city, description):
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO clients (user_id, name, phone, city, description)
@@ -223,8 +315,8 @@ def create_client_profile(user_id, name, phone, city, description):
 
 def get_worker_profile(user_id):
     """Возвращает профиль мастера по user_id"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
-        conn.row_factory = sqlite3.Row
+    with get_connection() as conn:
+        
         cursor = conn.cursor()
         cursor.execute("""
             SELECT w.*, u.telegram_id
@@ -237,8 +329,8 @@ def get_worker_profile(user_id):
 
 def get_client_profile(user_id):
     """Возвращает профиль заказчика по user_id"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
-        conn.row_factory = sqlite3.Row
+    with get_connection() as conn:
+        
         cursor = conn.cursor()
         cursor.execute("""
             SELECT c.*, u.telegram_id
@@ -251,8 +343,8 @@ def get_client_profile(user_id):
 
 def get_client_by_id(client_id):
     """Возвращает профиль заказчика по client_id"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
-        conn.row_factory = sqlite3.Row
+    with get_connection() as conn:
+        
         cursor = conn.cursor()
         cursor.execute("""
             SELECT * FROM clients WHERE id = ?
@@ -262,8 +354,8 @@ def get_client_by_id(client_id):
 
 def get_user_by_id(user_id):
     """Возвращает пользователя по user_id"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
-        conn.row_factory = sqlite3.Row
+    with get_connection() as conn:
+        
         cursor = conn.cursor()
         cursor.execute("""
             SELECT * FROM users WHERE id = ?
@@ -274,7 +366,7 @@ def get_user_by_id(user_id):
 # --- Рейтинг и отзывы ---
 
 def update_user_rating(user_id, new_rating, role_to):
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
 
         if role_to == "worker":
@@ -311,7 +403,7 @@ def update_user_rating(user_id, new_rating, role_to):
 
 
 def add_review(from_user_id, to_user_id, order_id, role_from, role_to, rating, comment):
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         created_at = datetime.now().isoformat()
         try:
@@ -345,7 +437,7 @@ def update_worker_field(user_id, field_name, new_value):
     if field_name not in allowed_fields:
         raise ValueError(f"Недопустимое поле: {field_name}")
     
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         query = f"UPDATE workers SET {field_name} = ? WHERE user_id = ?"
         cursor.execute(query, (new_value, user_id))
@@ -368,7 +460,7 @@ def update_client_field(user_id, field_name, new_value):
     if field_name not in allowed_fields:
         raise ValueError(f"Недопустимое поле: {field_name}")
     
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         query = f"UPDATE clients SET {field_name} = ? WHERE user_id = ?"
         cursor.execute(query, (new_value, user_id))
@@ -390,8 +482,8 @@ def get_all_workers(city=None, category=None):
     Returns:
         List of worker profiles with user info
     """
-    with sqlite3.connect(DATABASE_NAME) as conn:
-        conn.row_factory = sqlite3.Row
+    with get_connection() as conn:
+        
         cursor = conn.cursor()
         
         query = """
@@ -420,8 +512,8 @@ def get_all_workers(city=None, category=None):
 
 def get_worker_by_id(worker_id):
     """Получает профиль мастера по ID"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
-        conn.row_factory = sqlite3.Row
+    with get_connection() as conn:
+        
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -439,7 +531,7 @@ def get_worker_by_id(worker_id):
 
 def migrate_add_order_photos():
     """Добавляет колонку photos в таблицу orders"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         
         # Проверяем есть ли колонка photos
@@ -457,7 +549,7 @@ def migrate_add_order_photos():
 
 def migrate_add_currency_to_bids():
     """Добавляет колонку currency в таблицу bids"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         
         # Проверяем есть ли колонка currency
@@ -474,7 +566,7 @@ def migrate_add_currency_to_bids():
 
 def create_order(client_id, city, categories, description, photos, budget_type="none", budget_value=0):
     """Создаёт новый заказ"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         
         from datetime import datetime
@@ -500,8 +592,8 @@ def create_order(client_id, city, categories, description, photos, budget_type="
 
 def get_orders_by_category(category):
     """Получает открытые заказы по категории"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
-        conn.row_factory = sqlite3.Row
+    with get_connection() as conn:
+        
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -522,8 +614,8 @@ def get_orders_by_category(category):
 
 def get_client_orders(client_id):
     """Получает все заказы клиента"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
-        conn.row_factory = sqlite3.Row
+    with get_connection() as conn:
+        
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -537,8 +629,8 @@ def get_client_orders(client_id):
 
 def get_order_by_id(order_id):
     """Получает заказ по ID"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
-        conn.row_factory = sqlite3.Row
+    with get_connection() as conn:
+        
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -558,7 +650,7 @@ def get_order_by_id(order_id):
 
 def create_bid(order_id, worker_id, proposed_price, currency, comment=""):
     """Создаёт отклик мастера на заказ"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         
         from datetime import datetime
@@ -578,8 +670,8 @@ def create_bid(order_id, worker_id, proposed_price, currency, comment=""):
 
 def get_bids_for_order(order_id):
     """Получает все отклики для заказа"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
-        conn.row_factory = sqlite3.Row
+    with get_connection() as conn:
+        
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -602,7 +694,7 @@ def get_bids_for_order(order_id):
 
 def check_worker_bid_exists(order_id, worker_id):
     """Проверяет, откликался ли уже мастер на этот заказ"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -615,7 +707,7 @@ def check_worker_bid_exists(order_id, worker_id):
 
 def select_bid(bid_id):
     """Отмечает отклик как выбранный"""
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         
         # Получаем order_id из отклика
@@ -666,7 +758,7 @@ def add_test_orders(telegram_id):
     if telegram_id != 641830790:
         return (False, "❌ Эта команда доступна только для администратора.", 0)
 
-    with sqlite3.connect(DATABASE_NAME) as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
 
         # Получаем или создаем пользователя
