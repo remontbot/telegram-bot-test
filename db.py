@@ -158,6 +158,7 @@ def init_db():
                 budget_type TEXT, -- 'fixed' или 'flexible'
                 budget_value REAL,
                 deadline TEXT,
+                photos TEXT DEFAULT '',
                 status TEXT NOT NULL, -- 'open', 'pending_choice', 'master_selected', 'contact_shared', 'done', 'canceled'
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (client_id) REFERENCES clients(id)
@@ -220,17 +221,22 @@ def init_db():
 
 def migrate_add_portfolio_photos():
     """Миграция: добавляет колонку portfolio_photos если её нет"""
+    # Для PostgreSQL миграции не нужны - таблицы создаются через init_db()
+    if USE_POSTGRES:
+        print("✅ Используется PostgreSQL, миграция не требуется")
+        return
+
     with get_connection() as conn:
         cursor = get_cursor(conn)
-        
-        # Проверяем существует ли колонка
+
+        # Проверяем существует ли колонка (только для SQLite)
         cursor.execute("PRAGMA table_info(workers)")
         columns = [column[1] for column in cursor.fetchall()]
-        
+
         if 'portfolio_photos' not in columns:
             print("⚠️  Колонка 'portfolio_photos' отсутствует, добавляю...")
             cursor.execute("""
-                ALTER TABLE workers 
+                ALTER TABLE workers
                 ADD COLUMN portfolio_photos TEXT DEFAULT ''
             """)
             conn.commit()
@@ -531,13 +537,18 @@ def get_worker_by_id(worker_id):
 
 def migrate_add_order_photos():
     """Добавляет колонку photos в таблицу orders"""
+    # Для PostgreSQL миграции не нужны - таблицы создаются через init_db()
+    if USE_POSTGRES:
+        print("✅ Используется PostgreSQL, миграция не требуется")
+        return
+
     with get_connection() as conn:
         cursor = get_cursor(conn)
-        
-        # Проверяем есть ли колонка photos
+
+        # Проверяем есть ли колонка photos (только для SQLite)
         cursor.execute("PRAGMA table_info(orders)")
         columns = [column[1] for column in cursor.fetchall()]
-        
+
         if 'photos' not in columns:
             print("➕ Добавляем колонку 'photos' в таблицу orders...")
             cursor.execute("ALTER TABLE orders ADD COLUMN photos TEXT DEFAULT ''")
@@ -549,13 +560,18 @@ def migrate_add_order_photos():
 
 def migrate_add_currency_to_bids():
     """Добавляет колонку currency в таблицу bids"""
+    # Для PostgreSQL миграции не нужны - таблицы создаются через init_db()
+    if USE_POSTGRES:
+        print("✅ Используется PostgreSQL, миграция не требуется")
+        return
+
     with get_connection() as conn:
         cursor = get_cursor(conn)
-        
-        # Проверяем есть ли колонка currency
+
+        # Проверяем есть ли колонка currency (только для SQLite)
         cursor.execute("PRAGMA table_info(bids)")
         columns = [column[1] for column in cursor.fetchall()]
-        
+
         if 'currency' not in columns:
             print("➕ Добавляем колонку 'currency' в таблицу bids...")
             cursor.execute("ALTER TABLE bids ADD COLUMN currency TEXT DEFAULT 'BYN'")
@@ -809,23 +825,23 @@ def add_test_orders(telegram_id):
 
         test_orders = [
             ("Электрика", "Минск", "Замена розеток в квартире", "none", 0),
-            ("Сантехника", "Гомель", "Установка смесителя на кухне", "fixed", 50),
-            ("Отделка", "Могилёв", "Покраска стен в двух комнатах", "flexible", 200),
-            ("Сборка мебели", "Витебск", "Сборка шкафа-купе 2м", "fixed", 80),
-            ("Окна/двери", "Гродно", "Регулировка пластиковых окон", "none", 0),
-            ("Бытовая техника", "Брест", "Ремонт стиральной машины", "flexible", 100),
+            ("Сантехника", "Минск", "Установка смесителя на кухне", "fixed", 50),
+            ("Отделка", "Минск", "Покраска стен в двух комнатах", "flexible", 200),
+            ("Сборка мебели", "Минск", "Сборка шкафа-купе 2м", "fixed", 80),
+            ("Окна/двери", "Минск", "Регулировка пластиковых окон", "none", 0),
+            ("Бытовая техника", "Минск", "Ремонт стиральной машины", "flexible", 100),
             ("Напольные покрытия", "Минск", "Укладка ламината 20м²", "fixed", 300),
-            ("Мелкий ремонт", "Гомель", "Повесить полки и картины", "none", 0),
-            ("Дизайн", "Могилёв", "Консультация по дизайну интерьера", "flexible", 150),
-            ("Электрика", "Витебск", "Установка люстры в зале", "fixed", 40),
-            ("Сантехника", "Гродно", "Замена унитаза", "flexible", 120),
-            ("Отделка", "Брест", "Поклейка обоев в спальне", "fixed", 180),
+            ("Мелкий ремонт", "Минск", "Повесить полки и картины", "none", 0),
+            ("Дизайн", "Минск", "Консультация по дизайну интерьера", "flexible", 150),
+            ("Электрика", "Минск", "Установка люстры в зале", "fixed", 40),
+            ("Сантехника", "Минск", "Замена унитаза", "flexible", 120),
+            ("Отделка", "Минск", "Поклейка обоев в спальне", "fixed", 180),
             ("Сборка мебели", "Минск", "Сборка кухонного гарнитура", "flexible", 250),
-            ("Окна/двери", "Гомель", "Установка межкомнатной двери", "fixed", 100),
-            ("Бытовая техника", "Могилёв", "Ремонт холодильника", "none", 0),
-            ("Напольные покрытия", "Витебск", "Укладка плитки в ванной 5м²", "fixed", 200),
-            ("Мелкий ремонт", "Гродно", "Замена замков на дверях", "flexible", 70),
-            ("Электрика", "Брест", "Проводка света в гараже", "fixed", 150),
+            ("Окна/двери", "Минск", "Установка межкомнатной двери", "fixed", 100),
+            ("Бытовая техника", "Минск", "Ремонт холодильника", "none", 0),
+            ("Напольные покрытия", "Минск", "Укладка плитки в ванной 5м²", "fixed", 200),
+            ("Мелкий ремонт", "Минск", "Замена замков на дверях", "flexible", 70),
+            ("Электрика", "Минск", "Проводка света в гараже", "fixed", 150),
         ]
 
         # Создаем заказы
