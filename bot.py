@@ -431,6 +431,11 @@ def main():
         CommandHandler("reset_profile", handlers.reset_profile_command)
     )
 
+    # Команда для добавления тестовых заказов
+    application.add_handler(
+        CommandHandler("add_test_orders", handlers.add_test_orders_command)
+    )
+
     # Обработчик неизвестных команд
     application.add_handler(
         MessageHandler(filters.COMMAND, handlers.unknown_command)
