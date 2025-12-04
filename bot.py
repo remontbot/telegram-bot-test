@@ -436,6 +436,11 @@ def main():
         CommandHandler("add_test_orders", handlers.add_test_orders_command)
     )
 
+    # Команда для добавления тестовых мастеров
+    application.add_handler(
+        CommandHandler("add_test_workers", handlers.add_test_workers_command)
+    )
+
     # Обработчик неизвестных команд
     application.add_handler(
         MessageHandler(filters.COMMAND, handlers.unknown_command)

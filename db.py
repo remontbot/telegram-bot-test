@@ -865,3 +865,205 @@ def add_test_orders(telegram_id):
 
         return (True, f"✅ Успешно добавлено {orders_created} тестовых заказов!", orders_created)
 
+
+def add_test_workers(telegram_id):
+    """
+    Добавляет тестовых мастеров и их отклики на заказы.
+    Используется только для пользователя с telegram_id = 641830790.
+
+    Args:
+        telegram_id: Telegram ID пользователя
+
+    Returns:
+        tuple: (success: bool, message: str, workers_created: int)
+    """
+    # Проверка, что это разрешенный пользователь
+    if telegram_id != 641830790:
+        return (False, "❌ Эта команда доступна только для администратора.", 0)
+
+    with get_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Данные тестовых мастеров
+        test_workers = [
+            {
+                "telegram_id": 100000001,
+                "name": "Иван Петров",
+                "phone": "+375291111111",
+                "city": "Минск",
+                "regions": "Минск",
+                "categories": "Электрика, Мелкий ремонт",
+                "experience": "5-10 лет",
+                "description": "Профессиональный электрик. Выполняю все виды электромонтажных работ. Качественно и в срок.",
+                "rating": 4.8,
+                "rating_count": 15
+            },
+            {
+                "telegram_id": 100000002,
+                "name": "Сергей Козлов",
+                "phone": "+375292222222",
+                "city": "Минск",
+                "regions": "Минск",
+                "categories": "Сантехника, Отделка",
+                "experience": "10+ лет",
+                "description": "Опытный сантехник. Установка, ремонт, замена любого сантехнического оборудования.",
+                "rating": 4.9,
+                "rating_count": 23
+            },
+            {
+                "telegram_id": 100000003,
+                "name": "Александр Смирнов",
+                "phone": "+375293333333",
+                "city": "Минск",
+                "regions": "Минск",
+                "categories": "Сборка мебели, Мелкий ремонт",
+                "experience": "3-5 лет",
+                "description": "Быстро и качественно соберу любую мебель. Работаю с инструкциями и без.",
+                "rating": 4.7,
+                "rating_count": 12
+            },
+            {
+                "telegram_id": 100000004,
+                "name": "Дмитрий Волков",
+                "phone": "+375294444444",
+                "city": "Минск",
+                "regions": "Минск",
+                "categories": "Окна/двери, Напольные покрытия",
+                "experience": "5-10 лет",
+                "description": "Установка и ремонт окон, дверей. Укладка ламината, плитки. Гарантия качества.",
+                "rating": 4.6,
+                "rating_count": 18
+            },
+            {
+                "telegram_id": 100000005,
+                "name": "Андрей Новиков",
+                "phone": "+375295555555",
+                "city": "Минск",
+                "regions": "Минск",
+                "categories": "Бытовая техника, Электрика",
+                "experience": "10+ лет",
+                "description": "Ремонт любой бытовой техники: холодильники, стиральные машины, СВЧ и др.",
+                "rating": 4.9,
+                "rating_count": 31
+            },
+            {
+                "telegram_id": 100000006,
+                "name": "Михаил Соколов",
+                "phone": "+375296666666",
+                "city": "Минск",
+                "regions": "Минск",
+                "categories": "Отделка, Дизайн",
+                "experience": "5-10 лет",
+                "description": "Профессиональная отделка помещений. Консультации по дизайну интерьера.",
+                "rating": 4.8,
+                "rating_count": 20
+            }
+        ]
+
+        workers_created = 0
+        worker_ids = []
+
+        # Создаем тестовых мастеров
+        for worker_data in test_workers:
+            try:
+                # Проверяем, существует ли пользователь
+                cursor.execute("SELECT id FROM users WHERE telegram_id = ?", (worker_data["telegram_id"],))
+                existing_user = cursor.fetchone()
+
+                if not existing_user:
+                    # Создаем пользователя
+                    created_at = datetime.now().isoformat()
+                    cursor.execute(
+                        "INSERT INTO users (telegram_id, role, created_at) VALUES (?, ?, ?)",
+                        (worker_data["telegram_id"], "worker", created_at)
+                    )
+                    user_id = cursor.lastrowid
+
+                    # Создаем профиль мастера
+                    cursor.execute("""
+                        INSERT INTO workers (user_id, name, phone, city, regions, categories, experience, description, rating, rating_count)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        user_id,
+                        worker_data["name"],
+                        worker_data["phone"],
+                        worker_data["city"],
+                        worker_data["regions"],
+                        worker_data["categories"],
+                        worker_data["experience"],
+                        worker_data["description"],
+                        worker_data["rating"],
+                        worker_data["rating_count"]
+                    ))
+                    worker_id = cursor.lastrowid
+                    worker_ids.append(worker_id)
+                    workers_created += 1
+                else:
+                    # Получаем worker_id существующего мастера
+                    user_id = existing_user[0] if isinstance(existing_user, tuple) else existing_user['id']
+                    cursor.execute("SELECT id FROM workers WHERE user_id = ?", (user_id,))
+                    worker_row = cursor.fetchone()
+                    if worker_row:
+                        worker_id = worker_row[0] if isinstance(worker_row, tuple) else worker_row['id']
+                        worker_ids.append(worker_id)
+
+            except Exception as e:
+                print(f"Ошибка при создании мастера: {e}")
+
+        # Получаем все открытые заказы
+        cursor.execute("SELECT id, category FROM orders WHERE status = 'open'")
+        orders = cursor.fetchall()
+
+        # Создаем отклики от мастеров на подходящие заказы
+        bids_created = 0
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        for order in orders:
+            order_id = order[0] if isinstance(order, tuple) else order['id']
+            order_category = order[1] if isinstance(order, tuple) else order['category']
+
+            # Для каждого заказа добавляем 2-3 отклика от подходящих мастеров
+            suitable_workers = []
+            for i, worker_data in enumerate(test_workers):
+                if i < len(worker_ids) and order_category in worker_data["categories"]:
+                    suitable_workers.append((worker_ids[i], worker_data))
+
+            # Добавляем отклики от первых 2-3 подходящих мастеров
+            for worker_id, worker_data in suitable_workers[:3]:
+                try:
+                    # Проверяем, нет ли уже отклика
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM bids WHERE order_id = ? AND worker_id = ?",
+                        (order_id, worker_id)
+                    )
+                    existing_bid = cursor.fetchone()
+                    bid_exists = existing_bid[0] if isinstance(existing_bid, tuple) else existing_bid['COUNT(*)']
+
+                    if not bid_exists or bid_exists == 0:
+                        # Генерируем цену (50-300 BYN)
+                        import random
+                        price = random.randint(50, 300)
+
+                        # Создаем отклик
+                        cursor.execute("""
+                            INSERT INTO bids (order_id, worker_id, proposed_price, currency, comment, created_at, status)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            order_id,
+                            worker_id,
+                            price,
+                            "BYN",
+                            f"Готов выполнить работу качественно и в срок. Опыт {worker_data['experience']}.",
+                            now,
+                            "active"
+                        ))
+                        bids_created += 1
+
+                except Exception as e:
+                    print(f"Ошибка при создании отклика: {e}")
+
+        conn.commit()
+
+        message = f"✅ Успешно добавлено:\n• {workers_created} тестовых мастеров\n• {bids_created} откликов на заказы"
+        return (True, message, workers_created)
+
