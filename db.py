@@ -689,11 +689,8 @@ def add_test_orders(telegram_id):
             """, (user_id, "Тестовый клиент", "+375291234567", "Минск", "Тестовый профиль"))
         else:
             user_id = user_row[0]
-            role = user_row[1]
-
-            # Если пользователь не клиент, проверяем профиль клиента
-            if role != "client":
-                return (False, "❌ Пользователь не является клиентом.", 0)
+            # Пользователь может быть мастером или клиентом - это не важно
+            # Проверим наличие профиля клиента и создадим если нужно
 
         # Получаем client_id
         cursor.execute("SELECT id FROM clients WHERE user_id = ?", (user_id,))
