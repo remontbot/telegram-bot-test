@@ -1136,7 +1136,7 @@ async def show_edit_profile_menu(update: Update, context: ContextTypes.DEFAULT_T
     """Меню редактирования профиля"""
     query = update.callback_query
     await query.answer()
-    
+
     keyboard = [
         [InlineKeyboardButton("✏️ Изменить имя", callback_data="edit_name")],
         [InlineKeyboardButton("📱 Изменить телефон", callback_data="edit_phone")],
@@ -1144,9 +1144,10 @@ async def show_edit_profile_menu(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton("🔧 Изменить виды работ", callback_data="edit_categories")],
         [InlineKeyboardButton("📅 Изменить опыт", callback_data="edit_experience")],
         [InlineKeyboardButton("📝 Изменить описание", callback_data="edit_description")],
+        [InlineKeyboardButton("📸 Добавить/изменить фото работ", callback_data="worker_add_photos")],
         [InlineKeyboardButton("⬅️ Назад к профилю", callback_data="worker_profile")],
     ]
-    
+
     await query.edit_message_text(
         "✏️ <b>Редактирование профиля</b>\n\n"
         "Выберите что хотите изменить:",
