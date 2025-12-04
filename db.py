@@ -642,11 +642,121 @@ def select_bid(bid_id):
         
         # Обновляем статус заказа
         cursor.execute("""
-            UPDATE orders 
+            UPDATE orders
             SET status = 'master_selected'
             WHERE id = ?
         """, (order_id,))
-        
+
         conn.commit()
         return True
+
+
+def add_test_orders(telegram_id):
+    """
+    Добавляет 18 тестовых заказов для указанного пользователя.
+    Используется только для пользователя с telegram_id = 641830790.
+
+    Args:
+        telegram_id: Telegram ID пользователя
+
+    Returns:
+        tuple: (success: bool, message: str, orders_created: int)
+    """
+    # Проверка, что это разрешенный пользователь
+    if telegram_id != 641830790:
+        return (False, "❌ Эта команда доступна только для администратора.", 0)
+
+    with sqlite3.connect(DATABASE_NAME) as conn:
+        cursor = conn.cursor()
+
+        # Получаем или создаем пользователя
+        cursor.execute("SELECT id, role FROM users WHERE telegram_id = ?", (telegram_id,))
+        user_row = cursor.fetchone()
+
+        if not user_row:
+            # Создаем пользователя как клиента
+            created_at = datetime.now().isoformat()
+            cursor.execute(
+                "INSERT INTO users (telegram_id, role, created_at) VALUES (?, ?, ?)",
+                (telegram_id, "client", created_at)
+            )
+            user_id = cursor.lastrowid
+
+            # Создаем профиль клиента
+            cursor.execute("""
+                INSERT INTO clients (user_id, name, phone, city, description)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, "Тестовый клиент", "+375291234567", "Минск", "Тестовый профиль"))
+        else:
+            user_id = user_row[0]
+            role = user_row[1]
+
+            # Если пользователь не клиент, проверяем профиль клиента
+            if role != "client":
+                return (False, "❌ Пользователь не является клиентом.", 0)
+
+        # Получаем client_id
+        cursor.execute("SELECT id FROM clients WHERE user_id = ?", (user_id,))
+        client_row = cursor.fetchone()
+
+        if not client_row:
+            # Создаем профиль клиента, если его нет
+            cursor.execute("""
+                INSERT INTO clients (user_id, name, phone, city, description)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, "Тестовый клиент", "+375291234567", "Минск", "Тестовый профиль"))
+            client_id = cursor.lastrowid
+        else:
+            client_id = client_row[0]
+
+        # Данные для создания тестовых заказов
+        categories = [
+            "Электрика", "Сантехника", "Отделка", "Сборка мебели",
+            "Окна/двери", "Бытовая техника", "Напольные покрытия",
+            "Мелкий ремонт", "Дизайн"
+        ]
+
+        cities = ["Минск", "Гомель", "Могилёв", "Витебск", "Гродно", "Брест"]
+
+        test_orders = [
+            ("Электрика", "Минск", "Замена розеток в квартире", "none", 0),
+            ("Сантехника", "Гомель", "Установка смесителя на кухне", "fixed", 50),
+            ("Отделка", "Могилёв", "Покраска стен в двух комнатах", "flexible", 200),
+            ("Сборка мебели", "Витебск", "Сборка шкафа-купе 2м", "fixed", 80),
+            ("Окна/двери", "Гродно", "Регулировка пластиковых окон", "none", 0),
+            ("Бытовая техника", "Брест", "Ремонт стиральной машины", "flexible", 100),
+            ("Напольные покрытия", "Минск", "Укладка ламината 20м²", "fixed", 300),
+            ("Мелкий ремонт", "Гомель", "Повесить полки и картины", "none", 0),
+            ("Дизайн", "Могилёв", "Консультация по дизайну интерьера", "flexible", 150),
+            ("Электрика", "Витебск", "Установка люстры в зале", "fixed", 40),
+            ("Сантехника", "Гродно", "Замена унитаза", "flexible", 120),
+            ("Отделка", "Брест", "Поклейка обоев в спальне", "fixed", 180),
+            ("Сборка мебели", "Минск", "Сборка кухонного гарнитура", "flexible", 250),
+            ("Окна/двери", "Гомель", "Установка межкомнатной двери", "fixed", 100),
+            ("Бытовая техника", "Могилёв", "Ремонт холодильника", "none", 0),
+            ("Напольные покрытия", "Витебск", "Укладка плитки в ванной 5м²", "fixed", 200),
+            ("Мелкий ремонт", "Гродно", "Замена замков на дверях", "flexible", 70),
+            ("Электрика", "Брест", "Проводка света в гараже", "fixed", 150),
+        ]
+
+        # Создаем заказы
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        orders_created = 0
+
+        for category, city, description, budget_type, budget_value in test_orders:
+            try:
+                cursor.execute("""
+                    INSERT INTO orders (
+                        client_id, city, category, description, photos,
+                        budget_type, budget_value, status, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)
+                """, (client_id, city, category, description, "", budget_type, budget_value, now))
+                orders_created += 1
+            except Exception as e:
+                print(f"Ошибка при создании заказа: {e}")
+
+        conn.commit()
+
+        return (True, f"✅ Успешно добавлено {orders_created} тестовых заказов!", orders_created)
 

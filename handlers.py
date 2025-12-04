@@ -1717,6 +1717,16 @@ async def reset_profile_command(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
 
+async def add_test_orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда для добавления тестовых заказов (только для user_id 641830790)"""
+    telegram_id = update.effective_user.id
+
+    # Вызываем функцию из db.py
+    success, message, count = db.add_test_orders(telegram_id)
+
+    await update.message.reply_text(message)
+
+
 # ------- ПРОСМОТР ЗАКАЗОВ ДЛЯ МАСТЕРОВ -------
 
 async def worker_view_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
