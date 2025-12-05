@@ -1590,10 +1590,10 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         logger.info(f"Client profile найден: id={client_profile['id']}")
         
-        # Получаем заказы клиента
-        orders = db.get_client_orders(client_profile["id"])
-        
-        logger.info(f"Найдено заказов: {len(orders)}")
+        # Получаем заказы клиента (первые 10 с пагинацией)
+        orders, total_count, has_next_page = db.get_client_orders(client_profile["id"], page=1, per_page=10)
+
+        logger.info(f"Найдено заказов: {total_count} (показываем первые 10)")
         
         if not orders:
             keyboard = [
@@ -1760,13 +1760,13 @@ async def worker_view_orders(update: Update, context: ContextTypes.DEFAULT_TYPE)
         worker_dict = dict(worker_profile)
         categories = worker_dict.get("categories", "").split(", ")
         
-        # Собираем все заказы по категориям мастера
+        # Собираем заказы по категориям мастера (с пагинацией - первые 10 на категорию)
         all_orders = []
         seen_order_ids = set()
-        
+
         for category in categories:
             if category.strip():
-                orders = db.get_orders_by_category(category.strip())
+                orders, _, _ = db.get_orders_by_category(category.strip(), page=1, per_page=10)
                 for order in orders:
                     order_dict = dict(order)
                     if order_dict['id'] not in seen_order_ids:

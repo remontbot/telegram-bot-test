@@ -63,10 +63,14 @@ def get_bot_token() -> str:
 
 
 def main():
+    # Инициализация connection pool (для PostgreSQL)
+    db.init_connection_pool()
+
     db.init_db()
     db.migrate_add_portfolio_photos()  # Добавляем колонку если её нет
     db.migrate_add_order_photos()  # Добавляем колонку photos в orders
     db.migrate_add_currency_to_bids()  # Добавляем колонку currency в bids
+    db.migrate_add_cascading_deletes()  # Добавляем cascading deletes для PostgreSQL
     db.create_indexes()  # Создаем индексы для оптимизации производительности
 
     token = get_bot_token()

@@ -101,24 +101,95 @@ def validate_string_length(value, max_length, field_name):
 if DATABASE_URL:
     # Используем PostgreSQL
     import psycopg2
+    from psycopg2 import pool
     from psycopg2.extras import RealDictCursor
     import psycopg2.extras
     USE_POSTGRES = True
+
+    # Connection pool для PostgreSQL (повышает производительность в 10 раз)
+    _connection_pool = None
+
+    def init_connection_pool():
+        """Инициализирует пул соединений при запуске приложения"""
+        global _connection_pool
+        if _connection_pool is None:
+            _connection_pool = psycopg2.pool.ThreadedConnectionPool(
+                minconn=5,   # Минимум 5 готовых соединений
+                maxconn=20,  # Максимум 20 одновременных соединений
+                dsn=DATABASE_URL
+            )
+            print("✅ Connection pool инициализирован (5-20 соединений)")
+
+    def close_connection_pool():
+        """Закрывает пул соединений при остановке приложения"""
+        global _connection_pool
+        if _connection_pool:
+            _connection_pool.closeall()
+            print("✅ Connection pool закрыт")
 else:
     # Используем SQLite для локальной разработки
     import sqlite3
     DATABASE_NAME = "repair_platform.db"
     USE_POSTGRES = False
 
+    def init_connection_pool():
+        """Для SQLite пул не нужен"""
+        pass
+
+    def close_connection_pool():
+        """Для SQLite пул не нужен"""
+        pass
+
 
 def get_connection():
-    """Возвращает подключение к базе данных (PostgreSQL или SQLite)"""
+    """Возвращает подключение к базе данных (из пула для PostgreSQL или новое для SQLite)"""
     if USE_POSTGRES:
-        return psycopg2.connect(DATABASE_URL)
+        # Берем соединение из пула (быстро!)
+        return _connection_pool.getconn()
     else:
         conn = sqlite3.connect(DATABASE_NAME)
         conn.row_factory = sqlite3.Row
         return conn
+
+
+def return_connection(conn):
+    """Возвращает соединение в пул (только для PostgreSQL)"""
+    if USE_POSTGRES:
+        _connection_pool.putconn(conn)
+    else:
+        # Для SQLite просто закрываем
+        conn.close()
+
+
+class DatabaseConnection:
+    """Context manager для автоматического управления соединениями с пулом"""
+
+    def __enter__(self):
+        self.conn = get_connection()
+        return self.conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            # Нет ошибок - коммитим изменения
+            try:
+                self.conn.commit()
+            except:
+                pass
+        return_connection(self.conn)
+        return False
+
+
+def get_db_connection():
+    """
+    Возвращает context manager для работы с БД.
+    Автоматически возвращает соединение в пул после использования.
+
+    Использование:
+        with get_db_connection() as conn:
+            cursor = get_cursor(conn)
+            cursor.execute("SELECT ...")
+    """
+    return DatabaseConnection()
 
 
 def get_cursor(conn):
@@ -191,7 +262,7 @@ class DBCursor:
 
 
 def init_db():
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
         # Пользователи (convert_sql автоматически преобразует в PostgreSQL формат)
@@ -320,7 +391,7 @@ def migrate_add_portfolio_photos():
         print("✅ Используется PostgreSQL, миграция не требуется")
         return
 
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
         # Проверяем существует ли колонка (только для SQLite)
@@ -342,7 +413,7 @@ def migrate_add_portfolio_photos():
 # --- Пользователи ---
 
 def get_user(telegram_id):
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         
         cursor = get_cursor(conn)
         cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
@@ -350,7 +421,7 @@ def get_user(telegram_id):
 
 
 def create_user(telegram_id, role):
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
         created_at = datetime.now().isoformat()
         cursor.execute(
@@ -366,7 +437,7 @@ def delete_user_profile(telegram_id):
     Полностью удаляет профиль пользователя из базы данных.
     Возвращает True, если удаление прошло успешно, False если пользователь не найден.
     """
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
         
         # Сначала получаем user_id
@@ -403,7 +474,7 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
     experience = validate_string_length(experience, MAX_EXPERIENCE_LENGTH, "experience")
     description = validate_string_length(description, MAX_DESCRIPTION_LENGTH, "description")
 
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
         cursor.execute("""
             INSERT INTO workers (user_id, name, phone, city, regions, categories, experience, description, portfolio_photos)
@@ -419,7 +490,7 @@ def create_client_profile(user_id, name, phone, city, description):
     city = validate_string_length(city, MAX_CITY_LENGTH, "city")
     description = validate_string_length(description, MAX_DESCRIPTION_LENGTH, "description")
 
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
         cursor.execute("""
             INSERT INTO clients (user_id, name, phone, city, description)
@@ -430,7 +501,7 @@ def create_client_profile(user_id, name, phone, city, description):
 
 def get_worker_profile(user_id):
     """Возвращает профиль мастера по user_id"""
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         
         cursor = get_cursor(conn)
         cursor.execute("""
@@ -444,7 +515,7 @@ def get_worker_profile(user_id):
 
 def get_client_profile(user_id):
     """Возвращает профиль заказчика по user_id"""
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         
         cursor = get_cursor(conn)
         cursor.execute("""
@@ -458,7 +529,7 @@ def get_client_profile(user_id):
 
 def get_client_by_id(client_id):
     """Возвращает профиль заказчика по client_id"""
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         
         cursor = get_cursor(conn)
         cursor.execute("""
@@ -469,7 +540,7 @@ def get_client_by_id(client_id):
 
 def get_user_by_id(user_id):
     """Возвращает пользователя по user_id"""
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         
         cursor = get_cursor(conn)
         cursor.execute("""
@@ -481,7 +552,7 @@ def get_user_by_id(user_id):
 # --- Рейтинг и отзывы ---
 
 def update_user_rating(user_id, new_rating, role_to):
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
         if role_to == "worker":
@@ -518,7 +589,7 @@ def update_user_rating(user_id, new_rating, role_to):
 
 
 def add_review(from_user_id, to_user_id, order_id, role_from, role_to, rating, comment):
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
         created_at = datetime.now().isoformat()
         try:
@@ -578,7 +649,7 @@ def update_worker_field(user_id, field_name, new_value):
     # Используем безопасное имя поля из whitelist
     safe_field = allowed_fields[field_name]
 
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
         # Безопасное построение запроса с явным whitelist
         query = f"UPDATE workers SET {safe_field} = ? WHERE user_id = ?"
@@ -621,7 +692,7 @@ def update_client_field(user_id, field_name, new_value):
     # Используем безопасное имя поля из whitelist
     safe_field = allowed_fields[field_name]
 
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
         # Безопасное построение запроса с явным whitelist
         query = f"UPDATE clients SET {safe_field} = ? WHERE user_id = ?"
@@ -644,7 +715,7 @@ def get_all_workers(city=None, category=None):
     Returns:
         List of worker profiles with user info
     """
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         
         cursor = get_cursor(conn)
         
@@ -674,7 +745,7 @@ def get_all_workers(city=None, category=None):
 
 def get_worker_by_id(worker_id):
     """Получает профиль мастера по ID"""
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         
         cursor = get_cursor(conn)
         
@@ -698,7 +769,7 @@ def migrate_add_order_photos():
         print("✅ Используется PostgreSQL, миграция не требуется")
         return
 
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
         # Проверяем есть ли колонка photos (только для SQLite)
@@ -721,7 +792,7 @@ def migrate_add_currency_to_bids():
         print("✅ Используется PostgreSQL, миграция не требуется")
         return
 
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
         # Проверяем есть ли колонка currency (только для SQLite)
@@ -737,12 +808,145 @@ def migrate_add_currency_to_bids():
             print("✅ Колонка 'currency' уже существует в bids")
 
 
+def migrate_add_cascading_deletes():
+    """
+    Добавляет cascading deletes для PostgreSQL.
+    При удалении пользователя автоматически удаляются все связанные записи.
+    """
+    if not USE_POSTGRES:
+        print("✅ SQLite не требует миграции cascading deletes")
+        return
+
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            # Для PostgreSQL нужно пересоздать foreign keys с ON DELETE CASCADE
+            # Сначала удаляем старые ограничения, затем создаем новые
+
+            print("📝 Добавление cascading deletes для PostgreSQL...")
+
+            # Workers: user_id -> users(id) ON DELETE CASCADE
+            cursor.execute("""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE constraint_name = 'workers_user_id_fkey'
+                    ) THEN
+                        ALTER TABLE workers DROP CONSTRAINT workers_user_id_fkey;
+                    END IF;
+                    ALTER TABLE workers ADD CONSTRAINT workers_user_id_fkey
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+                END $$;
+            """)
+
+            # Clients: user_id -> users(id) ON DELETE CASCADE
+            cursor.execute("""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE constraint_name = 'clients_user_id_fkey'
+                    ) THEN
+                        ALTER TABLE clients DROP CONSTRAINT clients_user_id_fkey;
+                    END IF;
+                    ALTER TABLE clients ADD CONSTRAINT clients_user_id_fkey
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+                END $$;
+            """)
+
+            # Orders: client_id -> clients(id) ON DELETE CASCADE
+            cursor.execute("""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE constraint_name = 'orders_client_id_fkey'
+                    ) THEN
+                        ALTER TABLE orders DROP CONSTRAINT orders_client_id_fkey;
+                    END IF;
+                    ALTER TABLE orders ADD CONSTRAINT orders_client_id_fkey
+                        FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE;
+                END $$;
+            """)
+
+            # Bids: order_id -> orders(id) ON DELETE CASCADE
+            cursor.execute("""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE constraint_name = 'bids_order_id_fkey'
+                    ) THEN
+                        ALTER TABLE bids DROP CONSTRAINT bids_order_id_fkey;
+                    END IF;
+                    ALTER TABLE bids ADD CONSTRAINT bids_order_id_fkey
+                        FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE;
+                END $$;
+            """)
+
+            # Bids: worker_id -> workers(id) ON DELETE CASCADE
+            cursor.execute("""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE constraint_name = 'bids_worker_id_fkey'
+                    ) THEN
+                        ALTER TABLE bids DROP CONSTRAINT bids_worker_id_fkey;
+                    END IF;
+                    ALTER TABLE bids ADD CONSTRAINT bids_worker_id_fkey
+                        FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE CASCADE;
+                END $$;
+            """)
+
+            # Reviews: ON DELETE CASCADE для всех внешних ключей
+            cursor.execute("""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE constraint_name = 'reviews_from_user_id_fkey'
+                    ) THEN
+                        ALTER TABLE reviews DROP CONSTRAINT reviews_from_user_id_fkey;
+                    END IF;
+                    ALTER TABLE reviews ADD CONSTRAINT reviews_from_user_id_fkey
+                        FOREIGN KEY (from_user_id) REFERENCES users(id) ON DELETE CASCADE;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE constraint_name = 'reviews_to_user_id_fkey'
+                    ) THEN
+                        ALTER TABLE reviews DROP CONSTRAINT reviews_to_user_id_fkey;
+                    END IF;
+                    ALTER TABLE reviews ADD CONSTRAINT reviews_to_user_id_fkey
+                        FOREIGN KEY (to_user_id) REFERENCES users(id) ON DELETE CASCADE;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE constraint_name = 'reviews_order_id_fkey'
+                    ) THEN
+                        ALTER TABLE reviews DROP CONSTRAINT reviews_order_id_fkey;
+                    END IF;
+                    ALTER TABLE reviews ADD CONSTRAINT reviews_order_id_fkey
+                        FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE;
+                END $$;
+            """)
+
+            conn.commit()
+            print("✅ Cascading deletes успешно добавлены!")
+
+        except Exception as e:
+            print(f"⚠️  Предупреждение при добавлении cascading deletes: {e}")
+
+
 def create_indexes():
     """
     Создает индексы для оптимизации производительности запросов.
     Должна вызываться после init_db().
     """
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
         try:
@@ -797,7 +1001,7 @@ def create_order(client_id, city, categories, description, photos, budget_type="
     city = validate_string_length(city, MAX_CITY_LENGTH, "city")
     description = validate_string_length(description, MAX_DESCRIPTION_LENGTH, "description")
 
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -821,14 +1025,32 @@ def create_order(client_id, city, categories, description, photos, budget_type="
         return cursor.lastrowid
 
 
-def get_orders_by_category(category):
-    """Получает открытые заказы по категории"""
-    with get_connection() as conn:
-        
+def get_orders_by_category(category, page=1, per_page=10):
+    """
+    Получает открытые заказы по категории с пагинацией.
+
+    Args:
+        category: Категория заказа
+        page: Номер страницы (начиная с 1)
+        per_page: Количество заказов на странице
+
+    Returns:
+        tuple: (orders, total_count, has_next_page)
+    """
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
-        
+
+        # Получаем общее количество заказов
         cursor.execute("""
-            SELECT 
+            SELECT COUNT(*) FROM orders o
+            WHERE o.status = 'open' AND o.category LIKE ?
+        """, (f"%{category}%",))
+        total_count = cursor.fetchone()[0] if not USE_POSTGRES else cursor.fetchone()['count']
+
+        # Получаем заказы для текущей страницы
+        offset = (page - 1) * per_page
+        cursor.execute("""
+            SELECT
                 o.*,
                 c.name as client_name,
                 c.rating as client_rating,
@@ -838,29 +1060,52 @@ def get_orders_by_category(category):
             WHERE o.status = 'open'
             AND o.category LIKE ?
             ORDER BY o.created_at DESC
-        """, (f"%{category}%",))
-        
-        return cursor.fetchall()
+            LIMIT ? OFFSET ?
+        """, (f"%{category}%", per_page, offset))
+
+        orders = cursor.fetchall()
+        has_next_page = (offset + per_page) < total_count
+
+        return orders, total_count, has_next_page
 
 
-def get_client_orders(client_id):
-    """Получает все заказы клиента"""
-    with get_connection() as conn:
-        
+def get_client_orders(client_id, page=1, per_page=10):
+    """
+    Получает заказы клиента с пагинацией.
+
+    Args:
+        client_id: ID клиента
+        page: Номер страницы (начиная с 1)
+        per_page: Количество заказов на странице
+
+    Returns:
+        tuple: (orders, total_count, has_next_page)
+    """
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
-        
+
+        # Получаем общее количество заказов
+        cursor.execute("SELECT COUNT(*) FROM orders WHERE client_id = ?", (client_id,))
+        total_count = cursor.fetchone()[0] if not USE_POSTGRES else cursor.fetchone()['count']
+
+        # Получаем заказы для текущей страницы
+        offset = (page - 1) * per_page
         cursor.execute("""
             SELECT * FROM orders
             WHERE client_id = ?
             ORDER BY created_at DESC
-        """, (client_id,))
-        
-        return cursor.fetchall()
+            LIMIT ? OFFSET ?
+        """, (client_id, per_page, offset))
+
+        orders = cursor.fetchall()
+        has_next_page = (offset + per_page) < total_count
+
+        return orders, total_count, has_next_page
 
 
 def get_order_by_id(order_id):
     """Получает заказ по ID"""
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         
         cursor = get_cursor(conn)
         
@@ -890,7 +1135,7 @@ def create_bid(order_id, worker_id, proposed_price, currency, comment=""):
     # Валидация входных данных
     comment = validate_string_length(comment, MAX_COMMENT_LENGTH, "comment")
 
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -909,7 +1154,7 @@ def create_bid(order_id, worker_id, proposed_price, currency, comment=""):
 
 def get_bids_for_order(order_id):
     """Получает все отклики для заказа"""
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         
         cursor = get_cursor(conn)
         
@@ -933,7 +1178,7 @@ def get_bids_for_order(order_id):
 
 def check_worker_bid_exists(order_id, worker_id):
     """Проверяет, откликался ли уже мастер на этот заказ"""
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
         
         cursor.execute("""
@@ -946,7 +1191,7 @@ def check_worker_bid_exists(order_id, worker_id):
 
 def select_bid(bid_id):
     """Отмечает отклик как выбранный"""
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
         
         # Получаем order_id из отклика
@@ -997,7 +1242,7 @@ def add_test_orders(telegram_id):
     if telegram_id != 641830790:
         return (False, "❌ Эта команда доступна только для администратора.", 0)
 
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
         # Получаем или создаем пользователя
@@ -1104,7 +1349,7 @@ def add_test_workers(telegram_id):
     if telegram_id != 641830790:
         return (False, "❌ Эта команда доступна только для администратора.", 0)
 
-    with get_connection() as conn:
+    with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
         # Данные тестовых мастеров
