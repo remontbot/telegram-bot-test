@@ -4546,6 +4546,44 @@ async def banned_users_command(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text(text, parse_mode="HTML")
 
 
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Команда /stats для просмотра статистики бота
+    """
+    user_telegram_id = update.effective_user.id
+
+    # Проверка прав администратора
+    ADMIN_IDS = [user_telegram_id]
+
+    if user_telegram_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+        return
+
+    stats = db.get_analytics_stats()
+
+    premium_status = "✅ Включены" if stats['premium_enabled'] else "❌ Отключены"
+
+    text = (
+        f"📊 <b>Статистика бота</b>\n\n"
+        f"👥 <b>Пользователи:</b>\n"
+        f"• Всего: {stats['total_users']}\n"
+        f"• Мастеров: {stats['total_workers']}\n"
+        f"• Клиентов: {stats['total_clients']}\n"
+        f"• Забанено: {stats['banned_users']}\n\n"
+        f"📋 <b>Заказы:</b>\n"
+        f"• Всего: {stats['total_orders']}\n"
+        f"• Активных: {stats['active_orders']}\n"
+        f"• Завершённых: {stats['completed_orders']}\n\n"
+        f"💼 <b>Отклики:</b>\n"
+        f"• Всего: {stats['total_bids']}\n"
+        f"• Активных: {stats['active_bids']}\n\n"
+        f"⭐ <b>Отзывы:</b> {stats['total_reviews']}\n\n"
+        f"💎 <b>Premium:</b> {premium_status}"
+    )
+
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
 async def announce_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Команда /announce для отправки уведомлений всем пользователям.

@@ -1596,6 +1596,61 @@ def get_banned_users():
         return cursor.fetchall()
 
 
+# === ANALYTICS HELPERS ===
+
+def get_analytics_stats():
+    """Получает основную статистику для аналитики"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        stats = {}
+
+        # Всего пользователей
+        cursor.execute("SELECT COUNT(*) FROM users")
+        stats['total_users'] = cursor.fetchone()[0]
+
+        # Забаненных пользователей
+        cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
+        stats['banned_users'] = cursor.fetchone()[0]
+
+        # Мастеров
+        cursor.execute("SELECT COUNT(*) FROM workers")
+        stats['total_workers'] = cursor.fetchone()[0]
+
+        # Клиентов
+        cursor.execute("SELECT COUNT(*) FROM clients")
+        stats['total_clients'] = cursor.fetchone()[0]
+
+        # Заказов (всего)
+        cursor.execute("SELECT COUNT(*) FROM orders")
+        stats['total_orders'] = cursor.fetchone()[0]
+
+        # Активных заказов
+        cursor.execute("SELECT COUNT(*) FROM orders WHERE status = 'open'")
+        stats['active_orders'] = cursor.fetchone()[0]
+
+        # Завершённых заказов
+        cursor.execute("SELECT COUNT(*) FROM orders WHERE status = 'completed'")
+        stats['completed_orders'] = cursor.fetchone()[0]
+
+        # Откликов (всего)
+        cursor.execute("SELECT COUNT(*) FROM bids")
+        stats['total_bids'] = cursor.fetchone()[0]
+
+        # Активных откликов
+        cursor.execute("SELECT COUNT(*) FROM bids WHERE status = 'active'")
+        stats['active_bids'] = cursor.fetchone()[0]
+
+        # Отзывов
+        cursor.execute("SELECT COUNT(*) FROM reviews")
+        stats['total_reviews'] = cursor.fetchone()[0]
+
+        # Premium статус
+        stats['premium_enabled'] = is_premium_enabled()
+
+        return stats
+
+
 def create_indexes():
     """
     Создает индексы для оптимизации производительности запросов.

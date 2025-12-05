@@ -596,6 +596,11 @@ def main():
         CommandHandler("banned", handlers.banned_users_command)
     )
 
+    # Команда статистики (только для администратора)
+    application.add_handler(
+        CommandHandler("stats", handlers.stats_command)
+    )
+
     # Команда для массовой рассылки уведомлений (только для администратора)
     application.add_handler(
         CommandHandler("announce", handlers.announce_command)
