@@ -1,8 +1,102 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+from collections import defaultdict
 
 # Определяем тип базы данных
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Константы для валидации входных данных
+MAX_NAME_LENGTH = 100
+MAX_PHONE_LENGTH = 20
+MAX_CITY_LENGTH = 50
+MAX_DESCRIPTION_LENGTH = 2000
+MAX_COMMENT_LENGTH = 1000
+MAX_CATEGORY_LENGTH = 200
+MAX_EXPERIENCE_LENGTH = 50
+
+# Константы для rate limiting
+RATE_LIMIT_ORDERS_PER_HOUR = 10  # Максимум 10 заказов в час от одного пользователя
+RATE_LIMIT_BIDS_PER_HOUR = 50    # Максимум 50 откликов в час от одного мастера
+RATE_LIMIT_WINDOW_SECONDS = 3600  # Окно для подсчета (1 час)
+
+
+class RateLimiter:
+    """Простой in-memory rate limiter для защиты от спама"""
+
+    def __init__(self):
+        self._requests = defaultdict(list)  # {(user_id, action): [timestamp1, timestamp2, ...]}
+
+    def is_allowed(self, user_id, action, max_requests):
+        """
+        Проверяет, разрешен ли запрос для пользователя.
+
+        Args:
+            user_id: ID пользователя
+            action: Тип действия (create_order, create_bid, etc.)
+            max_requests: Максимум запросов в окне времени
+
+        Returns:
+            tuple: (allowed: bool, remaining_seconds: int)
+        """
+        key = (user_id, action)
+        now = datetime.now()
+        cutoff = now - timedelta(seconds=RATE_LIMIT_WINDOW_SECONDS)
+
+        # Удаляем старые запросы за пределами окна
+        self._requests[key] = [ts for ts in self._requests[key] if ts > cutoff]
+
+        # Проверяем лимит
+        if len(self._requests[key]) >= max_requests:
+            # Вычисляем, через сколько секунд откроется слот
+            oldest_request = min(self._requests[key])
+            remaining_seconds = int((oldest_request + timedelta(seconds=RATE_LIMIT_WINDOW_SECONDS) - now).total_seconds())
+            return False, remaining_seconds
+
+        # Добавляем текущий запрос
+        self._requests[key].append(now)
+        return True, 0
+
+    def cleanup_old_entries(self):
+        """Очищает старые записи для экономии памяти (вызывать периодически)"""
+        now = datetime.now()
+        cutoff = now - timedelta(seconds=RATE_LIMIT_WINDOW_SECONDS * 2)
+
+        keys_to_remove = []
+        for key in self._requests:
+            self._requests[key] = [ts for ts in self._requests[key] if ts > cutoff]
+            if not self._requests[key]:
+                keys_to_remove.append(key)
+
+        for key in keys_to_remove:
+            del self._requests[key]
+
+
+# Глобальный экземпляр rate limiter
+_rate_limiter = RateLimiter()
+
+
+def validate_string_length(value, max_length, field_name):
+    """
+    Проверяет длину строки и обрезает если необходимо.
+
+    Args:
+        value: Значение для проверки
+        max_length: Максимальная допустимая длина
+        field_name: Название поля для сообщения об ошибке
+
+    Returns:
+        str: Обрезанная строка
+    """
+    if value is None:
+        return ""
+
+    value_str = str(value)
+    if len(value_str) > max_length:
+        # Логируем предупреждение
+        print(f"⚠️  Предупреждение: {field_name} превышает {max_length} символов (получено {len(value_str)}), обрезаем")
+        return value_str[:max_length]
+
+    return value_str
 
 if DATABASE_URL:
     # Используем PostgreSQL
@@ -300,6 +394,15 @@ def delete_user_profile(telegram_id):
 # --- Профили мастеров и заказчиков ---
 
 def create_worker_profile(user_id, name, phone, city, regions, categories, experience, description, portfolio_photos=""):
+    # Валидация входных данных
+    name = validate_string_length(name, MAX_NAME_LENGTH, "name")
+    phone = validate_string_length(phone, MAX_PHONE_LENGTH, "phone")
+    city = validate_string_length(city, MAX_CITY_LENGTH, "city")
+    regions = validate_string_length(regions, MAX_CITY_LENGTH, "regions")
+    categories = validate_string_length(categories, MAX_CATEGORY_LENGTH, "categories")
+    experience = validate_string_length(experience, MAX_EXPERIENCE_LENGTH, "experience")
+    description = validate_string_length(description, MAX_DESCRIPTION_LENGTH, "description")
+
     with get_connection() as conn:
         cursor = get_cursor(conn)
         cursor.execute("""
@@ -310,6 +413,12 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
 
 
 def create_client_profile(user_id, name, phone, city, description):
+    # Валидация входных данных
+    name = validate_string_length(name, MAX_NAME_LENGTH, "name")
+    phone = validate_string_length(phone, MAX_PHONE_LENGTH, "phone")
+    city = validate_string_length(city, MAX_CITY_LENGTH, "city")
+    description = validate_string_length(description, MAX_DESCRIPTION_LENGTH, "description")
+
     with get_connection() as conn:
         cursor = get_cursor(conn)
         cursor.execute("""
@@ -431,47 +540,94 @@ def update_worker_field(user_id, field_name, new_value):
     """
     Универсальная функция для обновления любого поля профиля мастера.
     Используется для редактирования профиля без потери рейтинга и истории.
-    
+
     Args:
         user_id: ID пользователя
         field_name: Название поля (name, phone, city, etc.)
         new_value: Новое значение
     """
-    allowed_fields = ["name", "phone", "city", "regions", "categories", 
-                      "experience", "description", "portfolio_photos"]
-    
+    # Безопасный whitelist подход - используем словарь для маппинга
+    allowed_fields = {
+        "name": "name",
+        "phone": "phone",
+        "city": "city",
+        "regions": "regions",
+        "categories": "categories",
+        "experience": "experience",
+        "description": "description",
+        "portfolio_photos": "portfolio_photos"
+    }
+
     if field_name not in allowed_fields:
         raise ValueError(f"Недопустимое поле: {field_name}")
-    
+
+    # Валидация входных данных в зависимости от поля
+    if field_name == "name":
+        new_value = validate_string_length(new_value, MAX_NAME_LENGTH, "name")
+    elif field_name == "phone":
+        new_value = validate_string_length(new_value, MAX_PHONE_LENGTH, "phone")
+    elif field_name in ["city", "regions"]:
+        new_value = validate_string_length(new_value, MAX_CITY_LENGTH, field_name)
+    elif field_name == "categories":
+        new_value = validate_string_length(new_value, MAX_CATEGORY_LENGTH, "categories")
+    elif field_name == "experience":
+        new_value = validate_string_length(new_value, MAX_EXPERIENCE_LENGTH, "experience")
+    elif field_name == "description":
+        new_value = validate_string_length(new_value, MAX_DESCRIPTION_LENGTH, "description")
+
+    # Используем безопасное имя поля из whitelist
+    safe_field = allowed_fields[field_name]
+
     with get_connection() as conn:
         cursor = get_cursor(conn)
-        query = f"UPDATE workers SET {field_name} = ? WHERE user_id = ?"
+        # Безопасное построение запроса с явным whitelist
+        query = f"UPDATE workers SET {safe_field} = ? WHERE user_id = ?"
         cursor.execute(query, (new_value, user_id))
         conn.commit()
-        
+
         return cursor.rowcount > 0
 
 
 def update_client_field(user_id, field_name, new_value):
     """
     Универсальная функция для обновления любого поля профиля заказчика.
-    
+
     Args:
         user_id: ID пользователя
         field_name: Название поля (name, phone, city, description)
         new_value: Новое значение
     """
-    allowed_fields = ["name", "phone", "city", "description"]
-    
+    # Безопасный whitelist подход - используем словарь для маппинга
+    allowed_fields = {
+        "name": "name",
+        "phone": "phone",
+        "city": "city",
+        "description": "description"
+    }
+
     if field_name not in allowed_fields:
         raise ValueError(f"Недопустимое поле: {field_name}")
-    
+
+    # Валидация входных данных в зависимости от поля
+    if field_name == "name":
+        new_value = validate_string_length(new_value, MAX_NAME_LENGTH, "name")
+    elif field_name == "phone":
+        new_value = validate_string_length(new_value, MAX_PHONE_LENGTH, "phone")
+    elif field_name == "city":
+        new_value = validate_string_length(new_value, MAX_CITY_LENGTH, "city")
+    elif field_name == "description":
+        new_value = validate_string_length(new_value, MAX_DESCRIPTION_LENGTH, "description")
+
+    # Используем безопасное имя поля из whitelist
+    safe_field = allowed_fields[field_name]
+
     with get_connection() as conn:
         cursor = get_cursor(conn)
-        query = f"UPDATE clients SET {field_name} = ? WHERE user_id = ?"
+        # Безопасное построение запроса с явным whitelist
+        query = f"UPDATE clients SET {safe_field} = ? WHERE user_id = ?"
         cursor.execute(query, (new_value, user_id))
         conn.commit()
-        
+
         return cursor.rowcount > 0
 
 
@@ -580,20 +736,79 @@ def migrate_add_currency_to_bids():
         else:
             print("✅ Колонка 'currency' уже существует в bids")
 
-def create_order(client_id, city, categories, description, photos, budget_type="none", budget_value=0):
-    """Создаёт новый заказ"""
+
+def create_indexes():
+    """
+    Создает индексы для оптимизации производительности запросов.
+    Должна вызываться после init_db().
+    """
     with get_connection() as conn:
         cursor = get_cursor(conn)
-        
-        from datetime import datetime
+
+        try:
+            # Индексы для таблицы users
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
+
+            # Индексы для таблицы workers
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_workers_user_id ON workers(user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_workers_city ON workers(city)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_workers_rating ON workers(rating DESC)")
+
+            # Индексы для таблицы clients
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_clients_user_id ON clients(user_id)")
+
+            # Индексы для таблицы orders
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_client_id ON orders(client_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_city ON orders(city)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_category ON orders(category)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC)")
+            # Composite index для часто используемого запроса
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_status_category ON orders(status, category)")
+
+            # Индексы для таблицы bids
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_bids_order_id ON bids(order_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_bids_worker_id ON bids(worker_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_bids_status ON bids(status)")
+            # Composite index для проверки существования отклика
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_bids_order_worker ON bids(order_id, worker_id)")
+
+            # Индексы для таблицы reviews
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_reviews_from_user ON reviews(from_user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_reviews_to_user ON reviews(to_user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_reviews_order_id ON reviews(order_id)")
+
+            conn.commit()
+            print("✅ Индексы успешно созданы для оптимизации производительности")
+
+        except Exception as e:
+            print(f"⚠️  Предупреждение при создании индексов: {e}")
+
+def create_order(client_id, city, categories, description, photos, budget_type="none", budget_value=0):
+    """Создаёт новый заказ"""
+    # Rate limiting: проверяем лимит заказов
+    allowed, remaining_seconds = _rate_limiter.is_allowed(client_id, "create_order", RATE_LIMIT_ORDERS_PER_HOUR)
+    if not allowed:
+        minutes = remaining_seconds // 60
+        raise ValueError(f"❌ Превышен лимит создания заказов. Попробуйте через {minutes} мин.")
+
+    # Валидация входных данных
+    city = validate_string_length(city, MAX_CITY_LENGTH, "city")
+    description = validate_string_length(description, MAX_DESCRIPTION_LENGTH, "description")
+
+    with get_connection() as conn:
+        cursor = get_cursor(conn)
+
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+
         # Преобразуем список категорий в строку
         categories_str = ", ".join(categories) if isinstance(categories, list) else categories
-        
+        categories_str = validate_string_length(categories_str, MAX_CATEGORY_LENGTH, "categories")
+
         # Преобразуем список фото в строку
         photos_str = ",".join(photos) if isinstance(photos, list) else photos
-        
+
         cursor.execute("""
             INSERT INTO orders (
                 client_id, city, category, description, photos,
@@ -601,7 +816,7 @@ def create_order(client_id, city, categories, description, photos, budget_type="
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)
         """, (client_id, city, categories_str, description, photos_str, budget_type, budget_value, now))
-        
+
         conn.commit()
         return cursor.lastrowid
 
@@ -666,20 +881,28 @@ def get_order_by_id(order_id):
 
 def create_bid(order_id, worker_id, proposed_price, currency, comment=""):
     """Создаёт отклик мастера на заказ"""
+    # Rate limiting: проверяем лимит откликов
+    allowed, remaining_seconds = _rate_limiter.is_allowed(worker_id, "create_bid", RATE_LIMIT_BIDS_PER_HOUR)
+    if not allowed:
+        minutes = remaining_seconds // 60
+        raise ValueError(f"❌ Превышен лимит откликов. Попробуйте через {minutes} мин.")
+
+    # Валидация входных данных
+    comment = validate_string_length(comment, MAX_COMMENT_LENGTH, "comment")
+
     with get_connection() as conn:
         cursor = get_cursor(conn)
-        
-        from datetime import datetime
+
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+
         cursor.execute("""
             INSERT INTO bids (
-                order_id, worker_id, proposed_price, currency, 
+                order_id, worker_id, proposed_price, currency,
                 comment, created_at, status
             )
             VALUES (?, ?, ?, ?, ?, ?, 'active')
         """, (order_id, worker_id, proposed_price, currency, comment, now))
-        
+
         conn.commit()
         return cursor.lastrowid
 

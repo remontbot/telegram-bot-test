@@ -67,6 +67,7 @@ def main():
     db.migrate_add_portfolio_photos()  # Добавляем колонку если её нет
     db.migrate_add_order_photos()  # Добавляем колонку photos в orders
     db.migrate_add_currency_to_bids()  # Добавляем колонку currency в bids
+    db.create_indexes()  # Создаем индексы для оптимизации производительности
 
     token = get_bot_token()
 

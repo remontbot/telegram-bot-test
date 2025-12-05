@@ -2417,17 +2417,33 @@ async def worker_bid_publish(update: Update, context: ContextTypes.DEFAULT_TYPE)
         user = db.get_user(telegram_id)
         worker_profile = db.get_worker_profile(user["id"])
         
-        # Создаём отклик
-        bid_id = db.create_bid(
-            order_id=order_id,
-            worker_id=worker_profile["id"],
-            proposed_price=price,
-            currency=currency,
-            comment=comment
-        )
-        
+        # Создаём отклик (может вызвать ValueError при rate limiting)
+        try:
+            bid_id = db.create_bid(
+                order_id=order_id,
+                worker_id=worker_profile["id"],
+                proposed_price=price,
+                currency=currency,
+                comment=comment
+            )
+        except ValueError as e:
+            # Rate limiting error
+            if hasattr(update, 'callback_query'):
+                message = update.callback_query.message
+            else:
+                message = update.message
+
+            await message.reply_text(
+                str(e),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⬅️ Назад", callback_data="worker_view_orders")
+                ]])
+            )
+            context.user_data.clear()
+            return ConversationHandler.END
+
         logger.info(f"✅ Отклик #{bid_id} создан мастером {worker_profile['id']} на заказ {order_id}")
-        
+
         # Отправляем уведомление клиенту
         order = db.get_order_by_id(order_id)
         if order:
@@ -2833,15 +2849,25 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.info(f"description: {context.user_data.get('order_description')}")
         logger.info(f"photos: {len(context.user_data.get('order_photos', []))}")
         
-        # Создаём заказ в БД
-        order_id = db.create_order(
-            client_id=context.user_data["order_client_id"],
-            city=context.user_data["order_city"],
-            categories=context.user_data["order_categories"],
-            description=context.user_data["order_description"],
-            photos=context.user_data.get("order_photos", [])
-        )
-        
+        # Создаём заказ в БД (может вызвать ValueError при rate limiting)
+        try:
+            order_id = db.create_order(
+                client_id=context.user_data["order_client_id"],
+                city=context.user_data["order_city"],
+                categories=context.user_data["order_categories"],
+                description=context.user_data["order_description"],
+                photos=context.user_data.get("order_photos", [])
+            )
+        except ValueError as e:
+            # Rate limiting error
+            keyboard = [[InlineKeyboardButton("⬅️ В меню", callback_data="show_client_menu")]]
+            await message.reply_text(
+                str(e),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            context.user_data.clear()
+            return ConversationHandler.END
+
         logger.info(f"✅ Заказ #{order_id} успешно сохранён в БД!")
         
         categories_text = ", ".join(context.user_data["order_categories"])
