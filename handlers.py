@@ -3282,35 +3282,18 @@ async def worker_bid_publish(update: Update, context: ContextTypes.DEFAULT_TYPE)
             # Получаем telegram_id клиента
             client = db.get_client_by_id(order['client_id'])
             client_user = db.get_user_by_id(client['user_id'])
-            
-            try:
-                # Отправляем уведомление (нужен context.bot)
-                if hasattr(update, 'callback_query'):
-                    bot = update.callback_query.bot
-                else:
-                    bot = update.message.bot
-                    
-                worker_name = worker_profile.get('name', 'Мастер')
-                worker_rating = worker_profile.get('rating', 0)
-                worker_rating_count = worker_profile.get('rating_count', 0)
-                
-                rating_text = ""
-                if worker_rating_count > 0:
-                    rating_text = f"⭐ {worker_rating:.1f} ({worker_rating_count} отзывов)"
-                
-                await bot.send_message(
-                    chat_id=client_user['telegram_id'],
-                    text=f"💬 <b>Новый отклик на ваш заказ!</b>\n\n"
-                    f"📋 Заказ #{order_id}\n"
-                    f"👤 Мастер: {worker_name}\n"
-                    f"{rating_text}\n"
-                    f"💰 Цена: <b>{price} {currency}</b>\n"
-                    f"📝 Комментарий: {comment if comment else 'Нет'}\n\n"
-                    f"Посмотреть все отклики можно в разделе «Мои заказы»",
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                logger.error(f"Ошибка отправки уведомления клиенту: {e}")
+
+            worker_name = worker_profile.get('name', 'Мастер')
+
+            # Используем новую функцию уведомления
+            await notify_client_new_bid(
+                context,
+                client_user['telegram_id'],
+                order_id,
+                worker_name,
+                price,
+                currency
+            )
         
         # Подтверждение мастеру
         keyboard = [[InlineKeyboardButton("📋 К доступным заказам", callback_data="worker_view_orders")]]
@@ -3701,22 +3684,47 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
             return ConversationHandler.END
 
         logger.info(f"✅ Заказ #{order_id} успешно сохранён в БД!")
-        
+
+        # Получаем созданный заказ для отправки уведомлений
+        order = db.get_order_by_id(order_id)
+        if order:
+            order_dict = dict(order)
+
+            # Находим всех мастеров в нужных категориях и отправляем уведомления
+            notified_workers = set()  # Чтобы не уведомлять одного мастера несколько раз
+            for category in context.user_data["order_categories"]:
+                workers, _, _ = db.get_all_workers(category=category)
+                for worker in workers:
+                    worker_dict = dict(worker)
+                    worker_id = worker_dict['id']
+
+                    if worker_id in notified_workers:
+                        continue
+
+                    worker_user = db.get_user_by_id(worker_dict['user_id'])
+                    if worker_user:
+                        await notify_worker_new_order(
+                            context,
+                            worker_user['telegram_id'],
+                            order_dict
+                        )
+                        notified_workers.add(worker_id)
+
         categories_text = ", ".join(context.user_data["order_categories"])
         photos_count = len(context.user_data.get("order_photos", []))
-        
+
         keyboard = [
             [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
             [InlineKeyboardButton("⬅️ В меню", callback_data="show_client_menu")],
         ]
-        
+
         await message.reply_text(
             "🎉 <b>Заказ опубликован!</b>\n\n"
             f"📍 Город: {context.user_data['order_city']}\n"
             f"🔧 Категории: {categories_text}\n"
             f"📸 Фото: {photos_count}\n"
             f"📝 Описание: {context.user_data['order_description'][:50]}...\n\n"
-            "Мастера увидят ваш заказ и начнут откликаться с предложениями цен!\n"
+            "Мастера получили уведомления о вашем заказе и скоро начнут откликаться!\n"
             "Вы сможете выбрать лучшего!",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -4135,6 +4143,167 @@ async def show_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================
 # СИСТЕМА УВЕДОМЛЕНИЙ (ANNOUNCE)
 # ============================================
+
+# ===== NOTIFICATION HELPERS =====
+
+async def notify_worker_new_order(context, worker_telegram_id, order_dict):
+    """Уведомление мастеру о новом заказе в его категории"""
+    try:
+        text = (
+            f"🔔 <b>Новый заказ!</b>\n\n"
+            f"📍 Город: {order_dict.get('city', 'Не указан')}\n"
+            f"🔧 Категория: {order_dict.get('category', 'Не указана')}\n\n"
+            f"📝 <b>Описание:</b>\n{order_dict.get('description', 'Без описания')}\n\n"
+            f"💡 Перейдите в раздел «Доступные заказы», чтобы откликнуться!"
+        )
+
+        await context.bot.send_message(
+            chat_id=worker_telegram_id,
+            text=text,
+            parse_mode="HTML"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при отправке уведомления мастеру {worker_telegram_id}: {e}")
+        return False
+
+
+async def notify_client_new_bid(context, client_telegram_id, order_id, worker_name, price, currency):
+    """Уведомление клиенту о новом отклике на его заказ"""
+    try:
+        text = (
+            f"🔔 <b>Новый отклик на ваш заказ #{order_id}!</b>\n\n"
+            f"👤 Мастер: {worker_name}\n"
+            f"💰 Предложенная цена: {price} {currency}\n\n"
+            f"💡 Посмотрите все отклики в разделе «Мои заказы»"
+        )
+
+        await context.bot.send_message(
+            chat_id=client_telegram_id,
+            text=text,
+            parse_mode="HTML"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при отправке уведомления клиенту {client_telegram_id}: {e}")
+        return False
+
+
+async def notify_worker_selected(context, worker_telegram_id, order_id, client_name, client_phone):
+    """Уведомление мастеру что его выбрали для заказа"""
+    try:
+        text = (
+            f"🎉 <b>Вас выбрали!</b>\n\n"
+            f"Клиент выбрал вас для выполнения заказа #{order_id}\n\n"
+            f"📞 <b>Контакт клиента:</b>\n"
+            f"Имя: {client_name}\n"
+            f"Телефон: <code>{client_phone}</code>\n\n"
+            f"✅ Свяжитесь с клиентом и обсудите детали заказа!\n\n"
+            f"💡 После завершения работы не забудьте отметить заказ как выполненный."
+        )
+
+        await context.bot.send_message(
+            chat_id=worker_telegram_id,
+            text=text,
+            parse_mode="HTML"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при отправке уведомления мастеру {worker_telegram_id}: {e}")
+        return False
+
+
+async def notify_client_master_selected(context, client_telegram_id, order_id, worker_name, worker_phone):
+    """Уведомление клиенту что он успешно выбрал мастера"""
+    try:
+        text = (
+            f"✅ <b>Мастер выбран!</b>\n\n"
+            f"Вы выбрали мастера для заказа #{order_id}\n\n"
+            f"👤 <b>Контакт мастера:</b>\n"
+            f"Имя: {worker_name}\n"
+            f"Телефон: <code>{worker_phone}</code>\n\n"
+            f"✅ Свяжитесь с мастером и обсудите детали заказа!\n\n"
+            f"💡 После завершения работы не забудьте отметить заказ как выполненный и оставить отзыв."
+        )
+
+        await context.bot.send_message(
+            chat_id=client_telegram_id,
+            text=text,
+            parse_mode="HTML"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при отправке уведомления клиенту {client_telegram_id}: {e}")
+        return False
+
+
+async def notify_completion_request(context, recipient_telegram_id, order_id, requester_role):
+    """Уведомление о том что другая сторона отметила заказ как завершённый"""
+    role_text = "Клиент" if requester_role == "client" else "Мастер"
+
+    try:
+        text = (
+            f"✅ <b>Запрос на завершение заказа #{order_id}</b>\n\n"
+            f"{role_text} отметил заказ как выполненный.\n\n"
+            f"Если работа действительно завершена, подтвердите завершение в разделе «Мои заказы».\n\n"
+            f"💡 После подтверждения обеих сторон вы сможете оставить отзыв."
+        )
+
+        await context.bot.send_message(
+            chat_id=recipient_telegram_id,
+            text=text,
+            parse_mode="HTML"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при отправке уведомления {recipient_telegram_id}: {e}")
+        return False
+
+
+async def notify_order_completed(context, telegram_id, order_id, role):
+    """Уведомление об успешном завершении заказа"""
+    try:
+        text = (
+            f"🎉 <b>Заказ #{order_id} завершён!</b>\n\n"
+            f"Обе стороны подтвердили завершение заказа.\n\n"
+            f"💬 Не забудьте оставить отзыв о {'мастере' if role == 'client' else 'клиенте'}!\n\n"
+            f"Это поможет другим пользователям сделать правильный выбор. 🤝"
+        )
+
+        await context.bot.send_message(
+            chat_id=telegram_id,
+            text=text,
+            parse_mode="HTML"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при отправке уведомления {telegram_id}: {e}")
+        return False
+
+
+async def notify_new_review(context, telegram_id, reviewer_name, rating, order_id):
+    """Уведомление о получении нового отзыва"""
+    stars = "⭐" * int(rating)
+
+    try:
+        text = (
+            f"📝 <b>Новый отзыв!</b>\n\n"
+            f"👤 От: {reviewer_name}\n"
+            f"{stars} {rating}/5\n"
+            f"📋 Заказ: #{order_id}\n\n"
+            f"Посмотрите отзыв в своём профиле!"
+        )
+
+        await context.bot.send_message(
+            chat_id=telegram_id,
+            text=text,
+            parse_mode="HTML"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при отправке уведомления {telegram_id}: {e}")
+        return False
+
 
 async def announce_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
