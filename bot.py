@@ -485,6 +485,50 @@ def main():
         )
     )
 
+    # --- Обработчики просмотра откликов ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.view_order_bids,
+            pattern="^view_bids_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.bid_navigate,
+            pattern="^bid_(prev|next)$"
+        )
+    )
+
+    # --- Обработчики выбора мастера и оплаты ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.select_master,
+            pattern="^select_master_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.pay_with_stars,
+            pattern="^pay_stars_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.pay_with_card,
+            pattern="^pay_card_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.test_payment_success,
+            pattern="^test_payment_success_"
+        )
+    )
+
     # --- ConversationHandler для отзывов ---
     review_conv_handler = ConversationHandler(
         entry_points=[

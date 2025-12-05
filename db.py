@@ -1529,26 +1529,34 @@ def create_bid(order_id, worker_id, proposed_price, currency, comment=""):
 
 
 def get_bids_for_order(order_id):
-    """Получает все отклики для заказа"""
+    """Получает все отклики для заказа с полной информацией о мастере"""
     with get_db_connection() as conn:
-        
+
         cursor = get_cursor(conn)
-        
+
         cursor.execute("""
-            SELECT 
+            SELECT
                 b.*,
                 w.name as worker_name,
                 w.rating as worker_rating,
                 w.rating_count as worker_rating_count,
                 w.experience as worker_experience,
-                w.phone as worker_phone
+                w.phone as worker_phone,
+                w.profile_photo as worker_profile_photo,
+                w.portfolio_photos as worker_portfolio_photos,
+                w.description as worker_description,
+                w.city as worker_city,
+                w.categories as worker_categories,
+                w.verified_reviews as worker_verified_reviews,
+                u.telegram_id as worker_telegram_id
             FROM bids b
             JOIN workers w ON b.worker_id = w.id
+            JOIN users u ON w.user_id = u.id
             WHERE b.order_id = ?
             AND b.status = 'active'
             ORDER BY b.created_at ASC
         """, (order_id,))
-        
+
         return cursor.fetchall()
 
 
@@ -1556,13 +1564,26 @@ def check_worker_bid_exists(order_id, worker_id):
     """Проверяет, откликался ли уже мастер на этот заказ"""
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
-        
+
         cursor.execute("""
             SELECT COUNT(*) FROM bids
             WHERE order_id = ? AND worker_id = ?
         """, (order_id, worker_id))
-        
+
         return cursor.fetchone()[0] > 0
+
+
+def get_bids_count_for_order(order_id):
+    """Получает количество активных откликов для заказа"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        cursor.execute("""
+            SELECT COUNT(*) FROM bids
+            WHERE order_id = ? AND status = 'active'
+        """, (order_id,))
+
+        return cursor.fetchone()[0]
 
 
 def select_bid(bid_id):

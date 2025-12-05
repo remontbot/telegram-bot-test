@@ -18,6 +18,18 @@ import db
 
 logger = logging.getLogger(__name__)
 
+
+# ===== HELPER FUNCTIONS =====
+
+def _get_bids_word(count):
+    """Возвращает правильное склонение слова 'отклик'"""
+    if count % 10 == 1 and count % 100 != 11:
+        return "отклик"
+    elif count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
+        return "отклика"
+    else:
+        return "откликов"
+
 (
     SELECTING_ROLE,
     REGISTER_MASTER_NAME,
@@ -1941,54 +1953,67 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Формируем список заказов
         orders_text = "📂 <b>Мои заказы</b>\n\n"
-        
+
+        keyboard = []
+
         for i, order in enumerate(orders[:5], 1):  # Показываем последние 5
             order_dict = dict(order)
-            
+            order_id = order_dict['id']
+
             status_emoji = {
                 "open": "🟢",
-                "pending_choice": "🟡", 
+                "pending_choice": "🟡",
                 "master_selected": "🔵",
                 "contact_shared": "✅",
+                "completed": "✅",
                 "done": "✅",
                 "canceled": "❌"
             }
-            
+
             status_text = {
                 "open": "Открыт",
                 "pending_choice": "Ожидает выбора",
                 "master_selected": "Мастер выбран",
                 "contact_shared": "Контакт передан",
+                "completed": "Завершён",
                 "done": "Выполнен",
                 "canceled": "Отменён"
             }
-            
+
             emoji = status_emoji.get(order_dict.get("status", "open"), "⚪")
             status = status_text.get(order_dict.get("status", "open"), "Неизвестно")
-            
+
             orders_text += f"{emoji} <b>Заказ #{order_dict['id']}</b> - {status}\n"
             orders_text += f"📍 {order_dict.get('city', 'Не указан')}\n"
             orders_text += f"🔧 {order_dict.get('category', 'Не указаны')}\n"
-            
+
             # Показываем начало описания
             description = order_dict.get('description', '')
             if len(description) > 50:
                 description = description[:50] + "..."
             orders_text += f"📝 {description}\n"
-            
+
             # Количество фото
             photos = order_dict.get('photos', '')
             photos_count = len([p for p in photos.split(',') if p]) if photos else 0
             if photos_count > 0:
                 orders_text += f"📸 {photos_count} фото\n"
-            
+
+            # Количество откликов
+            bids_count = db.get_bids_count_for_order(order_id)
+            if bids_count > 0:
+                orders_text += f"💼 <b>{bids_count} {_get_bids_word(bids_count)}</b>\n"
+                # Добавляем кнопку для просмотра откликов
+                keyboard.append([InlineKeyboardButton(
+                    f"💼 Откликов на заказ #{order_id}: {bids_count}",
+                    callback_data=f"view_bids_{order_id}"
+                )])
+
             orders_text += f"📅 {order_dict.get('created_at', '')}\n"
             orders_text += "\n"
-        
-        keyboard = [
-            [InlineKeyboardButton("📝 Создать новый заказ", callback_data="client_create_order")],
-            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")],
-        ]
+
+        keyboard.append([InlineKeyboardButton("📝 Создать новый заказ", callback_data="client_create_order")])
+        keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")])
         
         await query.edit_message_text(
             orders_text,
@@ -1998,13 +2023,476 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         logger.error(f"Ошибка в client_my_orders: {e}", exc_info=True)
-        
+
         keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")]]
-        
+
         await query.edit_message_text(
             f"❌ Ошибка при загрузке заказов:\n{str(e)}\n\nПопробуйте позже.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+
+async def view_order_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Просмотр откликов на заказ клиента с навигацией"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # Извлекаем order_id из callback_data
+        order_id = int(query.data.replace("view_bids_", ""))
+
+        # Проверяем что заказ принадлежит текущему пользователю
+        user = db.get_user(query.from_user.id)
+        if not user:
+            await query.edit_message_text(
+                "❌ Ошибка: пользователь не найден.",
+                parse_mode="HTML"
+            )
+            return
+
+        client_profile = db.get_client_profile(user["id"])
+        if not client_profile:
+            await query.edit_message_text(
+                "❌ Ошибка: профиль клиента не найден.",
+                parse_mode="HTML"
+            )
+            return
+
+        # Получаем заказ
+        order = db.get_order(order_id)
+        if not order or order['client_id'] != client_profile['id']:
+            await query.edit_message_text(
+                "❌ Заказ не найден или у вас нет доступа к нему.",
+                parse_mode="HTML"
+            )
+            return
+
+        # Получаем все отклики
+        bids = db.get_bids_for_order(order_id)
+
+        if not bids:
+            keyboard = [[InlineKeyboardButton("⬅️ К моим заказам", callback_data="client_my_orders")]]
+            await query.edit_message_text(
+                f"💼 <b>Отклики на заказ #{order_id}</b>\n\n"
+                "Пока нет откликов от мастеров.\n\n"
+                "Ожидайте, мастера скоро откликнутся!",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+        # Сохраняем отклики в контексте для навигации
+        context.user_data['viewing_bids'] = {
+            'order_id': order_id,
+            'bids': [dict(bid) for bid in bids],
+            'current_index': 0
+        }
+
+        # Показываем первый отклик
+        await show_bid_card(update, context, query=query)
+
+    except Exception as e:
+        logger.error(f"Ошибка в view_order_bids: {e}", exc_info=True)
+        keyboard = [[InlineKeyboardButton("⬅️ К моим заказам", callback_data="client_my_orders")]]
+        await query.edit_message_text(
+            f"❌ Ошибка при загрузке откликов:\n{str(e)}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+
+async def show_bid_card(update: Update, context: ContextTypes.DEFAULT_TYPE, query=None):
+    """Показывает карточку отклика с информацией о мастере"""
+    if not query:
+        query = update.callback_query
+        await query.answer()
+
+    try:
+        bid_data = context.user_data.get('viewing_bids')
+        if not bid_data:
+            await query.edit_message_text(
+                "❌ Ошибка: данные откликов не найдены.",
+                parse_mode="HTML"
+            )
+            return
+
+        bids = bid_data['bids']
+        current_index = bid_data['current_index']
+        bid = bids[current_index]
+
+        # Формируем текст карточки мастера
+        text = f"💼 <b>Отклик {current_index + 1} из {len(bids)}</b>\n\n"
+
+        text += f"👤 <b>{bid['worker_name']}</b>\n"
+
+        # Рейтинг
+        rating = bid.get('worker_rating', 0)
+        rating_count = bid.get('worker_rating_count', 0)
+        if rating > 0:
+            stars = "⭐" * int(rating)
+            text += f"{stars} {rating:.1f} ({rating_count} отзывов)\n"
+        else:
+            text += "⭐ Новый мастер (пока нет отзывов)\n"
+
+        # Проверенные отзывы
+        verified_reviews = bid.get('worker_verified_reviews', 0)
+        if verified_reviews > 0:
+            text += f"✅ {verified_reviews} проверенных отзывов\n"
+
+        # Опыт
+        experience = bid.get('worker_experience', '')
+        if experience:
+            text += f"📅 Опыт: {experience}\n"
+
+        # Город
+        city = bid.get('worker_city', '')
+        if city:
+            text += f"📍 Город: {city}\n"
+
+        # Категории
+        categories = bid.get('worker_categories', '')
+        if categories:
+            text += f"🔧 Услуги: {categories}\n"
+
+        text += "\n"
+
+        # Предложенная цена
+        price = bid.get('price', 0)
+        currency = bid.get('currency', 'BYN')
+        text += f"💰 <b>Предложенная цена: {price} {currency}</b>\n\n"
+
+        # Комментарий к отклику
+        comment = bid.get('comment', '')
+        if comment:
+            text += f"💬 <b>Комментарий мастера:</b>\n{comment}\n\n"
+
+        # Описание мастера
+        description = bid.get('worker_description', '')
+        if description:
+            if len(description) > 200:
+                description = description[:200] + "..."
+            text += f"📝 <b>О мастере:</b>\n{description}\n\n"
+
+        text += "💡 <i>Выберите этого мастера, чтобы получить доступ к его контактам</i>"
+
+        # Кнопки навигации и действий
+        keyboard = []
+
+        # Навигация (если откликов больше 1)
+        if len(bids) > 1:
+            nav_buttons = []
+            if current_index > 0:
+                nav_buttons.append(InlineKeyboardButton("◀️ Предыдущий", callback_data="bid_prev"))
+            nav_buttons.append(InlineKeyboardButton(
+                f"{current_index + 1}/{len(bids)}",
+                callback_data="noop"
+            ))
+            if current_index < len(bids) - 1:
+                nav_buttons.append(InlineKeyboardButton("Следующий ▶️", callback_data="bid_next"))
+            keyboard.append(nav_buttons)
+
+        # Кнопка выбора мастера
+        keyboard.append([InlineKeyboardButton(
+            "✅ Выбрать этого мастера",
+            callback_data=f"select_master_{bid['id']}"
+        )])
+
+        # Кнопка просмотра всех работ (если есть фото)
+        portfolio_photos = bid.get('worker_portfolio_photos', '')
+        if portfolio_photos:
+            keyboard.append([InlineKeyboardButton(
+                "📸 Посмотреть работы мастера",
+                callback_data=f"view_worker_portfolio_{bid['worker_id']}"
+            )])
+
+        keyboard.append([InlineKeyboardButton("⬅️ К моим заказам", callback_data="client_my_orders")])
+
+        # Отправляем с фото профиля мастера, если есть
+        profile_photo = bid.get('worker_profile_photo', '')
+        portfolio_photos_list = [p.strip() for p in portfolio_photos.split(',') if p.strip()] if portfolio_photos else []
+
+        photo_to_show = profile_photo if profile_photo else (portfolio_photos_list[0] if portfolio_photos_list else None)
+
+        if photo_to_show:
+            # Удаляем старое сообщение и отправляем новое с фото
+            try:
+                await query.message.delete()
+            except:
+                pass
+
+            await context.bot.send_photo(
+                chat_id=query.from_user.id,
+                photo=photo_to_show,
+                caption=text,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            # Нет фото - просто редактируем текст
+            await query.edit_message_text(
+                text,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+
+    except Exception as e:
+        logger.error(f"Ошибка в show_bid_card: {e}", exc_info=True)
+        keyboard = [[InlineKeyboardButton("⬅️ К моим заказам", callback_data="client_my_orders")]]
+        await query.edit_message_text(
+            f"❌ Ошибка при отображении отклика:\n{str(e)}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+
+async def bid_navigate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Навигация между откликами"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        bid_data = context.user_data.get('viewing_bids')
+        if not bid_data:
+            await query.edit_message_text("❌ Ошибка: данные откликов не найдены.")
+            return
+
+        bids = bid_data['bids']
+        current_index = bid_data['current_index']
+
+        if "prev" in query.data:
+            current_index = max(0, current_index - 1)
+        elif "next" in query.data:
+            current_index = min(len(bids) - 1, current_index + 1)
+
+        context.user_data['viewing_bids']['current_index'] = current_index
+
+        await show_bid_card(update, context, query=query)
+
+    except Exception as e:
+        logger.error(f"Ошибка в bid_navigate: {e}", exc_info=True)
+
+
+async def select_master(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора мастера клиентом"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # Извлекаем bid_id из callback_data
+        bid_id = int(query.data.replace("select_master_", ""))
+
+        # Получаем информацию об отклике
+        bids = context.user_data.get('viewing_bids', {}).get('bids', [])
+        selected_bid = None
+        for bid in bids:
+            if bid['id'] == bid_id:
+                selected_bid = bid
+                break
+
+        if not selected_bid:
+            await query.edit_message_text(
+                "❌ Ошибка: отклик не найден.",
+                parse_mode="HTML"
+            )
+            return
+
+        order_id = selected_bid['order_id']
+        worker_name = selected_bid['worker_name']
+        price = selected_bid['price']
+        currency = selected_bid['currency']
+
+        # Показываем окно подтверждения с оплатой
+        text = (
+            f"✅ <b>Вы выбрали мастера:</b>\n\n"
+            f"👤 {worker_name}\n"
+            f"💰 Цена: {price} {currency}\n\n"
+            f"📞 <b>Для получения контакта мастера необходима оплата:</b>\n"
+            f"💳 Стоимость доступа: <b>1 BYN</b> (или 10 Telegram Stars)\n\n"
+            f"После оплаты вы получите:\n"
+            f"• Контактный телефон мастера\n"
+            f"• Возможность напрямую связаться с ним\n"
+            f"• Мастер получит уведомление о вашем выборе\n\n"
+            f"💡 <i>Выберите удобный способ оплаты:</i>"
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("⭐ Оплатить Telegram Stars", callback_data=f"pay_stars_{bid_id}")],
+            [InlineKeyboardButton("💳 Оплатить картой", callback_data=f"pay_card_{bid_id}")],
+            [InlineKeyboardButton("⬅️ Назад к откликам", callback_data=f"view_bids_{order_id}")],
+        ]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в select_master: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка при выборе мастера:\n{str(e)}",
+            parse_mode="HTML"
+        )
+
+
+async def pay_with_stars(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Оплата через Telegram Stars"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        bid_id = int(query.data.replace("pay_stars_", ""))
+
+        # TODO: Интеграция с Telegram Stars Payment API
+        # Здесь должна быть реальная интеграция с платежной системой Telegram Stars
+        # На данный момент - заглушка для демонстрации
+
+        text = (
+            "⭐ <b>Оплата Telegram Stars</b>\n\n"
+            "🚧 Функция оплаты через Telegram Stars находится в разработке.\n\n"
+            "Для тестирования используйте кнопку ниже для имитации оплаты:"
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("✅ Имитировать успешную оплату (тест)", callback_data=f"test_payment_success_{bid_id}")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data=f"select_master_{bid_id}")],
+        ]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в pay_with_stars: {e}", exc_info=True)
+
+
+async def pay_with_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Оплата картой через внешний платежный сервис"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        bid_id = int(query.data.replace("pay_card_", ""))
+
+        # TODO: Интеграция с внешней платежной системой (Stripe, BePaid, и т.д.)
+        # Здесь должна быть реальная интеграция с платежным провайдером
+
+        text = (
+            "💳 <b>Оплата банковской картой</b>\n\n"
+            "🚧 Функция оплаты картой находится в разработке.\n\n"
+            "Планируется интеграция с:\n"
+            "• BePaid (Беларусь)\n"
+            "• Stripe (международные платежи)\n\n"
+            "Для тестирования используйте кнопку ниже для имитации оплаты:"
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("✅ Имитировать успешную оплату (тест)", callback_data=f"test_payment_success_{bid_id}")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data=f"select_master_{bid_id}")],
+        ]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в pay_with_card: {e}", exc_info=True)
+
+
+async def test_payment_success(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тестовая функция для имитации успешной оплаты"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        bid_id = int(query.data.replace("test_payment_success_", ""))
+
+        # Получаем информацию об отклике
+        bids = context.user_data.get('viewing_bids', {}).get('bids', [])
+        selected_bid = None
+        for bid in bids:
+            if bid['id'] == bid_id:
+                selected_bid = bid
+                break
+
+        if not selected_bid:
+            await query.edit_message_text("❌ Ошибка: отклик не найден.")
+            return
+
+        # Отмечаем отклик как выбранный
+        success = db.select_bid(bid_id)
+
+        if not success:
+            await query.edit_message_text("❌ Ошибка при выборе мастера.")
+            return
+
+        # Получаем контакт мастера
+        worker_phone = selected_bid.get('worker_phone', 'Не указан')
+        worker_name = selected_bid['worker_name']
+        worker_telegram_id = selected_bid.get('worker_telegram_id')
+        order_id = selected_bid['order_id']
+
+        # Получаем информацию о клиенте для уведомления мастера
+        user = db.get_user(query.from_user.id)
+        client_profile = db.get_client_profile(user["id"]) if user else None
+
+        # Отправляем уведомление мастеру
+        if worker_telegram_id:
+            try:
+                await context.bot.send_message(
+                    chat_id=worker_telegram_id,
+                    text=(
+                        f"🎉 <b>Ваш отклик выбран!</b>\n\n"
+                        f"Клиент выбрал вас для выполнения заказа #{order_id}\n\n"
+                        f"📞 Свяжитесь с клиентом:\n"
+                        f"Телефон: {client_profile.get('phone', 'Не указан') if client_profile else 'Не указан'}\n"
+                        f"Имя: {client_profile.get('name', 'Не указано') if client_profile else 'Не указано'}\n\n"
+                        f"✅ Теперь вы можете обсудить детали заказа и приступить к работе!"
+                    ),
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при отправке уведомления мастеру: {e}")
+
+        # Показываем клиенту контакт мастера
+        text = (
+            f"✅ <b>Оплата прошла успешно!</b>\n\n"
+            f"👤 <b>Контакт выбранного мастера:</b>\n\n"
+            f"Имя: {worker_name}\n"
+            f"📞 Телефон: <code>{worker_phone}</code>\n\n"
+            f"💡 <b>Следующие шаги:</b>\n"
+            f"1. Позвоните мастеру и обсудите детали заказа\n"
+            f"2. Договоритесь о времени и месте встречи\n"
+            f"3. После завершения работы не забудьте оставить отзыв!\n\n"
+            f"Мастер также получил ваш контакт и может связаться с вами.\n\n"
+            f"Удачного сотрудничества! 🤝"
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="show_client_menu")],
+        ]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+        # Очищаем контекст просмотра откликов
+        if 'viewing_bids' in context.user_data:
+            del context.user_data['viewing_bids']
+
+    except Exception as e:
+        logger.error(f"Ошибка в test_payment_success: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка при обработке оплаты:\n{str(e)}",
+            parse_mode="HTML"
         )
 
 
