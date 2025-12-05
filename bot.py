@@ -461,6 +461,21 @@ def main():
         )
     )
 
+    # --- Обработчики галереи работ ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.view_portfolio,
+            pattern="^view_portfolio$"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.portfolio_navigate,
+            pattern="^portfolio_(prev|next)$"
+        )
+    )
+
     # --- ConversationHandler для отзывов ---
     review_conv_handler = ConversationHandler(
         entry_points=[

@@ -819,17 +819,18 @@ async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE
         rating_count = profile_dict.get("rating_count") or 0
         verified_reviews = profile_dict.get("verified_reviews") or 0
         portfolio_photos = profile_dict.get("portfolio_photos") or ""
-        
+        profile_photo = profile_dict.get("profile_photo") or ""
+
         # Подсчёт фотографий
         photos_count = len(portfolio_photos.split(",")) if portfolio_photos else 0
-        
+
         if rating and rating > 0:
             rating_text = f"⭐ {rating:.1f}/5.0"
             reviews_text = f"📊 Отзывов: {rating_count} (проверенных: {verified_reviews})"
         else:
             rating_text = "⭐ Нет отзывов"
             reviews_text = "📊 Отзывов пока нет"
-        
+
         photos_text = f"📸 Фото работ: {photos_count}" if photos_count > 0 else "📸 Фото работ: не добавлено"
 
         text = (
@@ -850,17 +851,22 @@ async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE
             [InlineKeyboardButton("✏️ Редактировать профиль", callback_data="edit_profile_menu")],
         ]
 
+        # Добавляем кнопку просмотра работ если они есть
+        if photos_count > 0:
+            keyboard.append([InlineKeyboardButton("📸 Посмотреть все работы", callback_data="view_portfolio")])
+
         # Добавляем кнопку отзывов если они есть
         if rating_count > 0:
             keyboard.append([InlineKeyboardButton(f"📊 Отзывы ({rating_count})", callback_data=f"show_reviews_worker_{user_id}")])
 
         keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")])
-        
-        # Если есть фото - показываем первое
-        if portfolio_photos:
-            first_photo = portfolio_photos.split(",")[0]
+
+        # Показываем фото профиля (лицо), если есть. Иначе - первое из портфолио
+        photo_to_show = profile_photo if profile_photo else (portfolio_photos.split(",")[0] if portfolio_photos else None)
+
+        if photo_to_show:
             await query.message.reply_photo(
-                photo=first_photo,
+                photo=photo_to_show,
                 caption=text,
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(keyboard),
@@ -1194,9 +1200,127 @@ async def worker_add_photos_finish(query, context: ContextTypes.DEFAULT_TYPE):
         
         context.user_data.clear()
         logger.info("Context очищен после ошибки")
-        
+
         context.user_data.clear()
         return ConversationHandler.END
+
+
+# ------- ГАЛЕРЕЯ РАБОТ МАСТЕРА -------
+
+async def view_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Просмотр галереи работ мастера с навигацией"""
+    query = update.callback_query
+    await query.answer()
+
+    telegram_id = query.from_user.id
+    user = db.get_user(telegram_id)
+
+    if not user:
+        await query.edit_message_text("❌ Пользователь не найден")
+        return
+
+    user_dict = dict(user)
+    user_id = user_dict["id"]
+    worker_profile = db.get_worker_profile(user_id)
+
+    if not worker_profile:
+        await query.edit_message_text("❌ Профиль мастера не найден")
+        return
+
+    profile_dict = dict(worker_profile)
+    portfolio_photos = profile_dict.get("portfolio_photos") or ""
+
+    if not portfolio_photos:
+        await query.edit_message_text(
+            "📸 У вас пока нет фото работ.\n\nДобавьте их через редактирование профиля.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ К профилю", callback_data="worker_profile")
+            ]])
+        )
+        return
+
+    photo_ids = [p.strip() for p in portfolio_photos.split(",") if p.strip()]
+
+    # Сохраняем в context для навигации
+    context.user_data['portfolio_photos'] = photo_ids
+    context.user_data['current_portfolio_index'] = 0
+
+    # Показываем первое фото
+    keyboard = []
+
+    # Навигация если фото больше одного
+    if len(photo_ids) > 1:
+        nav_buttons = [
+            InlineKeyboardButton("◀️", callback_data="portfolio_prev"),
+            InlineKeyboardButton(f"1/{len(photo_ids)}", callback_data="noop"),
+            InlineKeyboardButton("▶️", callback_data="portfolio_next")
+        ]
+        keyboard.append(nav_buttons)
+
+    keyboard.append([InlineKeyboardButton("⬅️ К профилю", callback_data="worker_profile")])
+
+    try:
+        await query.message.delete()
+        await query.message.reply_photo(
+            photo=photo_ids[0],
+            caption=f"📸 <b>Фото работ</b>\n\n1 из {len(photo_ids)}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при показе галереи: {e}")
+        await query.edit_message_text("❌ Ошибка при загрузке фото")
+
+
+async def portfolio_navigate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Навигация по галерее работ"""
+    query = update.callback_query
+    await query.answer()
+
+    photo_ids = context.user_data.get('portfolio_photos', [])
+    current_index = context.user_data.get('current_portfolio_index', 0)
+
+    if not photo_ids:
+        return
+
+    # Определяем направление
+    if "prev" in query.data:
+        current_index = (current_index - 1) % len(photo_ids)
+    elif "next" in query.data:
+        current_index = (current_index + 1) % len(photo_ids)
+
+    context.user_data['current_portfolio_index'] = current_index
+
+    # Формируем keyboard
+    keyboard = []
+    if len(photo_ids) > 1:
+        nav_buttons = [
+            InlineKeyboardButton("◀️", callback_data="portfolio_prev"),
+            InlineKeyboardButton(f"{current_index + 1}/{len(photo_ids)}", callback_data="noop"),
+            InlineKeyboardButton("▶️", callback_data="portfolio_next")
+        ]
+        keyboard.append(nav_buttons)
+
+    keyboard.append([InlineKeyboardButton("⬅️ К профилю", callback_data="worker_profile")])
+
+    try:
+        await query.message.edit_media(
+            media=query.message.photo[-1].file_id,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except:
+        # Если edit_media не работает, удаляем и отправляем заново
+        try:
+            await query.message.delete()
+            await context.bot.send_photo(
+                chat_id=query.from_user.id,
+                photo=photo_ids[current_index],
+                caption=f"📸 <b>Фото работ</b>\n\n{current_index + 1} из {len(photo_ids)}",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except Exception as e:
+            logger.error(f"Ошибка навигации по галерее: {e}")
 
 
 # ------- РЕДАКТИРОВАНИЕ ПРОФИЛЯ -------
