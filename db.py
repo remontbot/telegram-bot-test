@@ -414,9 +414,17 @@ def migrate_add_portfolio_photos():
 
 def get_user(telegram_id):
     with get_db_connection() as conn:
-        
+
         cursor = get_cursor(conn)
         cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+        return cursor.fetchone()
+
+
+def get_user_by_id(user_id):
+    """Получает пользователя по внутреннему ID"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
         return cursor.fetchone()
 
 
@@ -589,6 +597,10 @@ def update_user_rating(user_id, new_rating, role_to):
 
 
 def add_review(from_user_id, to_user_id, order_id, role_from, role_to, rating, comment):
+    """
+    Добавляет отзыв и обновляет рейтинг пользователя.
+    Если роль получателя - worker, увеличивает счетчик verified_reviews.
+    """
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
         created_at = datetime.now().isoformat()
@@ -600,9 +612,265 @@ def add_review(from_user_id, to_user_id, order_id, role_from, role_to, rating, c
             """, (from_user_id, to_user_id, order_id, role_from, role_to, rating, comment, created_at))
             conn.commit()
             update_user_rating(to_user_id, rating, role_to)
+
+            # Увеличиваем счетчик проверенных отзывов для мастеров
+            if role_to == "worker":
+                increment_verified_reviews(to_user_id)
+
             return True
-        except sqlite3.IntegrityError:
+        except (sqlite3.IntegrityError, Exception) as e:
+            print(f"⚠️ Ошибка при добавлении отзыва: {e}")
             return False
+
+
+def get_reviews_for_user(user_id, role):
+    """
+    Получает все отзывы о пользователе.
+
+    Args:
+        user_id: ID пользователя
+        role: Роль пользователя ('worker' или 'client')
+
+    Returns:
+        List of reviews with reviewer info
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Получаем отзывы с информацией о том, кто оставил
+        cursor.execute("""
+            SELECT
+                r.rating,
+                r.comment,
+                r.created_at,
+                r.order_id,
+                r.role_from,
+                CASE
+                    WHEN r.role_from = 'worker' THEN w.name
+                    WHEN r.role_from = 'client' THEN c.name
+                END as reviewer_name
+            FROM reviews r
+            LEFT JOIN workers w ON r.from_user_id = w.user_id AND r.role_from = 'worker'
+            LEFT JOIN clients c ON r.from_user_id = c.user_id AND r.role_from = 'client'
+            WHERE r.to_user_id = ? AND r.role_to = ?
+            ORDER BY r.created_at DESC
+        """, (user_id, role))
+
+        return cursor.fetchall()
+
+
+def check_review_exists(order_id, from_user_id):
+    """
+    Проверяет, оставил ли пользователь уже отзыв по этому заказу.
+
+    Returns:
+        bool: True если отзыв уже существует
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT COUNT(*) FROM reviews
+            WHERE order_id = ? AND from_user_id = ?
+        """, (order_id, from_user_id))
+
+        count = cursor.fetchone()
+        if USE_POSTGRES:
+            return count['count'] > 0
+        else:
+            return count[0] > 0
+
+
+def increment_verified_reviews(user_id):
+    """
+    Увеличивает счетчик проверенных отзывов для мастера.
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            UPDATE workers
+            SET verified_reviews = verified_reviews + 1
+            WHERE user_id = ?
+        """, (user_id,))
+        conn.commit()
+
+
+def get_order_by_id(order_id):
+    """
+    Получает заказ по ID со всей информацией о клиенте.
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT
+                o.*,
+                c.name as client_name,
+                c.phone as client_phone,
+                c.user_id as client_user_id,
+                c.rating as client_rating,
+                c.rating_count as client_rating_count
+            FROM orders o
+            JOIN clients c ON o.client_id = c.id
+            WHERE o.id = ?
+        """, (order_id,))
+        return cursor.fetchone()
+
+
+def update_order_status(order_id, new_status):
+    """
+    Обновляет статус заказа.
+
+    Args:
+        order_id: ID заказа
+        new_status: Новый статус ('open', 'in_progress', 'completed', 'canceled')
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            UPDATE orders
+            SET status = ?
+            WHERE id = ?
+        """, (new_status, order_id))
+        conn.commit()
+
+
+def get_all_user_telegram_ids():
+    """
+    Получает все telegram_id пользователей для массовой рассылки.
+
+    Returns:
+        List of telegram_ids
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT telegram_id FROM users")
+        results = cursor.fetchall()
+
+        if USE_POSTGRES:
+            return [row['telegram_id'] for row in results]
+        else:
+            return [row[0] for row in results]
+
+
+def set_selected_worker(order_id, worker_id):
+    """
+    Устанавливает выбранного мастера для заказа и меняет статус на 'in_progress'.
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            UPDATE orders
+            SET selected_worker_id = ?, status = 'in_progress'
+            WHERE id = ?
+        """, (worker_id, order_id))
+        conn.commit()
+
+
+def mark_order_completed_by_client(order_id):
+    """
+    Клиент подтверждает завершение заказа.
+    Если мастер тоже подтвердил - меняет статус на 'completed'.
+
+    Returns:
+        bool: True если обе стороны подтвердили завершение
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Помечаем что клиент подтвердил
+        cursor.execute("""
+            UPDATE orders
+            SET completed_by_client = 1
+            WHERE id = ?
+        """, (order_id,))
+
+        # Проверяем подтвердил ли мастер
+        cursor.execute("""
+            SELECT completed_by_worker FROM orders WHERE id = ?
+        """, (order_id,))
+        row = cursor.fetchone()
+
+        if row:
+            if USE_POSTGRES:
+                worker_completed = row['completed_by_worker']
+            else:
+                worker_completed = row[0]
+
+            # Если обе стороны подтвердили - меняем статус
+            if worker_completed:
+                cursor.execute("""
+                    UPDATE orders SET status = 'completed' WHERE id = ?
+                """, (order_id,))
+                conn.commit()
+                return True
+
+        conn.commit()
+        return False
+
+
+def mark_order_completed_by_worker(order_id):
+    """
+    Мастер подтверждает завершение заказа.
+    Если клиент тоже подтвердил - меняет статус на 'completed'.
+
+    Returns:
+        bool: True если обе стороны подтвердили завершение
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Помечаем что мастер подтвердил
+        cursor.execute("""
+            UPDATE orders
+            SET completed_by_worker = 1
+            WHERE id = ?
+        """, (order_id,))
+
+        # Проверяем подтвердил ли клиент
+        cursor.execute("""
+            SELECT completed_by_client FROM orders WHERE id = ?
+        """, (order_id,))
+        row = cursor.fetchone()
+
+        if row:
+            if USE_POSTGRES:
+                client_completed = row['completed_by_client']
+            else:
+                client_completed = row[0]
+
+            # Если обе стороны подтвердили - меняем статус
+            if client_completed:
+                cursor.execute("""
+                    UPDATE orders SET status = 'completed' WHERE id = ?
+                """, (order_id,))
+                conn.commit()
+                return True
+
+        conn.commit()
+        return False
+
+
+def get_worker_info_for_order(order_id):
+    """
+    Получает информацию о мастере, работающем над заказом.
+
+    Returns:
+        dict with worker info or None
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT
+                w.id as worker_id,
+                w.user_id,
+                w.name,
+                w.phone,
+                w.rating,
+                w.rating_count
+            FROM orders o
+            JOIN workers w ON o.selected_worker_id = w.id
+            WHERE o.id = ?
+        """, (order_id,))
+        return cursor.fetchone()
 
 
 # --- Обновление полей профиля мастера ---
@@ -939,6 +1207,72 @@ def migrate_add_cascading_deletes():
 
         except Exception as e:
             print(f"⚠️  Предупреждение при добавлении cascading deletes: {e}")
+
+
+def migrate_add_order_completion_tracking():
+    """
+    Добавляет поля для отслеживания завершения заказа обеими сторонами.
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            if USE_POSTGRES:
+                print("📝 Добавление полей отслеживания завершения для PostgreSQL...")
+
+                # Проверяем и добавляем поля если их нет
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'orders' AND column_name = 'selected_worker_id'
+                        ) THEN
+                            ALTER TABLE orders ADD COLUMN selected_worker_id INTEGER;
+                            ALTER TABLE orders ADD CONSTRAINT orders_selected_worker_id_fkey
+                                FOREIGN KEY (selected_worker_id) REFERENCES workers(id) ON DELETE SET NULL;
+                        END IF;
+
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'orders' AND column_name = 'completed_by_client'
+                        ) THEN
+                            ALTER TABLE orders ADD COLUMN completed_by_client INTEGER DEFAULT 0;
+                        END IF;
+
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'orders' AND column_name = 'completed_by_worker'
+                        ) THEN
+                            ALTER TABLE orders ADD COLUMN completed_by_worker INTEGER DEFAULT 0;
+                        END IF;
+                    END $$;
+                """)
+                conn.commit()
+                print("✅ Поля отслеживания завершения успешно добавлены!")
+
+            else:
+                # Для SQLite проверяем существование колонок
+                cursor.execute("PRAGMA table_info(orders)")
+                columns = [column[1] for column in cursor.fetchall()]
+
+                if 'selected_worker_id' not in columns:
+                    print("📝 Добавление поля selected_worker_id...")
+                    cursor.execute("ALTER TABLE orders ADD COLUMN selected_worker_id INTEGER")
+
+                if 'completed_by_client' not in columns:
+                    print("📝 Добавление поля completed_by_client...")
+                    cursor.execute("ALTER TABLE orders ADD COLUMN completed_by_client INTEGER DEFAULT 0")
+
+                if 'completed_by_worker' not in columns:
+                    print("📝 Добавление поля completed_by_worker...")
+                    cursor.execute("ALTER TABLE orders ADD COLUMN completed_by_worker INTEGER DEFAULT 0")
+
+                conn.commit()
+                print("✅ Поля отслеживания завершения успешно добавлены!")
+
+        except Exception as e:
+            print(f"⚠️  Ошибка при добавлении полей отслеживания завершения: {e}")
 
 
 def create_indexes():

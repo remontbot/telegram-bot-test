@@ -71,6 +71,7 @@ def main():
     db.migrate_add_order_photos()  # Добавляем колонку photos в orders
     db.migrate_add_currency_to_bids()  # Добавляем колонку currency в bids
     db.migrate_add_cascading_deletes()  # Добавляем cascading deletes для PostgreSQL
+    db.migrate_add_order_completion_tracking()  # Добавляем отслеживание завершения заказов
     db.create_indexes()  # Создаем индексы для оптимизации производительности
 
     token = get_bot_token()
@@ -436,6 +437,51 @@ def main():
         )
     )
 
+    # --- Обработчики завершения заказа ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_complete_order,
+            pattern="^complete_order_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_complete_order,
+            pattern="^worker_complete_order_"
+        )
+    )
+
+    # --- Обработчики просмотра отзывов ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.show_reviews,
+            pattern="^show_reviews_"
+        )
+    )
+
+    # --- ConversationHandler для отзывов ---
+    review_conv_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(handlers.start_review, pattern="^leave_review_"),
+        ],
+        states={
+            handlers.REVIEW_SELECT_RATING: [
+                CallbackQueryHandler(handlers.review_select_rating, pattern="^review_rating_"),
+            ],
+            handlers.REVIEW_ENTER_COMMENT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.review_enter_comment),
+                CallbackQueryHandler(handlers.review_skip_comment, pattern="^review_skip_comment$"),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(handlers.cancel_review, pattern="^cancel_review$"),
+        ],
+        allow_reentry=True,
+    )
+
+    application.add_handler(review_conv_handler)
+
     # Команда для очистки профиля
     application.add_handler(
         CommandHandler("reset_profile", handlers.reset_profile_command)
@@ -449,6 +495,11 @@ def main():
     # Команда для добавления тестовых мастеров
     application.add_handler(
         CommandHandler("add_test_workers", handlers.add_test_workers_command)
+    )
+
+    # Команда для массовой рассылки уведомлений (только для администратора)
+    application.add_handler(
+        CommandHandler("announce", handlers.announce_command)
     )
 
     # Обработчик неизвестных команд

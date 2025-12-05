@@ -56,7 +56,10 @@ logger = logging.getLogger(__name__)
     BID_ENTER_PRICE,
     BID_SELECT_CURRENCY,
     BID_ENTER_COMMENT,
-) = range(34)
+    # Состояния для оставления отзыва
+    REVIEW_SELECT_RATING,
+    REVIEW_ENTER_COMMENT,
+) = range(36)
 
 
 def is_valid_name(name: str) -> bool:
@@ -845,8 +848,13 @@ async def show_worker_profile(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         keyboard = [
             [InlineKeyboardButton("✏️ Редактировать профиль", callback_data="edit_profile_menu")],
-            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")],
         ]
+
+        # Добавляем кнопку отзывов если они есть
+        if rating_count > 0:
+            keyboard.append([InlineKeyboardButton(f"📊 Отзывы ({rating_count})", callback_data=f"show_reviews_worker_{user_id}")])
+
+        keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")])
         
         # Если есть фото - показываем первое
         if portfolio_photos:
@@ -1927,12 +1935,19 @@ async def worker_view_order_details(update: Update, context: ContextTypes.DEFAUL
                     nav_buttons.append(InlineKeyboardButton("▶️", callback_data=f"order_photo_next_{order_id}"))
                 keyboard.append(nav_buttons)
             
-            # Кнопка отклика
-            if already_bid:
-                keyboard.append([InlineKeyboardButton("✅ Вы уже откликнулись", callback_data="noop")])
-            else:
-                keyboard.append([InlineKeyboardButton("💰 Откликнуться", callback_data=f"bid_on_order_{order_id}")])
-            
+            # Кнопка завершения заказа если мастер работает над ним
+            order_status = order_dict.get('status', 'open')
+            selected_worker_id = order_dict.get('selected_worker_id')
+
+            if order_status == 'in_progress' and selected_worker_id == worker_profile["id"]:
+                keyboard.append([InlineKeyboardButton("✅ Работа завершена", callback_data=f"worker_complete_order_{order_id}")])
+            # Кнопка отклика (только для открытых заказов)
+            elif order_status == 'open':
+                if already_bid:
+                    keyboard.append([InlineKeyboardButton("✅ Вы уже откликнулись", callback_data="noop")])
+                else:
+                    keyboard.append([InlineKeyboardButton("💰 Откликнуться", callback_data=f"bid_on_order_{order_id}")])
+
             keyboard.append([InlineKeyboardButton("⬅️ К списку заказов", callback_data="worker_view_orders")])
             
             await query.message.delete()
@@ -1945,12 +1960,20 @@ async def worker_view_order_details(update: Update, context: ContextTypes.DEFAUL
         else:
             # Нет фото - просто текст
             keyboard = []
-            
-            if already_bid:
-                keyboard.append([InlineKeyboardButton("✅ Вы уже откликнулись", callback_data="noop")])
-            else:
-                keyboard.append([InlineKeyboardButton("💰 Откликнуться", callback_data=f"bid_on_order_{order_id}")])
-            
+
+            # Кнопка завершения заказа если мастер работает над ним
+            order_status = order_dict.get('status', 'open')
+            selected_worker_id = order_dict.get('selected_worker_id')
+
+            if order_status == 'in_progress' and selected_worker_id == worker_profile["id"]:
+                keyboard.append([InlineKeyboardButton("✅ Работа завершена", callback_data=f"worker_complete_order_{order_id}")])
+            # Кнопка отклика (только для открытых заказов)
+            elif order_status == 'open':
+                if already_bid:
+                    keyboard.append([InlineKeyboardButton("✅ Вы уже откликнулись", callback_data="noop")])
+                else:
+                    keyboard.append([InlineKeyboardButton("💰 Откликнуться", callback_data=f"bid_on_order_{order_id}")])
+
             keyboard.append([InlineKeyboardButton("⬅️ К списку заказов", callback_data="worker_view_orders")])
             
             await query.edit_message_text(
@@ -2927,3 +2950,472 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         context.user_data.clear()
         return ConversationHandler.END
+
+
+# ============================================
+# ЗАВЕРШЕНИЕ ЗАКАЗА И СИСТЕМА ОТЗЫВОВ
+# ============================================
+
+async def client_complete_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Клиент подтверждает завершение заказа"""
+    query = update.callback_query
+    await query.answer()
+
+    order_id = int(query.data.replace("complete_order_", ""))
+
+    # Помечаем что клиент подтвердил завершение
+    both_confirmed = db.mark_order_completed_by_client(order_id)
+
+    if both_confirmed:
+        # Обе стороны подтвердили - заказ завершен
+        order = db.get_order_by_id(order_id)
+        worker_info = db.get_worker_info_for_order(order_id)
+
+        if order and worker_info:
+            order_dict = dict(order)
+            worker_dict = dict(worker_info)
+
+            # Уведомляем клиента
+            await query.edit_message_text(
+                "✅ <b>Заказ завершен!</b>\n\n"
+                "Спасибо за подтверждение! Мастер также подтвердил завершение работы.\n\n"
+                "Оставьте отзыв о работе мастера, это поможет другим заказчикам!",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⭐ Оставить отзыв", callback_data=f"leave_review_{order_id}")
+                ]])
+            )
+
+            # Уведомляем мастера
+            user_id = worker_dict['user_id']
+            user = db.get_user_by_id(user_id)
+            if user:
+                user_dict = dict(user)
+                telegram_id = user_dict['telegram_id']
+                try:
+                    await context.bot.send_message(
+                        chat_id=telegram_id,
+                        text=f"✅ <b>Заказ #{order_id} завершен!</b>\n\n"
+                             f"Клиент подтвердил завершение работы.\n"
+                             f"Оставьте отзыв о работе с клиентом!",
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("⭐ Оставить отзыв", callback_data=f"leave_review_{order_id}")
+                        ]])
+                    )
+                except Exception as e:
+                    logger.error(f"Не удалось отправить уведомление мастеру: {e}")
+    else:
+        # Только клиент подтвердил, ждем мастера
+        await query.edit_message_text(
+            "✅ <b>Спасибо за подтверждение!</b>\n\n"
+            "Ожидаем подтверждения от мастера.\n"
+            "Когда обе стороны подтвердят завершение, вы сможете оставить отзыв.",
+            parse_mode="HTML"
+        )
+
+
+async def worker_complete_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Мастер подтверждает завершение заказа"""
+    query = update.callback_query
+    await query.answer()
+
+    order_id = int(query.data.replace("worker_complete_order_", ""))
+
+    # Помечаем что мастер подтвердил завершение
+    both_confirmed = db.mark_order_completed_by_worker(order_id)
+
+    if both_confirmed:
+        # Обе стороны подтвердили - заказ завершен
+        order = db.get_order_by_id(order_id)
+
+        if order:
+            order_dict = dict(order)
+
+            # Уведомляем мастера
+            await query.edit_message_text(
+                "✅ <b>Заказ завершен!</b>\n\n"
+                "Спасибо за подтверждение! Клиент также подтвердил завершение заказа.\n\n"
+                "Оставьте отзыв о работе с клиентом!",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⭐ Оставить отзыв", callback_data=f"leave_review_{order_id}")
+                ]])
+            )
+
+            # Уведомляем клиента
+            client_user_id = order_dict['client_user_id']
+            user = db.get_user_by_id(client_user_id)
+            if user:
+                user_dict = dict(user)
+                telegram_id = user_dict['telegram_id']
+                try:
+                    await context.bot.send_message(
+                        chat_id=telegram_id,
+                        text=f"✅ <b>Заказ #{order_id} завершен!</b>\n\n"
+                             f"Мастер подтвердил завершение работы.\n"
+                             f"Оставьте отзыв о работе мастера!",
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("⭐ Оставить отзыв", callback_data=f"leave_review_{order_id}")
+                        ]])
+                    )
+                except Exception as e:
+                    logger.error(f"Не удалось отправить уведомление клиенту: {e}")
+    else:
+        # Только мастер подтвердил, ждем клиента
+        await query.edit_message_text(
+            "✅ <b>Спасибо за подтверждение!</b>\n\n"
+            "Ожидаем подтверждения от клиента.\n"
+            "Когда обе стороны подтвердят завершение, вы сможете оставить отзыв.",
+            parse_mode="HTML"
+        )
+
+
+async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало процесса оставления отзыва"""
+    query = update.callback_query
+    await query.answer()
+
+    order_id = int(query.data.replace("leave_review_", ""))
+    user_telegram_id = update.effective_user.id
+    user = db.get_user(user_telegram_id)
+
+    if not user:
+        await query.edit_message_text("❌ Ошибка: пользователь не найден")
+        return ConversationHandler.END
+
+    user_dict = dict(user)
+    user_id = user_dict['id']
+
+    # Проверяем не оставлен ли уже отзыв
+    if db.check_review_exists(order_id, user_id):
+        await query.edit_message_text(
+            "ℹ️ Вы уже оставили отзыв по этому заказу.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data="start")
+            ]])
+        )
+        return ConversationHandler.END
+
+    # Получаем информацию о заказе
+    order = db.get_order_by_id(order_id)
+    if not order:
+        await query.edit_message_text("❌ Заказ не найден")
+        return ConversationHandler.END
+
+    order_dict = dict(order)
+
+    # Сохраняем информацию в контексте
+    context.user_data['review_order_id'] = order_id
+    context.user_data['review_from_user_id'] = user_id
+
+    # Определяем кого оцениваем (клиент или мастер)
+    client_user_id = order_dict['client_user_id']
+    worker_info = db.get_worker_info_for_order(order_id)
+
+    if user_id == client_user_id:
+        # Клиент оценивает мастера
+        if worker_info:
+            worker_dict = dict(worker_info)
+            context.user_data['review_to_user_id'] = worker_dict['user_id']
+            context.user_data['review_role_from'] = 'client'
+            context.user_data['review_role_to'] = 'worker'
+            reviewer_name = worker_dict['name']
+        else:
+            await query.edit_message_text("❌ Информация о мастере не найдена")
+            return ConversationHandler.END
+    else:
+        # Мастер оценивает клиента
+        context.user_data['review_to_user_id'] = client_user_id
+        context.user_data['review_role_from'] = 'worker'
+        context.user_data['review_role_to'] = 'client'
+        reviewer_name = order_dict['client_name']
+
+    # Показываем выбор звезд
+    keyboard = [
+        [
+            InlineKeyboardButton("⭐", callback_data="review_rating_1"),
+            InlineKeyboardButton("⭐⭐", callback_data="review_rating_2"),
+            InlineKeyboardButton("⭐⭐⭐", callback_data="review_rating_3"),
+        ],
+        [
+            InlineKeyboardButton("⭐⭐⭐⭐", callback_data="review_rating_4"),
+            InlineKeyboardButton("⭐⭐⭐⭐⭐", callback_data="review_rating_5"),
+        ],
+        [InlineKeyboardButton("❌ Отмена", callback_data="cancel_review")]
+    ]
+
+    await query.edit_message_text(
+        f"⭐ <b>Оставьте отзыв</b>\n\n"
+        f"Оцените работу: <b>{reviewer_name}</b>\n\n"
+        f"Выберите оценку от 1 до 5 звезд:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return REVIEW_SELECT_RATING
+
+
+async def review_select_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора оценки"""
+    query = update.callback_query
+    await query.answer()
+
+    rating = int(query.data.replace("review_rating_", ""))
+    context.user_data['review_rating'] = rating
+
+    # Просим написать комментарий
+    keyboard = [[InlineKeyboardButton("⏭ Пропустить комментарий", callback_data="review_skip_comment")]]
+
+    stars = "⭐" * rating
+    await query.edit_message_text(
+        f"✅ Оценка: {stars} ({rating}/5)\n\n"
+        f"📝 Теперь напишите отзыв:\n"
+        f"• Что понравилось или не понравилось?\n"
+        f"• Качество работы\n"
+        f"• Соблюдение сроков\n"
+        f"• Коммуникация\n\n"
+        f"Или пропустите, если хотите оставить только оценку.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return REVIEW_ENTER_COMMENT
+
+
+async def review_enter_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка текста отзыва"""
+    comment = update.message.text.strip()
+
+    if len(comment) > 1000:
+        await update.message.reply_text(
+            "❌ Отзыв слишком длинный. Максимум 1000 символов.\n"
+            "Пожалуйста, сократите текст и отправьте снова."
+        )
+        return REVIEW_ENTER_COMMENT
+
+    context.user_data['review_comment'] = comment
+
+    # Сохраняем отзыв
+    return await save_review(update, context)
+
+
+async def review_skip_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пропуск комментария - только оценка"""
+    query = update.callback_query
+    await query.answer()
+
+    context.user_data['review_comment'] = ""
+
+    # Сохраняем отзыв
+    return await save_review(update, context, query=query)
+
+
+async def save_review(update: Update, context: ContextTypes.DEFAULT_TYPE, query=None):
+    """Сохранение отзыва в базу данных"""
+    try:
+        from_user_id = context.user_data['review_from_user_id']
+        to_user_id = context.user_data['review_to_user_id']
+        order_id = context.user_data['review_order_id']
+        role_from = context.user_data['review_role_from']
+        role_to = context.user_data['review_role_to']
+        rating = context.user_data['review_rating']
+        comment = context.user_data.get('review_comment', '')
+
+        # Сохраняем отзыв
+        success = db.add_review(from_user_id, to_user_id, order_id, role_from, role_to, rating, comment)
+
+        if success:
+            stars = "⭐" * rating
+            message_text = (
+                f"✅ <b>Отзыв успешно опубликован!</b>\n\n"
+                f"Оценка: {stars} ({rating}/5)\n"
+            )
+            if comment:
+                message_text += f"\n📝 Комментарий:\n{comment[:100]}{'...' if len(comment) > 100 else ''}"
+
+            keyboard = [[InlineKeyboardButton("⬅️ В главное меню", callback_data="start")]]
+
+            if query:
+                await query.edit_message_text(
+                    message_text,
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            else:
+                await update.message.reply_text(
+                    message_text,
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+        else:
+            error_message = "❌ Не удалось сохранить отзыв. Возможно вы уже оставляли отзыв по этому заказу."
+            if query:
+                await query.edit_message_text(error_message)
+            else:
+                await update.message.reply_text(error_message)
+
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении отзыва: {e}", exc_info=True)
+        error_message = f"❌ Произошла ошибка при сохранении отзыва: {str(e)}"
+        if query:
+            await query.edit_message_text(error_message)
+        else:
+            await update.message.reply_text(error_message)
+
+    # Очищаем данные
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+async def cancel_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена оставления отзыва"""
+    query = update.callback_query
+    await query.answer()
+
+    context.user_data.clear()
+
+    await query.edit_message_text(
+        "❌ Отмена. Вы можете оставить отзыв позже.",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("⬅️ В главное меню", callback_data="start")
+        ]])
+    )
+
+    return ConversationHandler.END
+
+
+async def show_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает все отзывы о пользователе"""
+    query = update.callback_query
+    await query.answer()
+
+    # Извлекаем user_id из callback_data (формат: show_reviews_worker_123 или show_reviews_client_123)
+    parts = query.data.split("_")
+    role = parts[2]  # worker или client
+    profile_user_id = int(parts[3])
+
+    # Получаем отзывы
+    reviews = db.get_reviews_for_user(profile_user_id, role)
+
+    if not reviews:
+        await query.edit_message_text(
+            "📊 <b>Отзывы</b>\n\n"
+            "Пока нет отзывов.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data=f"show_{role}_profile_{profile_user_id}")
+            ]])
+        )
+        return
+
+    # Формируем текст с отзывами
+    message_text = "📊 <b>Отзывы</b>\n\n"
+
+    for review in reviews[:10]:  # Показываем первые 10 отзывов
+        review_dict = dict(review)
+        rating = review_dict['rating']
+        stars = "⭐" * rating
+        reviewer_name = review_dict.get('reviewer_name', 'Аноним')
+        comment = review_dict.get('comment', '')
+
+        message_text += f"👤 <b>{reviewer_name}</b>\n"
+        message_text += f"{stars} ({rating}/5)\n"
+        if comment:
+            # Обрезаем длинные комментарии
+            if len(comment) > 150:
+                comment = comment[:150] + "..."
+            message_text += f"💬 {comment}\n"
+        message_text += "\n"
+
+    if len(reviews) > 10:
+        message_text += f"<i>Показано 10 из {len(reviews)} отзывов</i>\n"
+
+    await query.edit_message_text(
+        message_text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("⬅️ Назад", callback_data=f"show_{role}_profile_{profile_user_id}")
+        ]])
+    )
+
+
+# ============================================
+# КОНЕЦ СИСТЕМЫ ОТЗЫВОВ
+# ============================================
+
+
+# ============================================
+# СИСТЕМА УВЕДОМЛЕНИЙ (ANNOUNCE)
+# ============================================
+
+async def announce_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Команда /announce для отправки уведомлений всем пользователям.
+    Использование: /announce Текст сообщения
+    """
+    user_telegram_id = update.effective_user.id
+
+    # Проверка прав администратора (можно заменить на список админов)
+    ADMIN_IDS = [user_telegram_id]  # По умолчанию только создатель команды
+
+    if user_telegram_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+        return
+
+    # Извлекаем текст сообщения
+    if not context.args:
+        await update.message.reply_text(
+            "📢 <b>Команда /announce</b>\n\n"
+            "Использование:\n"
+            "<code>/announce Текст уведомления</code>\n\n"
+            "Пример:\n"
+            "<code>/announce ⚠️ Завтра с 10:00 до 12:00 технические работы. Бот будет недоступен.</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    message_text = " ".join(context.args)
+
+    # Получаем всех пользователей
+    telegram_ids = db.get_all_user_telegram_ids()
+
+    if not telegram_ids:
+        await update.message.reply_text("ℹ️ В базе нет пользователей для рассылки.")
+        return
+
+    # Отправляем уведомление
+    await update.message.reply_text(
+        f"📤 Начинаю рассылку {len(telegram_ids)} пользователям...\n"
+        f"Текст:\n<i>{message_text}</i>",
+        parse_mode="HTML"
+    )
+
+    sent_count = 0
+    failed_count = 0
+
+    for telegram_id in telegram_ids:
+        try:
+            await context.bot.send_message(
+                chat_id=telegram_id,
+                text=f"📢 <b>Уведомление от администрации</b>\n\n{message_text}",
+                parse_mode="HTML"
+            )
+            sent_count += 1
+        except Exception as e:
+            logger.warning(f"Не удалось отправить сообщение пользователю {telegram_id}: {e}")
+            failed_count += 1
+
+    # Отчет о рассылке
+    await update.message.reply_text(
+        f"✅ <b>Рассылка завершена!</b>\n\n"
+        f"✅ Отправлено: {sent_count}\n"
+        f"❌ Не удалось: {failed_count}\n"
+        f"📊 Всего: {len(telegram_ids)}",
+        parse_mode="HTML"
+    )
+
+
+# ============================================
+# КОНЕЦ СИСТЕМЫ УВЕДОМЛЕНИЙ
+# ============================================
