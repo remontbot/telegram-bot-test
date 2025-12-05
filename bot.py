@@ -332,6 +332,11 @@ def main():
         MessageHandler(filters.PHOTO, handlers.worker_add_photos_upload)
     )
 
+    # Загрузка документов (когда пользователь перетягивает файл)
+    application.add_handler(
+        MessageHandler(filters.Document.ALL, handlers.worker_add_photos_upload)
+    )
+
     # --- Меню мастера и заказчика ---
 
     application.add_handler(

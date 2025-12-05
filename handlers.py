@@ -937,56 +937,78 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка загружаемых фото"""
-    
+    """Обработка загружаемых фото (photo или document)"""
+
     # Проверяем активен ли режим добавления фото
     if not context.user_data.get("adding_photos"):
         # Игнорируем фото если режим не активен
         logger.info("Получено фото но режим добавления не активен - игнорируем")
         return
-    
-    # Обработка фото
+
+    file_id = None
+
+    # Обработка фото (сжатое изображение)
     if update.message and update.message.photo:
-        logger.info("Получено фото для добавления в портфолио")
-        existing_count = len(context.user_data.get("existing_photos", []))
-        new_count = len(context.user_data.get("new_photos", []))
-        total_count = existing_count + new_count
-        max_photos = 10
-        
-        if total_count >= max_photos:
-            keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]
-            await update.message.reply_text(
-                f"⚠️ Достигнут лимит в {max_photos} фотографий.\n\n"
-                f"Нажмите кнопку ниже для завершения:",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode="HTML"
-            )
-            return
-        
+        logger.info("Получено фото (photo) для добавления в портфолио")
         photo = update.message.photo[-1]  # Берём самое большое разрешение
         file_id = photo.file_id
-        
-        context.user_data["new_photos"].append(file_id)
-        new_count = len(context.user_data["new_photos"])
-        total_count = existing_count + new_count
-        remaining = max_photos - total_count
-        
-        logger.info(f"Фото добавлено. Новых: {new_count}, Всего: {total_count}")
-        
-        # ДОБАВЛЯЕМ КНОПКУ для завершения
+
+    # Обработка документа (файл без сжатия)
+    elif update.message and update.message.document:
+        document = update.message.document
+        # Проверяем, что это изображение
+        if document.mime_type and document.mime_type.startswith('image/'):
+            logger.info("Получено фото (document) для добавления в портфолио")
+            file_id = document.file_id
+        else:
+            keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]
+            await update.message.reply_text(
+                "❌ Можно отправлять только изображения (JPG, PNG и т.д.).\n\n"
+                "Попробуйте отправить фото еще раз.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+    if not file_id:
+        logger.warning("Не удалось получить file_id из сообщения")
+        return
+
+    existing_count = len(context.user_data.get("existing_photos", []))
+    new_count = len(context.user_data.get("new_photos", []))
+    total_count = existing_count + new_count
+    max_photos = 10
+
+    if total_count >= max_photos:
         keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]
-        
         await update.message.reply_text(
-            f"✅ Фото добавлено!\n\n"
-            f"📊 Статус:\n"
-            f"• Было фото: {existing_count}\n"
-            f"• Добавлено новых: {new_count}\n"
-            f"• Всего будет: {total_count}/{max_photos}\n"
-            f"• Можно ещё: {remaining}\n\n"
-            f"Отправьте ещё фото или нажмите кнопку:",
+            f"⚠️ Достигнут лимит в {max_photos} фотографий.\n\n"
+            f"Нажмите кнопку ниже для завершения:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
+        return
+
+    context.user_data["new_photos"].append(file_id)
+    new_count = len(context.user_data["new_photos"])
+    total_count = existing_count + new_count
+    remaining = max_photos - total_count
+
+    logger.info(f"Фото добавлено. Новых: {new_count}, Всего: {total_count}")
+
+    # ДОБАВЛЯЕМ КНОПКУ для завершения
+    keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]
+
+    await update.message.reply_text(
+        f"✅ Фото добавлено!\n\n"
+        f"📊 Статус:\n"
+        f"• Было фото: {existing_count}\n"
+        f"• Добавлено новых: {new_count}\n"
+        f"• Всего будет: {total_count}/{max_photos}\n"
+        f"• Можно ещё: {remaining}\n\n"
+        f"Отправьте ещё фото или нажмите кнопку:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
 
 
 async def worker_add_photos_finish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
