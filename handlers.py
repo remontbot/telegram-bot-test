@@ -4305,6 +4305,86 @@ async def notify_new_review(context, telegram_id, reviewer_name, rating, order_i
         return False
 
 
+async def enable_premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Команда /enable_premium для включения premium функций
+    """
+    user_telegram_id = update.effective_user.id
+
+    # Проверка прав администратора
+    ADMIN_IDS = [user_telegram_id]  # По умолчанию только создатель команды
+
+    if user_telegram_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+        return
+
+    # Включаем premium функции
+    db.set_premium_enabled(True)
+
+    await update.message.reply_text(
+        "✅ <b>Premium функции включены!</b>\n\n"
+        "Теперь доступны:\n"
+        "• Поднятие заказов в топ\n"
+        "• Premium профили мастеров\n"
+        "• Выделение в списках\n\n"
+        "💡 Используйте /disable_premium для отключения",
+        parse_mode="HTML"
+    )
+
+
+async def disable_premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Команда /disable_premium для отключения premium функций
+    """
+    user_telegram_id = update.effective_user.id
+
+    # Проверка прав администратора
+    ADMIN_IDS = [user_telegram_id]  # По умолчанию только создатель команды
+
+    if user_telegram_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+        return
+
+    # Выключаем premium функции
+    db.set_premium_enabled(False)
+
+    await update.message.reply_text(
+        "✅ <b>Premium функции отключены!</b>\n\n"
+        "Все premium возможности скрыты от пользователей.\n\n"
+        "💡 Используйте /enable_premium для включения",
+        parse_mode="HTML"
+    )
+
+
+async def premium_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Команда /premium_status для проверки статуса premium функций
+    """
+    user_telegram_id = update.effective_user.id
+
+    # Проверка прав администратора
+    ADMIN_IDS = [user_telegram_id]  # По умолчанию только создатель команды
+
+    if user_telegram_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+        return
+
+    is_enabled = db.is_premium_enabled()
+
+    status_emoji = "✅" if is_enabled else "❌"
+    status_text = "Включены" if is_enabled else "Отключены"
+
+    await update.message.reply_text(
+        f"📊 <b>Статус Premium функций</b>\n\n"
+        f"{status_emoji} Статус: <b>{status_text}</b>\n\n"
+        f"<b>Доступные команды:</b>\n"
+        f"/enable_premium - Включить premium\n"
+        f"/disable_premium - Отключить premium\n"
+        f"/premium_status - Проверить статус",
+        parse_mode="HTML"
+    )
+
+
 async def announce_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Команда /announce для отправки уведомлений всем пользователям.

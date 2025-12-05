@@ -73,6 +73,7 @@ def main():
     db.migrate_add_cascading_deletes()  # Добавляем cascading deletes для PostgreSQL
     db.migrate_add_order_completion_tracking()  # Добавляем отслеживание завершения заказов
     db.migrate_add_profile_photo()  # Добавляем поле для фото профиля мастера
+    db.migrate_add_premium_features()  # Добавляем поля для premium функций (выключены по умолчанию)
     db.create_indexes()  # Создаем индексы для оптимизации производительности
 
     token = get_bot_token()
@@ -564,6 +565,21 @@ def main():
     # Команда для добавления тестовых мастеров
     application.add_handler(
         CommandHandler("add_test_workers", handlers.add_test_workers_command)
+    )
+
+    # === ADMIN КОМАНДЫ ===
+
+    # Команды управления premium функциями (только для администратора)
+    application.add_handler(
+        CommandHandler("enable_premium", handlers.enable_premium_command)
+    )
+
+    application.add_handler(
+        CommandHandler("disable_premium", handlers.disable_premium_command)
+    )
+
+    application.add_handler(
+        CommandHandler("premium_status", handlers.premium_status_command)
     )
 
     # Команда для массовой рассылки уведомлений (только для администратора)

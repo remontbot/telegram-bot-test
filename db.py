@@ -1317,6 +1317,153 @@ def migrate_add_profile_photo():
             print(f"⚠️  Ошибка при добавлении поля profile_photo: {e}")
 
 
+def migrate_add_premium_features():
+    """
+    Добавляет поля для premium функций:
+    - premium_enabled (глобальный флаг в settings)
+    - is_premium_order (для orders)
+    - is_premium_worker (для workers)
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            # Создаём таблицу settings если её нет
+            if USE_POSTGRES:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS settings (
+                        key VARCHAR(100) PRIMARY KEY,
+                        value TEXT,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS settings (
+                        key TEXT PRIMARY KEY,
+                        value TEXT,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+
+            # Устанавливаем premium_enabled = false по умолчанию
+            cursor.execute("""
+                INSERT OR IGNORE INTO settings (key, value)
+                VALUES ('premium_enabled', 'false')
+            """)
+
+            # Добавляем поля для premium в orders
+            if USE_POSTGRES:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'orders' AND column_name = 'is_premium'
+                        ) THEN
+                            ALTER TABLE orders ADD COLUMN is_premium BOOLEAN DEFAULT FALSE;
+                        END IF;
+
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'orders' AND column_name = 'premium_until'
+                        ) THEN
+                            ALTER TABLE orders ADD COLUMN premium_until TIMESTAMP;
+                        END IF;
+                    END $$;
+                """)
+            else:
+                cursor.execute("PRAGMA table_info(orders)")
+                order_columns = [column[1] for column in cursor.fetchall()]
+
+                if 'is_premium' not in order_columns:
+                    cursor.execute("ALTER TABLE orders ADD COLUMN is_premium INTEGER DEFAULT 0")
+
+                if 'premium_until' not in order_columns:
+                    cursor.execute("ALTER TABLE orders ADD COLUMN premium_until TIMESTAMP")
+
+            # Добавляем поля для premium в workers
+            if USE_POSTGRES:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'workers' AND column_name = 'is_premium'
+                        ) THEN
+                            ALTER TABLE workers ADD COLUMN is_premium BOOLEAN DEFAULT FALSE;
+                        END IF;
+
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'workers' AND column_name = 'premium_until'
+                        ) THEN
+                            ALTER TABLE workers ADD COLUMN premium_until TIMESTAMP;
+                        END IF;
+                    END $$;
+                """)
+            else:
+                cursor.execute("PRAGMA table_info(workers)")
+                worker_columns = [column[1] for column in cursor.fetchall()]
+
+                if 'is_premium' not in worker_columns:
+                    cursor.execute("ALTER TABLE workers ADD COLUMN is_premium INTEGER DEFAULT 0")
+
+                if 'premium_until' not in worker_columns:
+                    cursor.execute("ALTER TABLE workers ADD COLUMN premium_until TIMESTAMP")
+
+            conn.commit()
+            print("✅ Premium features migration completed successfully!")
+
+        except Exception as e:
+            print(f"⚠️  Ошибка при добавлении premium полей: {e}")
+            import traceback
+            traceback.print_exc()
+
+
+# === PREMIUM FEATURES HELPERS ===
+
+def is_premium_enabled():
+    """Проверяет включены ли premium функции глобально"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT value FROM settings WHERE key = 'premium_enabled'")
+        result = cursor.fetchone()
+        return result and result[0] == 'true'
+
+
+def set_premium_enabled(enabled):
+    """Включает/выключает premium функции глобально"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        value = 'true' if enabled else 'false'
+        cursor.execute("""
+            INSERT OR REPLACE INTO settings (key, value, updated_at)
+            VALUES ('premium_enabled', ?, datetime('now'))
+        """, (value,))
+        conn.commit()
+
+
+def get_setting(key, default=None):
+    """Получает значение настройки"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        result = cursor.fetchone()
+        return result[0] if result else default
+
+
+def set_setting(key, value):
+    """Устанавливает значение настройки"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            INSERT OR REPLACE INTO settings (key, value, updated_at)
+            VALUES (?, ?, datetime('now'))
+        """, (key, value))
+        conn.commit()
+
+
 def create_indexes():
     """
     Создает индексы для оптимизации производительности запросов.
