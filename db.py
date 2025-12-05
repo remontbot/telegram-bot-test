@@ -1421,6 +1421,76 @@ def migrate_add_premium_features():
             traceback.print_exc()
 
 
+def migrate_add_moderation():
+    """
+    Добавляет поля для модерации пользователей:
+    - is_banned (флаг бана)
+    - ban_reason (причина бана)
+    - banned_at (дата бана)
+    - banned_by (кто забанил)
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            if USE_POSTGRES:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'users' AND column_name = 'is_banned'
+                        ) THEN
+                            ALTER TABLE users ADD COLUMN is_banned BOOLEAN DEFAULT FALSE;
+                        END IF;
+
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'users' AND column_name = 'ban_reason'
+                        ) THEN
+                            ALTER TABLE users ADD COLUMN ban_reason TEXT;
+                        END IF;
+
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'users' AND column_name = 'banned_at'
+                        ) THEN
+                            ALTER TABLE users ADD COLUMN banned_at TIMESTAMP;
+                        END IF;
+
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'users' AND column_name = 'banned_by'
+                        ) THEN
+                            ALTER TABLE users ADD COLUMN banned_by VARCHAR(100);
+                        END IF;
+                    END $$;
+                """)
+            else:
+                cursor.execute("PRAGMA table_info(users)")
+                columns = [column[1] for column in cursor.fetchall()]
+
+                if 'is_banned' not in columns:
+                    cursor.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
+
+                if 'ban_reason' not in columns:
+                    cursor.execute("ALTER TABLE users ADD COLUMN ban_reason TEXT")
+
+                if 'banned_at' not in columns:
+                    cursor.execute("ALTER TABLE users ADD COLUMN banned_at TIMESTAMP")
+
+                if 'banned_by' not in columns:
+                    cursor.execute("ALTER TABLE users ADD COLUMN banned_by TEXT")
+
+            conn.commit()
+            print("✅ Moderation fields migration completed successfully!")
+
+        except Exception as e:
+            print(f"⚠️  Ошибка при добавлении модерационных полей: {e}")
+            import traceback
+            traceback.print_exc()
+
+
 # === PREMIUM FEATURES HELPERS ===
 
 def is_premium_enabled():
@@ -1462,6 +1532,68 @@ def set_setting(key, value):
             VALUES (?, ?, datetime('now'))
         """, (key, value))
         conn.commit()
+
+
+# === MODERATION HELPERS ===
+
+def is_user_banned(telegram_id):
+    """Проверяет забанен ли пользователь"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT is_banned FROM users WHERE telegram_id = ?
+        """, (telegram_id,))
+        result = cursor.fetchone()
+        if result:
+            return bool(result[0])
+        return False
+
+
+def ban_user(telegram_id, reason, banned_by):
+    """Банит пользователя"""
+    from datetime import datetime
+
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            UPDATE users
+            SET is_banned = 1,
+                ban_reason = ?,
+                banned_at = ?,
+                banned_by = ?
+            WHERE telegram_id = ?
+        """, (reason, datetime.now().isoformat(), banned_by, telegram_id))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def unban_user(telegram_id):
+    """Разбанивает пользователя"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            UPDATE users
+            SET is_banned = 0,
+                ban_reason = NULL,
+                banned_at = NULL,
+                banned_by = NULL
+            WHERE telegram_id = ?
+        """, (telegram_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def get_banned_users():
+    """Получает список всех забаненных пользователей"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT telegram_id, ban_reason, banned_at, banned_by
+            FROM users
+            WHERE is_banned = 1
+            ORDER BY banned_at DESC
+        """)
+        return cursor.fetchall()
 
 
 def create_indexes():

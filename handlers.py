@@ -92,6 +92,17 @@ def is_valid_phone(phone: str) -> bool:
 # /start
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_telegram_id = update.effective_user.id
+
+    # Проверяем не забанен ли пользователь
+    if db.is_user_banned(user_telegram_id):
+        await update.message.reply_text(
+            "🚫 <b>Доступ заблокирован</b>\n\n"
+            "Ваш аккаунт заблокирован администратором.\n\n"
+            "Если вы считаете, что это ошибка, обратитесь в поддержку.",
+            parse_mode="HTML"
+        )
+        return
+
     user = db.get_user(user_telegram_id)
 
     if user:
@@ -4383,6 +4394,156 @@ async def premium_status_command(update: Update, context: ContextTypes.DEFAULT_T
         f"/premium_status - Проверить статус",
         parse_mode="HTML"
     )
+
+
+async def ban_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Команда /ban для блокировки пользователя
+    Использование: /ban telegram_id причина
+    """
+    user_telegram_id = update.effective_user.id
+
+    # Проверка прав администратора
+    ADMIN_IDS = [user_telegram_id]
+
+    if user_telegram_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "📋 <b>Использование команды /ban</b>\n\n"
+            "<code>/ban telegram_id причина</code>\n\n"
+            "Пример:\n"
+            "<code>/ban 123456789 Спам</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        target_telegram_id = int(context.args[0])
+        reason = " ".join(context.args[1:])
+
+        # Проверяем существование пользователя
+        user = db.get_user(target_telegram_id)
+        if not user:
+            await update.message.reply_text(
+                f"❌ Пользователь с ID {target_telegram_id} не найден в базе."
+            )
+            return
+
+        # Нельзя забанить самого себя или другого админа
+        if target_telegram_id in ADMIN_IDS:
+            await update.message.reply_text("❌ Нельзя забанить администратора.")
+            return
+
+        # Баним пользователя
+        success = db.ban_user(target_telegram_id, reason, str(user_telegram_id))
+
+        if success:
+            await update.message.reply_text(
+                f"✅ <b>Пользователь забанен</b>\n\n"
+                f"ID: <code>{target_telegram_id}</code>\n"
+                f"Причина: {reason}\n\n"
+                f"Пользователь больше не сможет использовать бота.",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text("❌ Ошибка при блокировке пользователя.")
+
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат Telegram ID. Используйте числовой ID.")
+    except Exception as e:
+        logger.error(f"Ошибка в ban_user_command: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+
+async def unban_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Команда /unban для разблокировки пользователя
+    Использование: /unban telegram_id
+    """
+    user_telegram_id = update.effective_user.id
+
+    # Проверка прав администратора
+    ADMIN_IDS = [user_telegram_id]
+
+    if user_telegram_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+        return
+
+    if len(context.args) < 1:
+        await update.message.reply_text(
+            "📋 <b>Использование команды /unban</b>\n\n"
+            "<code>/unban telegram_id</code>\n\n"
+            "Пример:\n"
+            "<code>/unban 123456789</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        target_telegram_id = int(context.args[0])
+
+        # Разбаниваем пользователя
+        success = db.unban_user(target_telegram_id)
+
+        if success:
+            await update.message.reply_text(
+                f"✅ <b>Пользователь разблокирован</b>\n\n"
+                f"ID: <code>{target_telegram_id}</code>\n\n"
+                f"Пользователь снова может использовать бота.",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Пользователь с ID {target_telegram_id} не найден или не был забанен."
+            )
+
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат Telegram ID. Используйте числовой ID.")
+    except Exception as e:
+        logger.error(f"Ошибка в unban_user_command: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+
+async def banned_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Команда /banned для просмотра списка забаненных пользователей
+    """
+    user_telegram_id = update.effective_user.id
+
+    # Проверка прав администратора
+    ADMIN_IDS = [user_telegram_id]
+
+    if user_telegram_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+        return
+
+    banned_users = db.get_banned_users()
+
+    if not banned_users:
+        await update.message.reply_text("📋 Список забаненных пользователей пуст.")
+        return
+
+    text = "🚫 <b>Забаненные пользователи</b>\n\n"
+
+    for user in banned_users[:10]:  # Показываем первых 10
+        telegram_id = user[0]
+        reason = user[1] or "Не указана"
+        banned_at = user[2] or "Неизвестно"
+        banned_by = user[3] or "Неизвестно"
+
+        text += (
+            f"👤 ID: <code>{telegram_id}</code>\n"
+            f"📝 Причина: {reason}\n"
+            f"📅 Дата: {banned_at}\n"
+            f"👮 Забанил: {banned_by}\n\n"
+        )
+
+    text += f"\n<i>Всего забанено: {len(banned_users)}</i>"
+
+    await update.message.reply_text(text, parse_mode="HTML")
 
 
 async def announce_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

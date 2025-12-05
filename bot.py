@@ -74,6 +74,7 @@ def main():
     db.migrate_add_order_completion_tracking()  # Добавляем отслеживание завершения заказов
     db.migrate_add_profile_photo()  # Добавляем поле для фото профиля мастера
     db.migrate_add_premium_features()  # Добавляем поля для premium функций (выключены по умолчанию)
+    db.migrate_add_moderation()  # Добавляем поля для модерации и банов
     db.create_indexes()  # Создаем индексы для оптимизации производительности
 
     token = get_bot_token()
@@ -580,6 +581,19 @@ def main():
 
     application.add_handler(
         CommandHandler("premium_status", handlers.premium_status_command)
+    )
+
+    # Команды модерации (только для администратора)
+    application.add_handler(
+        CommandHandler("ban", handlers.ban_user_command)
+    )
+
+    application.add_handler(
+        CommandHandler("unban", handlers.unban_user_command)
+    )
+
+    application.add_handler(
+        CommandHandler("banned", handlers.banned_users_command)
     )
 
     # Команда для массовой рассылки уведомлений (только для администратора)
