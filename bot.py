@@ -72,6 +72,7 @@ def main():
     db.migrate_add_currency_to_bids()  # Добавляем колонку currency в bids
     db.migrate_add_cascading_deletes()  # Добавляем cascading deletes для PostgreSQL
     db.migrate_add_order_completion_tracking()  # Добавляем отслеживание завершения заказов
+    db.migrate_add_profile_photo()  # Добавляем поле для фото профиля мастера
     db.create_indexes()  # Создаем индексы для оптимизации производительности
 
     token = get_bot_token()

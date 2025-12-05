@@ -1275,6 +1275,48 @@ def migrate_add_order_completion_tracking():
             print(f"⚠️  Ошибка при добавлении полей отслеживания завершения: {e}")
 
 
+def migrate_add_profile_photo():
+    """
+    Добавляет поле profile_photo для фото профиля мастера (лицо).
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            if USE_POSTGRES:
+                print("📝 Добавление поля profile_photo для PostgreSQL...")
+
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'workers' AND column_name = 'profile_photo'
+                        ) THEN
+                            ALTER TABLE workers ADD COLUMN profile_photo TEXT;
+                        END IF;
+                    END $$;
+                """)
+                conn.commit()
+                print("✅ Поле profile_photo успешно добавлено!")
+
+            else:
+                # Для SQLite проверяем существование колонки
+                cursor.execute("PRAGMA table_info(workers)")
+                columns = [column[1] for column in cursor.fetchall()]
+
+                if 'profile_photo' not in columns:
+                    print("📝 Добавление поля profile_photo...")
+                    cursor.execute("ALTER TABLE workers ADD COLUMN profile_photo TEXT")
+                    conn.commit()
+                    print("✅ Поле profile_photo успешно добавлено!")
+                else:
+                    print("✅ Поле profile_photo уже существует")
+
+        except Exception as e:
+            print(f"⚠️  Ошибка при добавлении поля profile_photo: {e}")
+
+
 def create_indexes():
     """
     Создает индексы для оптимизации производительности запросов.
