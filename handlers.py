@@ -1023,50 +1023,73 @@ async def worker_add_photos_finish_callback(update: Update, context: ContextType
     """Обработка нажатия кнопки завершения"""
     query = update.callback_query
     await query.answer()
-    
-    logger.info("Нажата кнопка завершения добавления фото")
-    
-    # Проверяем активен ли режим
-    if not context.user_data.get("adding_photos"):
-        logger.warning("Режим добавления фото не активен!")
-        await query.edit_message_text(
-            "⚠️ Режим добавления фото не активен.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]
-            ])
-        )
+
+    logger.info(f"Нажата кнопка завершения добавления фото. Context: {context.user_data}")
+
+    # Проверяем есть ли новые фото (более надежная проверка чем флаг adding_photos)
+    new_photos = context.user_data.get("new_photos", [])
+    has_new_photos = len(new_photos) > 0
+
+    if not context.user_data.get("adding_photos") and not has_new_photos:
+        logger.warning("Режим добавления фото не активен и нет новых фото!")
+        try:
+            await query.edit_message_text(
+                "⚠️ Режим добавления фото не активен.\n\n"
+                "Возможно произошла ошибка. Попробуйте еще раз.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]
+                ])
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при отправке сообщения: {e}")
+            await context.bot.send_message(
+                chat_id=query.from_user.id,
+                text="⚠️ Режим добавления фото не активен.\n\nВозвращаемся в меню.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]
+                ])
+            )
         return
-    
+
     # Вызываем функцию завершения
     await worker_add_photos_finish(query, context)
 
 
 async def worker_add_photos_finish(query, context: ContextTypes.DEFAULT_TYPE):
     """Завершение добавления фото - сохранение в БД"""
-    
+
     logger.info("=== worker_add_photos_finish вызвана ===")
-    
+    logger.info(f"Context user_data: {context.user_data}")
+
     new_photos = context.user_data.get("new_photos", [])
     existing_photos = context.user_data.get("existing_photos", [])
-    
+
     logger.info(f"new_photos count: {len(new_photos)}")
     logger.info(f"existing_photos count: {len(existing_photos)}")
-    
+
     if not new_photos:
         logger.warning("Нет новых фото для сохранения")
         keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]]
-        
+
         # Удаляем старое сообщение и отправляем новое
         try:
             await query.message.delete()
-        except:
-            pass
-        
-        await query.message.reply_text(
-            "⚠️ Вы не добавили ни одного фото.\n\nОперация отменена.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        
+        except Exception as e:
+            logger.warning(f"Не удалось удалить сообщение: {e}")
+
+        try:
+            await query.message.reply_text(
+                "⚠️ Вы не добавили ни одного фото.\n\nОперация отменена.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except Exception as e:
+            logger.error(f"Не удалось отправить reply_text: {e}")
+            # Пробуем через edit_message_text
+            await query.edit_message_text(
+                "⚠️ Вы не добавили ни одного фото.\n\nОперация отменена.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+
         context.user_data.clear()
         logger.info("Context очищен")
         return
@@ -1111,21 +1134,37 @@ async def worker_add_photos_finish(query, context: ContextTypes.DEFAULT_TYPE):
         )
         
         logger.info("Отправка успешного сообщения пользователю")
-        
+
         # ВАЖНО: Удаляем старое сообщение и отправляем НОВОЕ
         # Потому что последнее сообщение может быть фото (которое нельзя редактировать на текст)
         try:
             await query.message.delete()
-        except:
-            pass  # Если не получилось удалить - не страшно
-        
+            logger.info("Старое сообщение удалено")
+        except Exception as e:
+            logger.warning(f"Не удалось удалить сообщение: {e}")
+
         # Отправляем НОВОЕ сообщение с результатом
-        await query.message.reply_text(
-            message_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
-        )
-        
+        try:
+            await query.message.reply_text(
+                message_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
+            )
+            logger.info("Новое сообщение отправлено успешно")
+        except Exception as e:
+            logger.error(f"Не удалось отправить новое сообщение через reply_text: {e}")
+            # Пробуем через bot.send_message напрямую
+            try:
+                await context.bot.send_message(
+                    chat_id=query.from_user.id,
+                    text=message_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode="HTML"
+                )
+                logger.info("Сообщение отправлено через bot.send_message")
+            except Exception as e2:
+                logger.error(f"Не удалось отправить через bot.send_message: {e2}")
+
         logger.info("Фото успешно сохранены, ОЧИЩАЮ context.user_data")
         # ВАЖНО: Очищаем context чтобы выйти из режима добавления фото
         context.user_data.clear()
