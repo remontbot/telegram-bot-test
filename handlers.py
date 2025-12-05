@@ -953,6 +953,10 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
 async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка загружаемых фото (photo или document)"""
 
+    # Если активен режим загрузки фото профиля - передаем управление туда
+    if context.user_data.get("uploading_profile_photo"):
+        return await upload_profile_photo(update, context)
+
     # Проверяем активен ли режим добавления фото
     if not context.user_data.get("adding_photos"):
         # Игнорируем фото если режим не активен
@@ -1323,6 +1327,137 @@ async def portfolio_navigate(update: Update, context: ContextTypes.DEFAULT_TYPE)
             logger.error(f"Ошибка навигации по галерее: {e}")
 
 
+# ------- ЗАГРУЗКА ФОТО ПРОФИЛЯ -------
+
+async def edit_profile_photo_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало загрузки/изменения фото профиля"""
+    query = update.callback_query
+    await query.answer()
+
+    telegram_id = query.from_user.id
+    user = db.get_user(telegram_id)
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+
+    worker_profile = db.get_worker_profile(user_id)
+    profile_dict = dict(worker_profile)
+    current_photo = profile_dict.get("profile_photo")
+
+    # Устанавливаем флаг загрузки фото профиля
+    context.user_data['uploading_profile_photo'] = True
+    context.user_data['user_id'] = user_id
+
+    if current_photo:
+        # Показываем текущее фото
+        await query.message.delete()
+        await query.message.reply_photo(
+            photo=current_photo,
+            caption=(
+                "👤 <b>Текущее фото профиля</b>\n\n"
+                "Отправьте новое фото, чтобы заменить это.\n\n"
+                "Это фото будет показываться в вашем профиле."
+            ),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_profile_photo")
+            ]])
+        )
+    else:
+        await query.edit_message_text(
+            "👤 <b>Фото профиля</b>\n\n"
+            "У вас пока нет фото профиля.\n\n"
+            "Отправьте фото вашего лица, которое будет показываться в профиле.\n"
+            "Это поможет клиентам узнать вас.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_profile_photo")
+            ]])
+        )
+
+
+async def upload_profile_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка загружаемого фото профиля"""
+
+    # Проверяем активен ли режим загрузки фото профиля
+    if not context.user_data.get("uploading_profile_photo"):
+        logger.info("Получено фото но режим загрузки фото профиля не активен - игнорируем")
+        return
+
+    file_id = None
+
+    # Обработка фото (сжатое изображение)
+    if update.message and update.message.photo:
+        logger.info("Получено фото профиля (photo)")
+        photo = update.message.photo[-1]  # Берём самое большое разрешение
+        file_id = photo.file_id
+
+    # Обработка документа (файл без сжатия)
+    elif update.message and update.message.document:
+        document = update.message.document
+        # Проверяем, что это изображение
+        if document.mime_type and document.mime_type.startswith('image/'):
+            logger.info("Получено фото профиля (document)")
+            file_id = document.file_id
+        else:
+            await update.message.reply_text(
+                "❌ Можно отправлять только изображения (JPG, PNG и т.д.).",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Отмена", callback_data="cancel_profile_photo")
+                ]])
+            )
+            return
+
+    if not file_id:
+        logger.warning("Не удалось получить file_id из сообщения")
+        return
+
+    # Сохраняем фото профиля в БД
+    user_id = context.user_data.get('user_id')
+
+    if user_id:
+        try:
+            db.update_worker_field(user_id, "profile_photo", file_id)
+            logger.info(f"Фото профиля сохранено для user_id={user_id}")
+
+            await update.message.reply_text(
+                "✅ <b>Фото профиля успешно обновлено!</b>\n\n"
+                "Теперь это фото будет показываться в вашем профиле.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("👤 Посмотреть профиль", callback_data="worker_profile")],
+                    [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]
+                ])
+            )
+
+            # Очищаем флаг
+            context.user_data.clear()
+
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении фото профиля: {e}")
+            await update.message.reply_text(
+                f"❌ Ошибка при сохранении фото: {str(e)}",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")
+                ]])
+            )
+            context.user_data.clear()
+
+
+async def cancel_profile_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена загрузки фото профиля"""
+    query = update.callback_query
+    await query.answer()
+
+    context.user_data.clear()
+
+    await query.edit_message_text(
+        "❌ Загрузка фото профиля отменена.",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("⬅️ К профилю", callback_data="worker_profile")
+        ]])
+    )
+
+
 # ------- РЕДАКТИРОВАНИЕ ПРОФИЛЯ -------
 
 async def show_edit_profile_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1331,6 +1466,7 @@ async def show_edit_profile_menu(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
 
     keyboard = [
+        [InlineKeyboardButton("👤 Изменить фото профиля", callback_data="edit_profile_photo")],
         [InlineKeyboardButton("✏️ Изменить имя", callback_data="edit_name")],
         [InlineKeyboardButton("📱 Изменить телефон", callback_data="edit_phone")],
         [InlineKeyboardButton("🏙 Изменить город", callback_data="edit_city")],

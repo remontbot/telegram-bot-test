@@ -328,8 +328,17 @@ def main():
     application.add_handler(
         CallbackQueryHandler(handlers.worker_add_photos_finish_callback, pattern="^finish_adding_photos$")
     )
-    
-    # Загрузка фото (только когда активен режим добавления)
+
+    # --- Обработчики фото профиля ---
+    application.add_handler(
+        CallbackQueryHandler(handlers.edit_profile_photo_start, pattern="^edit_profile_photo$")
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(handlers.cancel_profile_photo, pattern="^cancel_profile_photo$")
+    )
+
+    # Загрузка фото (обрабатывает и portfolio_photos и profile_photo)
     application.add_handler(
         MessageHandler(filters.PHOTO, handlers.worker_add_photos_upload)
     )
