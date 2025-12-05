@@ -2263,30 +2263,53 @@ async def worker_bid_on_order(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Начало создания отклика - ввод цены"""
     query = update.callback_query
     await query.answer()
-    
+
     # Извлекаем order_id
     order_id = int(query.data.replace("bid_on_order_", ""))
     context.user_data['bid_order_id'] = order_id
-    
+
     # Проверяем не откликался ли уже
     user = db.get_user(query.from_user.id)
-    worker_profile = db.get_worker_profile(user["id"])
-    
-    if db.check_worker_bid_exists(order_id, worker_profile["id"]):
+    user_dict = dict(user) if user else {}
+    worker_profile = db.get_worker_profile(user_dict.get("id"))
+
+    if not worker_profile:
+        await query.answer("Ошибка: профиль мастера не найден", show_alert=True)
+        return ConversationHandler.END
+
+    profile_dict = dict(worker_profile)
+    worker_id = profile_dict.get("id")
+
+    if db.check_worker_bid_exists(order_id, worker_id):
         await query.answer("Вы уже откликнулись на этот заказ!", show_alert=True)
         return ConversationHandler.END
-    
-    await query.edit_message_caption(
-        caption="💰 <b>Ваш отклик на заказ</b>\n\n"
+
+    text = (
+        "💰 <b>Ваш отклик на заказ</b>\n\n"
         "⚠️ <b>ВНИМАНИЕ:</b> Цену изменить будет НЕЛЬЗЯ!\n\n"
         "Введите вашу цену (только число):\n"
-        "Например: <code>150</code>",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("❌ Отмена", callback_data="cancel_bid")
-        ]])
+        "Например: <code>150</code>"
     )
-    
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("❌ Отмена", callback_data="cancel_bid")
+    ]])
+
+    # Пробуем отредактировать как caption (если есть фото), иначе как text
+    try:
+        await query.edit_message_caption(
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+    except:
+        # Если не получилось (нет фото), редактируем текст
+        await query.edit_message_text(
+            text=text,
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+
     return BID_ENTER_PRICE
 
 
