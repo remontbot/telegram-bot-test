@@ -77,6 +77,7 @@ def main():
     db.migrate_add_moderation()  # Добавляем поля для модерации и банов
     db.migrate_add_chat_system()  # Создаём таблицы для чата между клиентом и мастером
     db.migrate_add_transactions()  # Создаём таблицу для истории транзакций
+    db.migrate_add_notification_settings()  # Добавляем настройки уведомлений для мастеров
     db.create_indexes()  # Создаем индексы для оптимизации производительности
 
     token = get_bot_token()
@@ -358,6 +359,13 @@ def main():
         CallbackQueryHandler(
             handlers.show_worker_menu,
             pattern="^show_worker_menu$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.toggle_notifications,
+            pattern="^toggle_notifications$",
         )
     )
 

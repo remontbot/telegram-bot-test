@@ -1558,6 +1558,43 @@ def migrate_add_transactions():
             traceback.print_exc()
 
 
+def migrate_add_notification_settings():
+    """
+    Добавляет поле для управления уведомлениями мастеров:
+    - notifications_enabled (по умолчанию TRUE - уведомления включены)
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            if USE_POSTGRES:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'workers' AND column_name = 'notifications_enabled'
+                        ) THEN
+                            ALTER TABLE workers ADD COLUMN notifications_enabled BOOLEAN DEFAULT TRUE;
+                        END IF;
+                    END $$;
+                """)
+            else:
+                cursor.execute("PRAGMA table_info(workers)")
+                worker_columns = [column[1] for column in cursor.fetchall()]
+
+                if 'notifications_enabled' not in worker_columns:
+                    cursor.execute("ALTER TABLE workers ADD COLUMN notifications_enabled INTEGER DEFAULT 1")
+
+            conn.commit()
+            print("✅ Notification settings migration completed successfully!")
+
+        except Exception as e:
+            print(f"⚠️  Ошибка при добавлении настроек уведомлений: {e}")
+            import traceback
+            traceback.print_exc()
+
+
 def migrate_add_moderation():
     """
     Добавляет поля для модерации пользователей:
@@ -1832,6 +1869,63 @@ def mark_chat_as_expired(chat_id):
         # Можно добавить поле expired_at или is_expired, но пока просто оставим
         # Чат будет считаться просроченным по факту что worker_confirmed = 0 и прошло 24 часа
         pass
+
+
+# === NOTIFICATION SETTINGS HELPERS ===
+
+def are_notifications_enabled(user_id):
+    """
+    Проверяет включены ли уведомления для мастера.
+
+    Args:
+        user_id: ID пользователя в таблице users
+
+    Returns:
+        True если уведомления включены или настройка не найдена (по умолчанию включены)
+        False если уведомления отключены
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT notifications_enabled
+            FROM workers
+            WHERE user_id = ?
+        """, (user_id,))
+        result = cursor.fetchone()
+
+        # Если запись не найдена или поле не существует - по умолчанию включены
+        if not result:
+            return True
+
+        # SQLite хранит boolean как INTEGER (1 или 0), PostgreSQL как BOOLEAN
+        return bool(result[0]) if result[0] is not None else True
+
+
+def set_notifications_enabled(user_id, enabled):
+    """
+    Включает или отключает уведомления для мастера.
+
+    Args:
+        user_id: ID пользователя в таблице users
+        enabled: True для включения, False для отключения
+
+    Returns:
+        True если обновление успешно, False если мастер не найден
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Для совместимости с SQLite и PostgreSQL
+        value = 1 if enabled else 0 if not USE_POSTGRES else enabled
+
+        cursor.execute("""
+            UPDATE workers
+            SET notifications_enabled = ?
+            WHERE user_id = ?
+        """, (value, user_id))
+
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 # === PREMIUM FEATURES HELPERS ===

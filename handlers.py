@@ -1,5 +1,6 @@
 import logging
 import re
+import asyncio
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -748,9 +749,15 @@ async def show_worker_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    # Получаем текущий статус уведомлений
+    user = db.get_user_by_telegram_id(update.effective_user.id)
+    notifications_enabled = db.are_notifications_enabled(user['id']) if user else True
+    notification_status = "🔔 Вкл" if notifications_enabled else "🔕 Выкл"
+
     keyboard = [
         [InlineKeyboardButton("📋 Доступные заказы", callback_data="worker_view_orders")],
         [InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
+        [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_notifications")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")],
     ]
     await query.edit_message_text(
@@ -759,6 +766,37 @@ async def show_worker_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
+
+
+async def toggle_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Переключает уведомления для мастера"""
+    query = update.callback_query
+    await query.answer()
+
+    user = db.get_user_by_telegram_id(update.effective_user.id)
+    if not user:
+        await query.edit_message_text("❌ Пользователь не найден.")
+        return
+
+    # Получаем текущий статус
+    current_status = db.are_notifications_enabled(user['id'])
+
+    # Переключаем статус
+    new_status = not current_status
+    db.set_notifications_enabled(user['id'], new_status)
+
+    status_text = "включены ✅" if new_status else "отключены ❌"
+
+    await query.edit_message_text(
+        f"🔔 <b>Уведомления {status_text}</b>\n\n"
+        f"{'Вы будете получать уведомления о новых заказах в вашем городе и категориях.' if new_status else 'Вы НЕ будете получать уведомления о новых заказах. Вы можете просматривать заказы вручную в разделе \"Доступные заказы\".'}\n\n"
+        "Возвращаемся в меню...",
+        parse_mode="HTML"
+    )
+
+    # Возвращаемся в меню мастера через 2 секунды
+    await asyncio.sleep(2)
+    await show_worker_menu(update, context)
 
 
 async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3937,10 +3975,13 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
         if order:
             order_dict = dict(order)
 
-            # Находим всех мастеров в нужных категориях и отправляем уведомления
+            # Находим всех мастеров в нужных категориях И городе и отправляем уведомления
             notified_workers = set()  # Чтобы не уведомлять одного мастера несколько раз
+            order_city = context.user_data['order_city']
+
             for category in context.user_data["order_categories"]:
-                workers, _, _ = db.get_all_workers(category=category)
+                # ВАЖНО: фильтруем мастеров по городу И категории
+                workers, _, _ = db.get_all_workers(city=order_city, category=category)
                 for worker in workers:
                     worker_dict = dict(worker)
                     worker_id = worker_dict['id']
@@ -3950,12 +3991,14 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
 
                     worker_user = db.get_user_by_id(worker_dict['user_id'])
                     if worker_user:
-                        await notify_worker_new_order(
-                            context,
-                            worker_user['telegram_id'],
-                            order_dict
-                        )
-                        notified_workers.add(worker_id)
+                        # Проверяем включены ли уведомления у мастера
+                        if db.are_notifications_enabled(worker_dict['user_id']):
+                            await notify_worker_new_order(
+                                context,
+                                worker_user['telegram_id'],
+                                order_dict
+                            )
+                            notified_workers.add(worker_id)
 
         categories_text = ", ".join(context.user_data["order_categories"])
         photos_count = len(context.user_data.get("order_photos", []))
