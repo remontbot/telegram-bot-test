@@ -616,6 +616,11 @@ def main():
         CommandHandler("announce", handlers.announce_command)
     )
 
+    # Команда для проверки просроченных чатов (только для администратора)
+    application.add_handler(
+        CommandHandler("check_expired_chats", handlers.check_expired_chats_command)
+    )
+
     # Глобальный обработчик сообщений для чатов (ВАЖНО: должен быть ДО unknown_command)
     application.add_handler(
         MessageHandler(

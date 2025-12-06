@@ -2555,6 +2555,194 @@ async def test_payment_success(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
 
+# ============================================
+# СИСТЕМА ЧАТОВ
+# ============================================
+
+async def open_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Открывает чат между клиентом и мастером"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        chat_id = int(query.data.replace("open_chat_", ""))
+
+        # Получаем информацию о чате
+        chat = db.get_chat_by_id(chat_id)
+        if not chat:
+            await query.edit_message_text("❌ Чат не найден.")
+            return
+
+        chat_dict = dict(chat)
+
+        # Проверяем что пользователь участник этого чата
+        user = db.get_user(query.from_user.id)
+        if not user:
+            await query.edit_message_text("❌ Пользователь не найден.")
+            return
+
+        user_dict = dict(user)
+        is_client = user_dict['id'] == chat_dict['client_user_id']
+        is_worker = user_dict['id'] == chat_dict['worker_user_id']
+
+        if not is_client and not is_worker:
+            await query.edit_message_text("❌ У вас нет доступа к этому чату.")
+            return
+
+        # Определяем роль пользователя
+        my_role = "client" if is_client else "worker"
+        other_role = "worker" if is_client else "client"
+
+        # Получаем информацию о собеседнике
+        if is_client:
+            worker = db.get_user_by_id(chat_dict['worker_user_id'])
+            worker_profile = db.get_worker_profile(worker['id']) if worker else None
+            other_name = worker_profile['name'] if worker_profile else "Мастер"
+        else:
+            client = db.get_user_by_id(chat_dict['client_user_id'])
+            client_profile = db.get_client_profile(client['id']) if client else None
+            other_name = client_profile['name'] if client_profile else "Клиент"
+
+        # Получаем последние сообщения
+        messages = db.get_chat_messages(chat_id, limit=10)
+        messages_list = list(reversed(messages))  # Старые сверху, новые снизу
+
+        # Отмечаем сообщения как прочитанные
+        db.mark_messages_as_read(chat_id, user_dict['id'])
+
+        # Формируем текст чата
+        text = f"💬 <b>Чат с {other_name}</b>\n"
+        text += f"📋 Заказ #{chat_dict['order_id']}\n\n"
+
+        if messages_list:
+            text += "<b>История сообщений:</b>\n\n"
+            for msg in messages_list:
+                msg_dict = dict(msg)
+                sender_role = msg_dict['sender_role']
+                message_text = msg_dict['message_text']
+                created_at = msg_dict['created_at'][:16]  # Обрезаем до минут
+
+                if sender_role == my_role:
+                    text += f"<b>Вы:</b> {message_text}\n"
+                else:
+                    text += f"<b>{other_name}:</b> {message_text}\n"
+                text += f"<i>{created_at}</i>\n\n"
+        else:
+            text += "<i>Пока нет сообщений</i>\n\n"
+
+        text += "💡 Напишите сообщение для отправки в чат:"
+
+        # Сохраняем chat_id в контексте для отправки сообщения
+        context.user_data['active_chat_id'] = chat_id
+        context.user_data['active_chat_role'] = my_role
+
+        keyboard = [
+            [InlineKeyboardButton("🔄 Обновить", callback_data=f"open_chat_{chat_id}")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="show_client_menu" if is_client else "show_worker_menu")],
+        ]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в open_chat: {e}", exc_info=True)
+        await query.edit_message_text(f"❌ Ошибка при открытии чата:\n{str(e)}")
+
+
+async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает сообщения, отправленные в активный чат"""
+    # Проверяем есть ли активный чат
+    chat_id = context.user_data.get('active_chat_id')
+    my_role = context.user_data.get('active_chat_role')
+
+    if not chat_id or not my_role:
+        # Нет активного чата, пропускаем
+        return
+
+    message_text = update.message.text
+
+    if not message_text:
+        return
+
+    try:
+        # Получаем информацию о пользователе
+        user = db.get_user(update.effective_user.id)
+        if not user:
+            await update.message.reply_text("❌ Пользователь не найден.")
+            return
+
+        user_dict = dict(user)
+
+        # Отправляем сообщение в чат
+        message_id = db.send_message(chat_id, user_dict['id'], my_role, message_text)
+
+        logger.info(f"✅ Сообщение #{message_id} отправлено в чат #{chat_id} от {my_role}")
+
+        # Если это первое сообщение мастера - подтверждаем готовность
+        if my_role == "worker" and not db.is_worker_confirmed(chat_id):
+            db.confirm_worker_in_chat(chat_id)
+            logger.info(f"✅ Мастер подтвердил готовность в чате #{chat_id}")
+
+            # Обновляем статус заказа
+            chat = db.get_chat_by_id(chat_id)
+            if chat:
+                db.update_order_status(chat['order_id'], "master_confirmed")
+                logger.info(f"✅ Заказ #{chat['order_id']} переведён в статус 'master_confirmed'")
+
+        # Получаем информацию о чате для уведомления
+        chat = db.get_chat_by_id(chat_id)
+        if not chat:
+            await update.message.reply_text("❌ Чат не найден.")
+            return
+
+        chat_dict = dict(chat)
+
+        # Уведомляем собеседника о новом сообщении
+        other_user_id = chat_dict['worker_user_id'] if my_role == "client" else chat_dict['client_user_id']
+        other_user = db.get_user_by_id(other_user_id)
+
+        if other_user:
+            other_user_dict = dict(other_user)
+            try:
+                # Получаем имя отправителя
+                if my_role == "client":
+                    client_profile = db.get_client_profile(user_dict['id'])
+                    sender_name = client_profile['name'] if client_profile else "Клиент"
+                else:
+                    worker_profile = db.get_worker_profile(user_dict['id'])
+                    sender_name = worker_profile['name'] if worker_profile else "Мастер"
+
+                await context.bot.send_message(
+                    chat_id=other_user_dict['telegram_id'],
+                    text=(
+                        f"💬 <b>Новое сообщение от {sender_name}</b>\n"
+                        f"📋 Заказ #{chat_dict['order_id']}\n\n"
+                        f"{message_text}"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("💬 Открыть чат", callback_data=f"open_chat_{chat_id}")
+                    ]])
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при отправке уведомления: {e}")
+
+        # Подтверждаем отправку
+        await update.message.reply_text(
+            "✅ Сообщение отправлено!",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("💬 Открыть чат", callback_data=f"open_chat_{chat_id}")
+            ]])
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в handle_chat_message: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка при отправке сообщения:\n{str(e)}")
+
+
 # ------- СЛУЖЕБНЫЕ -------
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4695,6 +4883,122 @@ async def announce_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Отправлено: {sent_count}\n"
         f"❌ Не удалось: {failed_count}\n"
         f"📊 Всего: {len(telegram_ids)}",
+        parse_mode="HTML"
+    )
+
+
+async def check_expired_chats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Команда /check_expired_chats для проверки и обработки чатов где мастер не ответил в течение 24 часов.
+    Эта команда также может быть запущена автоматически по расписанию (cron/scheduler).
+    """
+    user_telegram_id = update.effective_user.id
+
+    # Проверка прав администратора (можно заменить на список админов)
+    ADMIN_IDS = [user_telegram_id]  # По умолчанию только создатель команды
+
+    if user_telegram_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+        return
+
+    # Получаем все просроченные чаты (где мастер не ответил в течение 24 часов)
+    expired_chats = db.get_expired_chats(hours=24)
+
+    if not expired_chats:
+        await update.message.reply_text("✅ Нет просроченных чатов (все мастера отвечают вовремя).")
+        return
+
+    await update.message.reply_text(
+        f"🔍 Найдено просроченных чатов: {len(expired_chats)}\n"
+        f"Начинаю обработку...",
+        parse_mode="HTML"
+    )
+
+    processed_count = 0
+    error_count = 0
+
+    for chat in expired_chats:
+        try:
+            chat_id = chat['id']
+            order_id = chat['order_id']
+            client_user_id = chat['client_user_id']
+            worker_user_id = chat['worker_user_id']
+            bid_id = chat['bid_id']
+
+            # Получаем информацию о заказе
+            order = db.get_order_by_id(order_id)
+            if not order:
+                logger.warning(f"Заказ {order_id} не найден для чата {chat_id}")
+                error_count += 1
+                continue
+
+            # Получаем информацию о клиенте и мастере
+            client = db.get_user_by_id(client_user_id)
+            worker_user = db.get_user_by_id(worker_user_id)
+
+            if not client or not worker_user:
+                logger.warning(f"Пользователи не найдены для чата {chat_id}")
+                error_count += 1
+                continue
+
+            # 1. Снижаем рейтинг мастера (добавляем негативную оценку 1.0 из 5.0)
+            db.update_user_rating(worker_user_id, 1.0, "worker")
+
+            # 2. Возвращаем заказ в статус "open" (клиент может выбрать другого мастера)
+            db.update_order_status(order_id, "open")
+
+            # 3. Отмечаем отклик как отклоненный (чтобы не показывался как выбранный)
+            # Но НЕ удаляем его - клиент может увидеть, что этот мастер не ответил
+            db.update_bid_status(bid_id, "rejected")
+
+            # 4. Уведомляем клиента что мастер не ответил и он может выбрать другого БЕЗ доп. оплаты
+            try:
+                await context.bot.send_message(
+                    chat_id=client['telegram_id'],
+                    text=(
+                        f"⚠️ <b>Мастер не ответил в течение 24 часов</b>\n\n"
+                        f"📋 Заказ: {order['title']}\n\n"
+                        f"Ваш заказ снова открыт для выбора другого мастера.\n"
+                        f"💰 Дополнительная оплата НЕ требуется - ваша предыдущая оплата остается активной.\n\n"
+                        f"Просто выберите другого мастера из списка откликов."
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("📋 Мои заказы", callback_data="my_orders")
+                    ]])
+                )
+            except Exception as e:
+                logger.warning(f"Не удалось отправить уведомление клиенту {client['telegram_id']}: {e}")
+
+            # 5. Уведомляем мастера о снижении рейтинга
+            try:
+                await context.bot.send_message(
+                    chat_id=worker_user['telegram_id'],
+                    text=(
+                        f"⚠️ <b>Ваш рейтинг снижен!</b>\n\n"
+                        f"📋 Заказ: {order['title']}\n\n"
+                        f"Вы не ответили клиенту в течение 24 часов после того, как ваш отклик был выбран.\n"
+                        f"📉 Ваш рейтинг был снижен.\n\n"
+                        f"⚡ <b>Совет:</b> Отвечайте клиентам быстрее, чтобы поддерживать высокий рейтинг!"
+                    ),
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.warning(f"Не удалось отправить уведомление мастеру {worker_user['telegram_id']}: {e}")
+
+            processed_count += 1
+            logger.info(f"Обработан просроченный чат {chat_id} (заказ {order_id})")
+
+        except Exception as e:
+            logger.error(f"Ошибка при обработке чата {chat.get('id', 'unknown')}: {e}")
+            error_count += 1
+
+    # Отчет о проверке
+    await update.message.reply_text(
+        f"✅ <b>Проверка завершена!</b>\n\n"
+        f"✅ Обработано: {processed_count}\n"
+        f"❌ Ошибок: {error_count}\n"
+        f"📊 Всего найдено: {len(expired_chats)}",
         parse_mode="HTML"
     )
 

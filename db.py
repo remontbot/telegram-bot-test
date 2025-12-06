@@ -1800,6 +1800,40 @@ def get_transaction_by_order_bid(order_id, bid_id):
         return cursor.fetchone()
 
 
+def get_expired_chats(hours=24):
+    """
+    Получает чаты где мастер не ответил в течение заданного времени
+
+    Args:
+        hours: количество часов для проверки (по умолчанию 24)
+
+    Returns:
+        Список чатов где worker_confirmed = FALSE и прошло более hours часов с created_at
+    """
+    from datetime import datetime, timedelta
+
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        expiration_time = datetime.now() - timedelta(hours=hours)
+
+        cursor.execute("""
+            SELECT * FROM chats
+            WHERE worker_confirmed = 0
+            AND created_at < ?
+        """, (expiration_time.isoformat(),))
+
+        return cursor.fetchall()
+
+
+def mark_chat_as_expired(chat_id):
+    """Помечает чат как просроченный (мастер не ответил вовремя)"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        # Можно добавить поле expired_at или is_expired, но пока просто оставим
+        # Чат будет считаться просроченным по факту что worker_confirmed = 0 и прошло 24 часа
+        pass
+
+
 # === PREMIUM FEATURES HELPERS ===
 
 def is_premium_enabled():
@@ -2278,6 +2312,19 @@ def select_bid(bid_id):
 
         conn.commit()
         return True
+
+
+def update_bid_status(bid_id, new_status):
+    """Обновляет статус отклика (pending, selected, rejected)"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            UPDATE bids
+            SET status = ?
+            WHERE id = ?
+        """, (new_status, bid_id))
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 def add_test_orders(telegram_id):
