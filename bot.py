@@ -383,6 +383,13 @@ def main():
         )
     )
 
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_my_payments,
+            pattern="^client_my_payments$",
+        )
+    )
+
     # "Мой профиль" мастера
     application.add_handler(
         CallbackQueryHandler(

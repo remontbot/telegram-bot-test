@@ -901,6 +901,7 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
         [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
+        [InlineKeyboardButton("💳 Мои платежи", callback_data="client_my_payments")],
         [InlineKeyboardButton("🔍 Найти мастера", callback_data="client_browse_workers")],
         [InlineKeyboardButton("🧰 Главное меню", callback_data="go_main_menu")],
     ]
@@ -910,6 +911,76 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Или найдите мастера самостоятельно.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def client_my_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает историю платежей клиента"""
+    query = update.callback_query
+    await query.answer()
+
+    user = db.get_user_by_telegram_id(update.effective_user.id)
+    if not user:
+        await query.edit_message_text("❌ Пользователь не найден.")
+        return
+
+    # Получаем историю транзакций
+    transactions = db.get_user_transactions(user['id'])
+
+    if not transactions:
+        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="show_client_menu")]]
+        await query.edit_message_text(
+            "💳 <b>Мои платежи</b>\n\n"
+            "У вас пока нет платежей.\n\n"
+            "Когда вы выберете мастера для заказа и оплатите доступ к его контактам, "
+            "платежи будут отображаться здесь.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    # Формируем текст с платежами
+    text = "💳 <b>Мои платежи</b>\n\n"
+
+    total_spent = 0.0
+
+    for transaction in transactions[:10]:  # Показываем последние 10 платежей
+        trans_dict = dict(transaction)
+        amount = float(trans_dict['amount'])
+        currency = trans_dict['currency']
+        total_spent += amount
+
+        # Форматируем дату
+        from datetime import datetime
+        created_at = datetime.fromisoformat(trans_dict['created_at'])
+        date_str = created_at.strftime("%d.%m.%Y %H:%M")
+
+        # Получаем описание или тип транзакции
+        description = trans_dict.get('description', '')
+        if not description:
+            trans_type = trans_dict.get('transaction_type', 'payment')
+            description = f"Платёж ({trans_type})"
+
+        # Статус транзакции
+        status = trans_dict.get('status', 'unknown')
+        status_emoji = "✅" if status == 'completed' else "⏳" if status == 'pending' else "❌"
+
+        text += f"{status_emoji} <b>{amount:.2f} {currency}</b>\n"
+        text += f"  {description[:50]}{'...' if len(description) > 50 else ''}\n"
+        text += f"  📅 {date_str}\n\n"
+
+    if len(transactions) > 10:
+        text += f"... и ещё {len(transactions) - 10} платежей\n\n"
+
+    text += f"💰 <b>Всего потрачено:</b> {total_spent:.2f} BYN\n"
+    text += f"📊 <b>Количество платежей:</b> {len(transactions)}"
+
+    keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="show_client_menu")]]
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
