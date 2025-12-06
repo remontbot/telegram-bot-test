@@ -110,6 +110,45 @@ def validate_required_fields(context, required_fields):
     return (len(missing) == 0, missing)
 
 
+def validate_file_id(file_id):
+    """
+    КРИТИЧЕСКИ ВАЖНО: Валидация file_id от Telegram.
+
+    Telegram file_id - это строка длиной 50-200 символов, содержащая:
+    - Буквы (A-Z, a-z)
+    - Цифры (0-9)
+    - Спецсимволы: _ - =
+
+    Args:
+        file_id: строка с file_id для проверки
+
+    Returns:
+        bool: True если file_id валиден, False иначе
+
+    Примеры:
+        ✅ "AgACAgIAAxkBAAIBY2..."  # валидный
+        ❌ ""                       # пустой
+        ❌ None                     # не строка
+        ❌ "abc"                    # слишком короткий
+        ❌ "abc<script>"            # недопустимые символы
+    """
+    if not file_id or not isinstance(file_id, str):
+        logger.warning(f"❌ file_id невалиден: пустой или не строка ({type(file_id)})")
+        return False
+
+    # Проверка длины (Telegram file_id обычно 50-200 символов)
+    if len(file_id) < 20 or len(file_id) > 250:
+        logger.warning(f"❌ file_id невалиден: неправильная длина ({len(file_id)} символов)")
+        return False
+
+    # Проверка разрешенных символов (только безопасные для Telegram)
+    if not re.match(r'^[A-Za-z0-9_\-=]+$', file_id):
+        logger.warning(f"❌ file_id невалиден: недопустимые символы")
+        return False
+
+    return True
+
+
 def _get_bids_word(count):
     """Возвращает правильное склонение слова 'отклик'"""
     if count % 10 == 1 and count % 100 != 11:
@@ -584,10 +623,20 @@ async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.info("Получено фото")
         if "portfolio_photos" not in context.user_data:
             context.user_data["portfolio_photos"] = []
-        
+
         photo = update.message.photo[-1]  # Берём самое большое разрешение
         file_id = photo.file_id
-        
+
+        # КРИТИЧНО: Валидация file_id
+        if not validate_file_id(file_id):
+            logger.error(f"❌ Невалидный file_id при загрузке фото портфолио: {file_id}")
+            await update.message.reply_text(
+                "❌ Ошибка при обработке фото.\n\n"
+                "Попробуйте отправить фото еще раз или используйте другое изображение.\n\n"
+                "Отправьте /done_photos для завершения регистрации без этого фото."
+            )
+            return REGISTER_MASTER_PHOTOS
+
         if len(context.user_data["portfolio_photos"]) < 10:
             context.user_data["portfolio_photos"].append(file_id)
             count = len(context.user_data["portfolio_photos"])
@@ -606,7 +655,7 @@ async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYP
                 "⚠️ Максимум 10 фотографий.\n\n"
                 "Отправьте /done_photos для завершения."
             )
-        
+
         return REGISTER_MASTER_PHOTOS
     
     # Если пришло что-то другое
@@ -647,36 +696,100 @@ async def finalize_master_registration(update, context):
         context.user_data.clear()
         return ConversationHandler.END
 
-    # ИСПРАВЛЕНО: Проверяем существование пользователя перед созданием
-    existing_user = db.get_user(telegram_id)
-    if existing_user:
-        user_id = existing_user['id']
-        logger.info(f"Пользователь {telegram_id} уже существует, используем существующий ID: {user_id}")
-    else:
-        user_id = db.create_user(telegram_id, "worker")
-        logger.info(f"Создан новый пользователь {telegram_id} с ID: {user_id}")
+    # КРИТИЧНО: Обработка ошибок БД при создании пользователя и профиля
+    user_created = False  # Флаг для отслеживания создания нового пользователя
+    user_id = None
 
-    # Сохраняем фото работ (если есть)
-    portfolio_photos = context.user_data.get("portfolio_photos", [])
-    photos_json = ",".join(portfolio_photos) if portfolio_photos else ""
+    try:
+        # Проверяем существование пользователя перед созданием
+        existing_user = db.get_user(telegram_id)
+        if existing_user:
+            user_id = existing_user['id']
+            logger.info(f"Пользователь {telegram_id} уже существует, используем существующий ID: {user_id}")
+        else:
+            user_id = db.create_user(telegram_id, "worker")
+            user_created = True  # КРИТИЧНО: Отмечаем что создали нового пользователя
+            logger.info(f"Создан новый пользователь {telegram_id} с ID: {user_id}")
 
-    db.create_worker_profile(
-        user_id=user_id,
-        name=context.user_data["name"],
-        phone=context.user_data["phone"],
-        city=context.user_data["city"],
-        regions=context.user_data["regions"],  # Теперь это просто город
-        categories=", ".join(context.user_data["categories"]),
-        experience=context.user_data["experience"],
-        description=context.user_data["description"],
-        portfolio_photos=photos_json,
-    )
+        # Сохраняем фото работ (если есть)
+        portfolio_photos = context.user_data.get("portfolio_photos", [])
+
+        # КРИТИЧНО: Дополнительная валидация всех file_id перед сохранением в БД
+        valid_photos = [fid for fid in portfolio_photos if validate_file_id(fid)]
+        if len(valid_photos) < len(portfolio_photos):
+            removed_count = len(portfolio_photos) - len(valid_photos)
+            logger.warning(f"⚠️ Удалено {removed_count} невалидных file_id перед сохранением профиля")
+
+        photos_json = ",".join(valid_photos) if valid_photos else ""
+
+        db.create_worker_profile(
+            user_id=user_id,
+            name=context.user_data["name"],
+            phone=context.user_data["phone"],
+            city=context.user_data["city"],
+            regions=context.user_data["regions"],  # Теперь это просто город
+            categories=", ".join(context.user_data["categories"]),
+            experience=context.user_data["experience"],
+            description=context.user_data["description"],
+            portfolio_photos=photos_json,
+        )
+
+    except ValueError as e:
+        # Ошибки валидации (например, дубликат профиля из race condition protection)
+        logger.error(f"❌ Ошибка валидации при создании профиля мастера: {e}")
+
+        # КРИТИЧНО: Откатываем создание пользователя если создали его, но профиль не создался
+        if user_created and user_id:
+            try:
+                db.delete_user_profile(telegram_id)
+                logger.info(f"🔄 Откат: удален пользователь {telegram_id} после ошибки создания профиля")
+            except Exception as rollback_error:
+                logger.error(f"❌ Ошибка при откате создания пользователя: {rollback_error}")
+
+        keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")]]
+        error_msg = (
+            "❌ Не удалось создать профиль.\n\n"
+            f"Причина: {str(e)}\n\n"
+            "Попробуйте еще раз или обратитесь в поддержку."
+        )
+        if update.message:
+            await update.message.reply_text(error_msg, reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await update.callback_query.message.reply_text(error_msg, reply_markup=InlineKeyboardMarkup(keyboard))
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    except Exception as e:
+        # Любые другие ошибки БД (connection, SQL syntax, etc)
+        logger.error(f"❌ Ошибка БД при создании профиля мастера: {e}", exc_info=True)
+
+        # КРИТИЧНО: Откатываем создание пользователя если создали его, но профиль не создался
+        if user_created and user_id:
+            try:
+                db.delete_user_profile(telegram_id)
+                logger.info(f"🔄 Откат: удален пользователь {telegram_id} после ошибки создания профиля")
+            except Exception as rollback_error:
+                logger.error(f"❌ Ошибка при откате создания пользователя: {rollback_error}")
+
+        keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")]]
+        error_msg = (
+            "❌ Произошла ошибка при сохранении профиля в базу данных.\n\n"
+            "Пожалуйста, попробуйте еще раз через минуту.\n\n"
+            "Если проблема повторяется, обратитесь в поддержку."
+        )
+        if update.message:
+            await update.message.reply_text(error_msg, reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await update.callback_query.message.reply_text(error_msg, reply_markup=InlineKeyboardMarkup(keyboard))
+        context.user_data.clear()
+        return ConversationHandler.END
 
     keyboard = [[InlineKeyboardButton("Моё меню мастера", callback_data="show_worker_menu")]]
-    
-    photos_count = len(portfolio_photos)
+
+    # Используем валидные фото для точной статистики
+    photos_count = len(valid_photos)
     photos_text = f"\n📸 Добавлено фотографий: {photos_count}" if photos_count > 0 else ""
-    
+
     message_text = (
         f"🥳 <b>Профиль мастера создан!</b>{photos_text}\n\n"
         "Теперь вы можете:\n"
@@ -684,7 +797,7 @@ async def finalize_master_registration(update, context):
         "• Получать заказы от клиентов\n"
         "• Добавить больше фото работ в любое время"
     )
-    
+
     if update.message:
         await update.message.reply_text(
             message_text,
@@ -774,17 +887,22 @@ async def register_client_city_select(update: Update, context: ContextTypes.DEFA
         logger.info(f"Имя: {context.user_data.get('name')}")
         logger.info(f"Телефон: {context.user_data.get('phone')}")
         logger.info(f"Город: {city}")
-        
-        # Проверяем есть ли уже user (если добавляет вторую роль)
-        existing_user = db.get_user(telegram_id)
-        if existing_user:
-            user_id = existing_user["id"]
-            logger.info(f"Существующий user_id: {user_id}")
-        else:
-            user_id = db.create_user(telegram_id, "client")
-            logger.info(f"Создан новый user_id: {user_id}")
+
+        # КРИТИЧНО: Обработка ошибок БД при создании пользователя и профиля
+        user_created = False  # Флаг для отслеживания создания нового пользователя
+        user_id = None
 
         try:
+            # Проверяем есть ли уже user (если добавляет вторую роль)
+            existing_user = db.get_user(telegram_id)
+            if existing_user:
+                user_id = existing_user["id"]
+                logger.info(f"Существующий user_id: {user_id}")
+            else:
+                user_id = db.create_user(telegram_id, "client")
+                user_created = True  # КРИТИЧНО: Отмечаем что создали нового пользователя
+                logger.info(f"Создан новый user_id: {user_id}")
+
             db.create_client_profile(
                 user_id=user_id,
                 name=context.user_data["name"],
@@ -793,10 +911,49 @@ async def register_client_city_select(update: Update, context: ContextTypes.DEFA
                 description="",
             )
             logger.info("✅ Профиль клиента успешно создан в БД!")
-        except Exception as e:
-            logger.error(f"❌ Ошибка создания профиля клиента: {e}", exc_info=True)
+
+        except ValueError as e:
+            # Ошибки валидации (например, дубликат профиля)
+            logger.error(f"❌ Ошибка валидации при создании профиля клиента: {e}")
+
+            # КРИТИЧНО: Откатываем создание пользователя если создали его, но профиль не создался
+            if user_created and user_id:
+                try:
+                    db.delete_user_profile(telegram_id)
+                    logger.info(f"🔄 Откат: удален пользователь {telegram_id} после ошибки создания профиля")
+                except Exception as rollback_error:
+                    logger.error(f"❌ Ошибка при откате создания пользователя: {rollback_error}")
+
             await query.edit_message_text(
-                f"❌ Ошибка создания профиля: {e}\n\nПопробуйте ещё раз."
+                f"❌ Не удалось создать профиль.\n\n"
+                f"Причина: {str(e)}\n\n"
+                f"Попробуйте еще раз или обратитесь в поддержку.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")
+                ]])
+            )
+            context.user_data.clear()
+            return ConversationHandler.END
+
+        except Exception as e:
+            # Любые другие ошибки БД
+            logger.error(f"❌ Ошибка БД при создании профиля клиента: {e}", exc_info=True)
+
+            # КРИТИЧНО: Откатываем создание пользователя если создали его, но профиль не создался
+            if user_created and user_id:
+                try:
+                    db.delete_user_profile(telegram_id)
+                    logger.info(f"🔄 Откат: удален пользователь {telegram_id} после ошибки создания профиля")
+                except Exception as rollback_error:
+                    logger.error(f"❌ Ошибка при откате создания пользователя: {rollback_error}")
+
+            await query.edit_message_text(
+                "❌ Произошла ошибка при сохранении профиля в базу данных.\n\n"
+                "Пожалуйста, попробуйте еще раз через минуту.\n\n"
+                "Если проблема повторяется, обратитесь в поддержку.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")
+                ]])
             )
             context.user_data.clear()
             return ConversationHandler.END
@@ -822,24 +979,74 @@ async def register_client_city_other(update: Update, context: ContextTypes.DEFAU
     """Ввод другого города вручную"""
     city = update.message.text.strip()
     context.user_data["city"] = city
-    
+
     # Создаём профиль
     telegram_id = update.effective_user.id
-    
-    # Проверяем есть ли уже user (если добавляет вторую роль)
-    existing_user = db.get_user(telegram_id)
-    if existing_user:
-        user_id = existing_user["id"]
-    else:
-        user_id = db.create_user(telegram_id, "client")
 
-    db.create_client_profile(
-        user_id=user_id,
-        name=context.user_data["name"],
-        phone=context.user_data["phone"],
-        city=context.user_data["city"],
-        description="",
-    )
+    # КРИТИЧНО: Обработка ошибок БД при создании пользователя и профиля
+    user_created = False  # Флаг для отслеживания создания нового пользователя
+    user_id = None
+
+    try:
+        # Проверяем есть ли уже user (если добавляет вторую роль)
+        existing_user = db.get_user(telegram_id)
+        if existing_user:
+            user_id = existing_user["id"]
+        else:
+            user_id = db.create_user(telegram_id, "client")
+            user_created = True  # КРИТИЧНО: Отмечаем что создали нового пользователя
+
+        db.create_client_profile(
+            user_id=user_id,
+            name=context.user_data["name"],
+            phone=context.user_data["phone"],
+            city=context.user_data["city"],
+            description="",
+        )
+
+    except ValueError as e:
+        # Ошибки валидации (например, дубликат профиля)
+        logger.error(f"❌ Ошибка валидации при создании профиля клиента: {e}")
+
+        # КРИТИЧНО: Откатываем создание пользователя если создали его, но профиль не создался
+        if user_created and user_id:
+            try:
+                db.delete_user_profile(telegram_id)
+                logger.info(f"🔄 Откат: удален пользователь {telegram_id} после ошибки создания профиля")
+            except Exception as rollback_error:
+                logger.error(f"❌ Ошибка при откате создания пользователя: {rollback_error}")
+
+        keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")]]
+        await update.message.reply_text(
+            f"❌ Не удалось создать профиль.\n\n"
+            f"Причина: {str(e)}\n\n"
+            f"Попробуйте еще раз или обратитесь в поддержку.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    except Exception as e:
+        # Любые другие ошибки БД
+        logger.error(f"❌ Ошибка БД при создании профиля клиента: {e}", exc_info=True)
+
+        # КРИТИЧНО: Откатываем создание пользователя если создали его, но профиль не создался
+        if user_created and user_id:
+            try:
+                db.delete_user_profile(telegram_id)
+                logger.info(f"🔄 Откат: удален пользователь {telegram_id} после ошибки создания профиля")
+            except Exception as rollback_error:
+                logger.error(f"❌ Ошибка при откате создания пользователя: {rollback_error}")
+
+        keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")]]
+        await update.message.reply_text(
+            "❌ Произошла ошибка при сохранении профиля в базу данных.\n\n"
+            "Пожалуйста, попробуйте еще раз через минуту.\n\n"
+            "Если проблема повторяется, обратитесь в поддержку.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
 
     keyboard = [[InlineKeyboardButton("🏠 Моё меню заказчика", callback_data="show_client_menu")]]
     await update.message.reply_text(
@@ -852,11 +1059,6 @@ async def register_client_city_other(update: Update, context: ContextTypes.DEFAU
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
-
-    context.user_data.clear()
-    return ConversationHandler.END
-
-
 
     context.user_data.clear()
     return ConversationHandler.END
@@ -1337,6 +1539,17 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
         logger.warning("Не удалось получить file_id из сообщения")
         return
 
+    # КРИТИЧНО: Валидация file_id
+    if not validate_file_id(file_id):
+        logger.error(f"❌ Невалидный file_id при добавлении фото в портфолио: {file_id}")
+        keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]
+        await update.message.reply_text(
+            "❌ Ошибка при обработке фото.\n\n"
+            "Попробуйте отправить фото еще раз или используйте другое изображение.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
     existing_count = len(context.user_data.get("existing_photos", []))
     new_count = len(context.user_data.get("new_photos", []))
     total_count = existing_count + new_count
@@ -1453,9 +1666,16 @@ async def worker_add_photos_finish(query, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Объединяем старые и новые фото
         all_photos = existing_photos + new_photos
-        photos_string = ",".join(all_photos)
-        
-        logger.info(f"Объединённые фото (всего {len(all_photos)})")
+
+        # КРИТИЧНО: Валидация всех file_id перед сохранением в БД
+        valid_photos = [fid for fid in all_photos if validate_file_id(fid)]
+        if len(valid_photos) < len(all_photos):
+            removed_count = len(all_photos) - len(valid_photos)
+            logger.warning(f"⚠️ Удалено {removed_count} невалидных file_id перед обновлением портфолио")
+
+        photos_string = ",".join(valid_photos)
+
+        logger.info(f"Объединённые фото (всего {len(valid_photos)} валидных из {len(all_photos)})")
         
         # Получаем telegram_id
         telegram_id = query.from_user.id
@@ -1477,9 +1697,11 @@ async def worker_add_photos_finish(query, context: ContextTypes.DEFAULT_TYPE):
         
         keyboard = [[InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
                     [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]]
-        
-        added_count = len(new_photos)
-        total_count = len(all_photos)
+
+        # Подсчитываем валидные фото (для точной статистики)
+        valid_new_photos = [fid for fid in new_photos if validate_file_id(fid)]
+        added_count = len(valid_new_photos)
+        total_count = len(valid_photos)
         
         message_text = (
             f"✅ <b>Фото успешно добавлены!</b>\n\n"
@@ -1755,6 +1977,18 @@ async def upload_profile_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if not file_id:
         logger.warning("Не удалось получить file_id из сообщения")
+        return
+
+    # КРИТИЧНО: Валидация file_id
+    if not validate_file_id(file_id):
+        logger.error(f"❌ Невалидный file_id при загрузке фото профиля: {file_id}")
+        await update.message.reply_text(
+            "❌ Ошибка при обработке фото.\n\n"
+            "Попробуйте отправить фото еще раз или используйте другое изображение.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_profile_photo")
+            ]])
+        )
         return
 
     # Сохраняем фото профиля в БД
@@ -4274,20 +4508,34 @@ async def create_order_description(update: Update, context: ContextTypes.DEFAULT
 
 async def create_order_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка загрузки фото для заказа"""
-    
+
     if "order_photos" not in context.user_data:
         context.user_data["order_photos"] = []
-    
+
     photos = context.user_data["order_photos"]
-    
+
     if len(photos) >= 5:
         await update.message.reply_text(
             "⚠️ Максимум 5 фото. Нажмите кнопку для завершения."
         )
         return CREATE_ORDER_PHOTOS
-    
-    # Сохраняем file_id
+
+    # Получаем file_id
     file_id = update.message.photo[-1].file_id
+
+    # КРИТИЧНО: Валидация file_id
+    if not validate_file_id(file_id):
+        logger.error(f"❌ Невалидный file_id при загрузке фото заказа: {file_id}")
+        keyboard = [[InlineKeyboardButton("✅ Завершить и опубликовать", callback_data="order_publish")]]
+        await update.message.reply_text(
+            "❌ Ошибка при обработке фото.\n\n"
+            "Попробуйте отправить фото еще раз или используйте другое изображение.\n\n"
+            "Или завершите создание заказа без этого фото.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return CREATE_ORDER_PHOTOS
+
+    # Сохраняем file_id
     photos.append(file_id)
     
     keyboard = [[InlineKeyboardButton("✅ Завершить и опубликовать", callback_data="order_publish")]]
@@ -4347,6 +4595,13 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.info(f"description: {context.user_data.get('order_description')}")
         logger.info(f"photos: {len(context.user_data.get('order_photos', []))}")
 
+        # КРИТИЧНО: Валидация file_id перед сохранением заказа
+        order_photos = context.user_data.get("order_photos", [])
+        valid_order_photos = [fid for fid in order_photos if validate_file_id(fid)]
+        if len(valid_order_photos) < len(order_photos):
+            removed_count = len(order_photos) - len(valid_order_photos)
+            logger.warning(f"⚠️ Удалено {removed_count} невалидных file_id из фото заказа")
+
         # Создаём заказ в БД (может вызвать ValueError при rate limiting)
         try:
             order_id = db.create_order(
@@ -4354,7 +4609,7 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
                 city=context.user_data["order_city"],
                 categories=context.user_data["order_categories"],
                 description=context.user_data["order_description"],
-                photos=context.user_data.get("order_photos", [])
+                photos=valid_order_photos
             )
         except ValueError as e:
             # Rate limiting error
