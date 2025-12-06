@@ -756,6 +756,7 @@ async def show_worker_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [InlineKeyboardButton("📋 Доступные заказы", callback_data="worker_view_orders")],
+        [InlineKeyboardButton("💼 Мои отклики", callback_data="worker_my_bids")],
         [InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
         [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_notifications")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")],
@@ -797,6 +798,100 @@ async def toggle_notifications(update: Update, context: ContextTypes.DEFAULT_TYP
     # Возвращаемся в меню мастера через 2 секунды
     await asyncio.sleep(2)
     await show_worker_menu(update, context)
+
+
+async def worker_my_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает все отклики мастера с их статусами"""
+    query = update.callback_query
+    await query.answer()
+
+    user = db.get_user_by_telegram_id(update.effective_user.id)
+    if not user:
+        await query.edit_message_text("❌ Пользователь не найден.")
+        return
+
+    # Получаем профиль мастера
+    worker = db.get_worker_by_user_id(user['id'])
+    if not worker:
+        await query.edit_message_text(
+            "❌ Профиль мастера не найден.\n\n"
+            "Возможно, вы зарегистрированы как заказчик."
+        )
+        return
+
+    worker_dict = dict(worker)
+
+    # Получаем все отклики мастера
+    bids = db.get_bids_for_worker(worker_dict['id'])
+
+    if not bids:
+        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")]]
+        await query.edit_message_text(
+            "💼 <b>Мои отклики</b>\n\n"
+            "У вас пока нет откликов на заказы.\n\n"
+            "Перейдите в раздел \"Доступные заказы\" и откликнитесь на интересные вам заказы!",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    # Группируем отклики по статусам
+    pending_bids = []
+    selected_bids = []
+    rejected_bids = []
+
+    for bid in bids:
+        bid_dict = dict(bid)
+        if bid_dict['status'] == 'pending':
+            pending_bids.append(bid_dict)
+        elif bid_dict['status'] == 'selected':
+            selected_bids.append(bid_dict)
+        elif bid_dict['status'] == 'rejected':
+            rejected_bids.append(bid_dict)
+
+    # Формируем текст с откликами
+    text = "💼 <b>Мои отклики</b>\n\n"
+
+    if selected_bids:
+        text += "✅ <b>Выбраны клиентом:</b>\n"
+        for bid in selected_bids[:5]:  # Показываем до 5 выбранных
+            text += f"  • {bid['order_title'][:30]}... - {bid['proposed_price']} {bid['currency']}\n"
+            text += f"    Статус заказа: {_get_order_status_text(bid['order_status'])}\n"
+        text += "\n"
+
+    if pending_bids:
+        text += "⏳ <b>Ожидают ответа клиента:</b>\n"
+        for bid in pending_bids[:5]:  # Показываем до 5 ожидающих
+            text += f"  • {bid['order_title'][:30]}... - {bid['proposed_price']} {bid['currency']}\n"
+        if len(pending_bids) > 5:
+            text += f"  ... и ещё {len(pending_bids) - 5}\n"
+        text += "\n"
+
+    if rejected_bids:
+        text += f"❌ <b>Отклонены:</b> {len(rejected_bids)}\n"
+
+    text += f"\n📊 <b>Всего откликов:</b> {len(bids)}"
+
+    keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")]]
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+def _get_order_status_text(status):
+    """Возвращает читаемый текст статуса заказа"""
+    status_map = {
+        'open': '🟢 Открыт',
+        'waiting_master_confirmation': '⏳ Ожидает подтверждения',
+        'master_confirmed': '✅ Мастер подтвердил',
+        'master_selected': '👤 Мастер выбран',
+        'completed': '✅ Завершен',
+        'cancelled': '❌ Отменён'
+    }
+    return status_map.get(status, status)
 
 
 async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -2370,6 +2370,41 @@ def get_bids_count_for_order(order_id):
         return cursor.fetchone()[0]
 
 
+def get_bids_for_worker(worker_id):
+    """
+    Получает все отклики мастера с информацией о заказах.
+
+    Args:
+        worker_id: ID мастера в таблице workers
+
+    Returns:
+        Список откликов с информацией о заказе и клиенте
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        cursor.execute("""
+            SELECT
+                b.*,
+                o.title as order_title,
+                o.description as order_description,
+                o.city as order_city,
+                o.categories as order_categories,
+                o.status as order_status,
+                o.created_at as order_created_at,
+                c.name as client_name,
+                u.telegram_id as client_telegram_id
+            FROM bids b
+            JOIN orders o ON b.order_id = o.id
+            JOIN clients c ON o.client_id = c.id
+            JOIN users u ON c.user_id = u.id
+            WHERE b.worker_id = ?
+            ORDER BY b.created_at DESC
+        """, (worker_id,))
+
+        return cursor.fetchall()
+
+
 def select_bid(bid_id):
     """Отмечает отклик как выбранный"""
     with get_db_connection() as conn:

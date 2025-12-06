@@ -371,6 +371,13 @@ def main():
 
     application.add_handler(
         CallbackQueryHandler(
+            handlers.worker_my_bids,
+            pattern="^worker_my_bids$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
             handlers.show_client_menu,
             pattern="^show_client_menu$",
         )
