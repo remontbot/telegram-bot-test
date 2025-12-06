@@ -1,6 +1,10 @@
 import os
+import logging
 from datetime import datetime, timedelta
 from collections import defaultdict
+
+# Логирование для критических операций
+logger = logging.getLogger(__name__)
 
 # Определяем тип базы данных
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -127,19 +131,29 @@ if DATABASE_URL:
         """Инициализирует пул соединений при запуске приложения"""
         global _connection_pool
         if _connection_pool is None:
-            _connection_pool = psycopg2.pool.ThreadedConnectionPool(
-                minconn=5,   # Минимум 5 готовых соединений
-                maxconn=20,  # Максимум 20 одновременных соединений
-                dsn=DATABASE_URL
-            )
-            print("✅ Connection pool инициализирован (5-20 соединений)")
+            try:
+                _connection_pool = psycopg2.pool.ThreadedConnectionPool(
+                    minconn=5,   # Минимум 5 готовых соединений
+                    maxconn=20,  # Максимум 20 одновременных соединений
+                    dsn=DATABASE_URL
+                )
+                logger.info("✅ PostgreSQL connection pool инициализирован (5-20 соединений)")
+            except psycopg2.OperationalError as e:
+                logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось подключиться к PostgreSQL: {e}", exc_info=True)
+                raise
+            except Exception as e:
+                logger.error(f"❌ Неожиданная ошибка при инициализации connection pool: {e}", exc_info=True)
+                raise
 
     def close_connection_pool():
         """Закрывает пул соединений при остановке приложения"""
         global _connection_pool
         if _connection_pool:
-            _connection_pool.closeall()
-            print("✅ Connection pool закрыт")
+            try:
+                _connection_pool.closeall()
+                logger.info("✅ PostgreSQL connection pool закрыт")
+            except Exception as e:
+                logger.error(f"❌ Ошибка при закрытии connection pool: {e}", exc_info=True)
 else:
     # Используем SQLite для локальной разработки
     import sqlite3
@@ -155,11 +169,59 @@ else:
         pass
 
 
+def is_retryable_postgres_error(error):
+    """
+    НОВОЕ: Определяет, можно ли повторить операцию после ошибки PostgreSQL.
+
+    Возвращает True для:
+    - Serialization failures (SQLSTATE 40001)
+    - Deadlocks (SQLSTATE 40P01)
+    - Connection errors
+
+    Args:
+        error: Исключение от psycopg2
+
+    Returns:
+        bool: True если операцию можно повторить
+    """
+    if not USE_POSTGRES:
+        return False
+
+    import psycopg2
+
+    # Проверяем тип ошибки
+    if isinstance(error, (psycopg2.extensions.TransactionRollbackError,
+                         psycopg2.OperationalError)):
+        return True
+
+    # Проверяем SQLSTATE код
+    if hasattr(error, 'pgcode'):
+        # 40001 = serialization_failure
+        # 40P01 = deadlock_detected
+        if error.pgcode in ('40001', '40P01'):
+            return True
+
+    return False
+
+
 def get_connection():
     """Возвращает подключение к базе данных (из пула для PostgreSQL или новое для SQLite)"""
     if USE_POSTGRES:
-        # Берем соединение из пула (быстро!)
-        return _connection_pool.getconn()
+        try:
+            # Берем соединение из пула (быстро!)
+            conn = _connection_pool.getconn()
+            # Проверяем, что соединение живо
+            if conn.closed:
+                logger.warning("⚠️ Получено закрытое соединение из пула, переподключаемся")
+                _connection_pool.putconn(conn, close=True)
+                conn = _connection_pool.getconn()
+            return conn
+        except psycopg2.pool.PoolError as e:
+            logger.error(f"❌ Ошибка пула соединений PostgreSQL: {e}", exc_info=True)
+            raise
+        except Exception as e:
+            logger.error(f"❌ Неожиданная ошибка при получении соединения: {e}", exc_info=True)
+            raise
     else:
         conn = sqlite3.connect(DATABASE_NAME)
         conn.row_factory = sqlite3.Row
@@ -176,7 +238,10 @@ def return_connection(conn):
 
 
 class DatabaseConnection:
-    """Context manager для автоматического управления соединениями с пулом"""
+    """
+    Context manager для автоматического управления соединениями с пулом.
+    ИСПРАВЛЕНО: Добавлен rollback при ошибках для PostgreSQL.
+    """
 
     def __enter__(self):
         self.conn = get_connection()
@@ -190,8 +255,20 @@ class DatabaseConnection:
             except Exception as e:
                 # КРИТИЧЕСКИ ВАЖНО: не игнорируем ошибки commit!
                 logger.error(f"❌ ОШИБКА COMMIT БД: {e}", exc_info=True)
+                try:
+                    self.conn.rollback()
+                except Exception as rollback_error:
+                    logger.error(f"❌ ОШИБКА ROLLBACK: {rollback_error}", exc_info=True)
                 return_connection(self.conn)
                 raise  # Пробрасываем ошибку дальше
+        else:
+            # Произошла ошибка - откатываем транзакцию
+            try:
+                self.conn.rollback()
+                logger.warning(f"⚠️ Rollback выполнен из-за ошибки: {exc_type.__name__}")
+            except Exception as rollback_error:
+                logger.error(f"❌ ОШИБКА ROLLBACK: {rollback_error}", exc_info=True)
+
         return_connection(self.conn)
         return False
 
@@ -341,7 +418,7 @@ def init_db():
                 budget_value REAL,
                 deadline TEXT,
                 photos TEXT DEFAULT '',
-                status TEXT NOT NULL, -- 'open', 'pending_choice', 'master_selected', 'contact_shared', 'done', 'canceled'
+                status TEXT NOT NULL, -- 'open', 'pending_choice', 'master_selected', 'contact_shared', 'done', 'canceled', 'cancelled', 'expired'
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (client_id) REFERENCES clients(id)
             );
@@ -460,7 +537,9 @@ def create_user(telegram_id, role):
             (telegram_id, role, created_at),
         )
         conn.commit()
-        return cursor.lastrowid
+        user_id = cursor.lastrowid
+        logger.info(f"✅ Создан пользователь: ID={user_id}, Telegram={telegram_id}, Роль={role}")
+        return user_id
 
 
 def delete_user_profile(telegram_id):
@@ -516,11 +595,13 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
         """, (user_id, name, phone, city, regions, categories, experience, description, portfolio_photos))
         worker_id = cursor.lastrowid
         conn.commit()
+        logger.info(f"✅ Создан профиль мастера: ID={worker_id}, User={user_id}, Имя={name}, Город={city}")
 
     # ИСПРАВЛЕНИЕ: Добавляем категории в нормализованную таблицу
     if categories:
         categories_list = [cat.strip() for cat in categories.split(',') if cat.strip()]
         add_worker_categories(worker_id, categories_list)
+        logger.info(f"📋 Добавлены категории для мастера {worker_id}: {categories_list}")
 
 
 def create_client_profile(user_id, name, phone, city, description):
@@ -536,7 +617,9 @@ def create_client_profile(user_id, name, phone, city, description):
             INSERT INTO clients (user_id, name, phone, city, description)
             VALUES (?, ?, ?, ?, ?)
         """, (user_id, name, phone, city, description))
+        client_id = cursor.lastrowid
         conn.commit()
+        logger.info(f"✅ Создан профиль клиента: ID={client_id}, User={user_id}, Имя={name}, Город={city}")
 
 
 def get_worker_profile(user_id):
@@ -832,9 +915,11 @@ def mark_order_completed_by_client(order_id):
                     UPDATE orders SET status = 'completed' WHERE id = ?
                 """, (order_id,))
                 conn.commit()
+                logger.info(f"✅ Заказ {order_id} завершен: обе стороны подтвердили (клиент)")
                 return True
 
         conn.commit()
+        logger.info(f"📝 Заказ {order_id}: клиент подтвердил завершение, ожидается подтверждение мастера")
         return False
 
 
@@ -874,9 +959,11 @@ def mark_order_completed_by_worker(order_id):
                     UPDATE orders SET status = 'completed' WHERE id = ?
                 """, (order_id,))
                 conn.commit()
+                logger.info(f"✅ Заказ {order_id} завершен: обе стороны подтвердили (мастер)")
                 return True
 
         conn.commit()
+        logger.info(f"📝 Заказ {order_id}: мастер подтвердил завершение, ожидается подтверждение клиента")
         return False
 
 
@@ -1312,11 +1399,11 @@ def migrate_add_cascading_deletes():
                 END $$;
             """)
 
-            conn.commit()
-            print("✅ Cascading deletes успешно добавлены!")
+            logger.info("✅ Cascading deletes успешно добавлены!")
 
         except Exception as e:
-            print(f"⚠️  Предупреждение при добавлении cascading deletes: {e}")
+            logger.warning(f"⚠️ Предупреждение при добавлении cascading deletes: {e}", exc_info=True)
+            # Не пробрасываем ошибку - миграция не критична если constraint уже существует
 
 
 def migrate_add_order_completion_tracking():
@@ -2383,7 +2470,9 @@ def create_order(client_id, city, categories, description, photos, budget_type="
         """, (client_id, city, categories_str, description, photos_str, budget_type, budget_value, now))
 
         conn.commit()
-        return cursor.lastrowid
+        order_id = cursor.lastrowid
+        logger.info(f"✅ Создан заказ: ID={order_id}, Клиент={client_id}, Город={city}, Категории={categories_str}")
+        return order_id
 
 
 def get_orders_by_category(category, page=1, per_page=10):
@@ -2550,7 +2639,188 @@ def update_order_status(order_id, new_status):
             WHERE id = ?
         """, (new_status, order_id))
         conn.commit()
-        return cursor.rowcount > 0
+        success = cursor.rowcount > 0
+        if success:
+            logger.info(f"✅ Обновлен статус заказа: ID={order_id}, Новый статус={new_status}")
+        else:
+            logger.warning(f"⚠️ Заказ {order_id} не найден для обновления статуса")
+        return success
+
+
+def cancel_order(order_id, cancelled_by_user_id, reason=""):
+    """
+    НОВОЕ: Отменяет заказ клиентом.
+
+    Args:
+        order_id: ID заказа
+        cancelled_by_user_id: ID пользователя который отменяет
+        reason: Причина отмены (опционально)
+
+    Returns:
+        dict: {
+            'success': bool,
+            'message': str,
+            'notified_workers': list  # ID мастеров которым отправлено уведомление
+        }
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Проверяем существование заказа и права на отмену
+        cursor.execute("""
+            SELECT o.*, c.user_id as client_user_id
+            FROM orders o
+            JOIN clients c ON o.client_id = c.id
+            WHERE o.id = ?
+        """, (order_id,))
+
+        order = cursor.fetchone()
+        if not order:
+            return {'success': False, 'message': 'Заказ не найден', 'notified_workers': []}
+
+        order_dict = dict(order)
+
+        # Проверка прав: только владелец может отменить
+        if order_dict['client_user_id'] != cancelled_by_user_id:
+            return {'success': False, 'message': 'Нет прав на отмену этого заказа', 'notified_workers': []}
+
+        # Проверка статуса: можно отменить только open или waiting_master_confirmation
+        if order_dict['status'] not in ('open', 'waiting_master_confirmation'):
+            return {
+                'success': False,
+                'message': f"Нельзя отменить заказ в статусе '{order_dict['status']}'",
+                'notified_workers': []
+            }
+
+        # Обновляем статус заказа
+        cursor.execute("""
+            UPDATE orders
+            SET status = 'cancelled'
+            WHERE id = ?
+        """, (order_id,))
+
+        # Получаем список мастеров которые откликнулись (для уведомления)
+        cursor.execute("""
+            SELECT DISTINCT w.user_id
+            FROM bids b
+            JOIN workers w ON b.worker_id = w.id
+            WHERE b.order_id = ? AND b.status IN ('pending', 'selected')
+        """, (order_id,))
+
+        worker_user_ids = [row[0] for row in cursor.fetchall()]
+
+        # Отмечаем все отклики как rejected
+        cursor.execute("""
+            UPDATE bids
+            SET status = 'rejected'
+            WHERE order_id = ?
+        """, (order_id,))
+
+        conn.commit()
+
+        logger.info(f"Заказ {order_id} отменен пользователем {cancelled_by_user_id}. Причина: {reason}")
+
+        return {
+            'success': True,
+            'message': 'Заказ успешно отменен',
+            'notified_workers': worker_user_ids
+        }
+
+
+def check_expired_orders():
+    """
+    НОВОЕ: Проверяет и обрабатывает заказы с истекшим дедлайном.
+
+    Автоматически находит заказы, у которых:
+    - deadline прошел (deadline < now)
+    - статус 'open' или 'waiting_master_confirmation'
+
+    Для найденных заказов:
+    - Меняет статус на 'expired'
+    - Отклоняет все активные отклики
+    - Возвращает информацию для отправки уведомлений
+
+    Returns:
+        list: Список словарей с информацией о просроченных заказах:
+            [
+                {
+                    'order_id': int,
+                    'client_user_id': int,
+                    'worker_user_ids': [int, ...],
+                    'title': str
+                },
+                ...
+            ]
+    """
+    from datetime import datetime
+
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Находим просроченные заказы
+        now = datetime.now().isoformat()
+
+        cursor.execute("""
+            SELECT o.id, o.title, o.deadline, c.user_id as client_user_id
+            FROM orders o
+            JOIN clients c ON o.client_id = c.id
+            WHERE o.deadline IS NOT NULL
+            AND o.deadline != ''
+            AND o.deadline < ?
+            AND o.status IN ('open', 'waiting_master_confirmation')
+        """, (now,))
+
+        expired_orders = cursor.fetchall()
+
+        if not expired_orders:
+            logger.debug("Просроченных заказов не найдено")
+            return []
+
+        result = []
+
+        for order_row in expired_orders:
+            order_id = order_row[0]
+            title = order_row[1]
+            client_user_id = order_row[3]
+
+            # Получаем всех мастеров, которые откликнулись
+            cursor.execute("""
+                SELECT DISTINCT w.user_id
+                FROM bids b
+                JOIN workers w ON b.worker_id = w.id
+                WHERE b.order_id = ? AND b.status IN ('pending', 'selected')
+            """, (order_id,))
+
+            worker_rows = cursor.fetchall()
+            worker_user_ids = [row[0] for row in worker_rows]
+
+            # Обновляем статус заказа
+            cursor.execute("""
+                UPDATE orders
+                SET status = 'expired'
+                WHERE id = ?
+            """, (order_id,))
+
+            # Отклоняем все активные отклики
+            cursor.execute("""
+                UPDATE bids
+                SET status = 'rejected'
+                WHERE order_id = ? AND status IN ('pending', 'selected')
+            """, (order_id,))
+
+            logger.info(f"Заказ {order_id} истек по дедлайну. Клиент: {client_user_id}, Мастеров: {len(worker_user_ids)}")
+
+            result.append({
+                'order_id': order_id,
+                'client_user_id': client_user_id,
+                'worker_user_ids': worker_user_ids,
+                'title': title
+            })
+
+        conn.commit()
+
+        logger.info(f"Обработано просроченных заказов: {len(result)}")
+        return result
 
 
 def create_bid(order_id, worker_id, proposed_price, currency, comment=""):
@@ -2578,7 +2848,9 @@ def create_bid(order_id, worker_id, proposed_price, currency, comment=""):
         """, (order_id, worker_id, proposed_price, currency, comment, now))
 
         conn.commit()
-        return cursor.lastrowid
+        bid_id = cursor.lastrowid
+        logger.info(f"✅ Создан отклик: ID={bid_id}, Заказ={order_id}, Мастер={worker_id}, Цена={proposed_price} {currency}")
+        return bid_id
 
 
 def get_bids_for_order(order_id):

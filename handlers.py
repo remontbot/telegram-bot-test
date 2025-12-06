@@ -2232,6 +2232,14 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     callback_data=f"view_bids_{order_id}"
                 )])
 
+            # НОВОЕ: Кнопка отмены для открытых заказов
+            order_status = order_dict.get('status', '')
+            if order_status in ('open', 'waiting_master_confirmation'):
+                keyboard.append([InlineKeyboardButton(
+                    f"❌ Отменить заказ #{order_id}",
+                    callback_data=f"cancel_order_{order_id}"
+                )])
+
             orders_text += f"📅 {order_dict.get('created_at', '')}\n"
             orders_text += "\n"
 
@@ -2253,6 +2261,80 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"❌ Ошибка при загрузке заказов:\n{str(e)}\n\nПопробуйте позже.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+
+async def cancel_order_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    НОВОЕ: Обработчик отмены заказа клиентом.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # Извлекаем order_id из callback_data
+        order_id = int(query.data.replace("cancel_order_", ""))
+
+        # Получаем пользователя
+        user = db.get_user(query.from_user.id)
+        if not user:
+            await query.edit_message_text("❌ Пользователь не найден.")
+            return
+
+        # Отменяем заказ
+        result = db.cancel_order(order_id, user['id'], reason="Отменен клиентом через бот")
+
+        if not result['success']:
+            await query.edit_message_text(
+                f"❌ <b>Ошибка отмены заказа</b>\n\n{result['message']}",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")
+                ]])
+            )
+            return
+
+        # Успешная отмена - уведомляем мастеров
+        notified_count = 0
+        for worker_user_id in result['notified_workers']:
+            try:
+                worker_user = db.get_user_by_id(worker_user_id)
+                if worker_user:
+                    await context.bot.send_message(
+                        chat_id=worker_user['telegram_id'],
+                        text=(
+                            f"❌ <b>Заказ #{order_id} отменен</b>\n\n"
+                            f"Клиент отменил заказ на который вы откликались.\n"
+                            f"Ваш отклик больше не актуален."
+                        ),
+                        parse_mode="HTML"
+                    )
+                    notified_count += 1
+            except Exception as e:
+                logger.warning(f"Не удалось отправить уведомление мастеру {worker_user_id}: {e}")
+
+        # Сообщаем клиенту об успехе
+        await query.edit_message_text(
+            f"✅ <b>Заказ #{order_id} успешно отменен</b>\n\n"
+            f"📨 Уведомлено мастеров: {notified_count}\n\n"
+            f"Заказ больше не будет показываться в поиске.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders"),
+                InlineKeyboardButton("🏠 Главное меню", callback_data="show_client_menu")
+            ]])
+        )
+
+        logger.info(f"Заказ {order_id} отменен пользователем {user['id']}. Уведомлено мастеров: {notified_count}")
+
+    except Exception as e:
+        logger.error(f"Ошибка при отмене заказа: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Произошла ошибка при отмене заказа:\n{str(e)}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data="client_my_orders")
+            ]])
         )
 
 

@@ -323,6 +323,14 @@ def main():
         )
     )
 
+    # --- Обработчик отмены заказа ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.cancel_order_handler,
+            pattern="^cancel_order_"
+        )
+    )
+
     # --- Обработчики для добавления фото (БЕЗ ConversationHandler) ---
     
     # Начало добавления фото
@@ -656,6 +664,69 @@ def main():
     application.add_handler(
         MessageHandler(filters.COMMAND, handlers.unknown_command)
     )
+
+    # --- ФОНОВАЯ ЗАДАЧА: Проверка просроченных заказов ---
+    async def check_deadlines_job(context):
+        """
+        Периодическая проверка просроченных заказов.
+        Запускается каждый час.
+        """
+        logger.info("🔍 Запуск проверки просроченных заказов...")
+
+        expired_orders = db.check_expired_orders()
+
+        if not expired_orders:
+            logger.debug("Просроченных заказов не найдено")
+            return
+
+        logger.info(f"📋 Найдено просроченных заказов: {len(expired_orders)}")
+
+        # Отправляем уведомления
+        for order_data in expired_orders:
+            order_id = order_data['order_id']
+            client_user_id = order_data['client_user_id']
+            worker_user_ids = order_data['worker_user_ids']
+            title = order_data['title']
+
+            # Уведомляем клиента
+            try:
+                client_user = db.get_user_by_id(client_user_id)
+                if client_user:
+                    await context.bot.send_message(
+                        chat_id=client_user['telegram_id'],
+                        text=f"⏰ Заказ #{order_id} истёк по дедлайну\n\n"
+                             f"📝 {title}\n\n"
+                             f"Заказ автоматически закрыт, так как прошёл указанный срок выполнения."
+                    )
+                    logger.info(f"✅ Уведомление клиента {client_user_id} отправлено")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки уведомления клиенту {client_user_id}: {e}")
+
+            # Уведомляем мастеров
+            for worker_user_id in worker_user_ids:
+                try:
+                    worker_user = db.get_user_by_id(worker_user_id)
+                    if worker_user:
+                        await context.bot.send_message(
+                            chat_id=worker_user['telegram_id'],
+                            text=f"⏰ Заказ #{order_id} истёк по дедлайну\n\n"
+                                 f"📝 {title}\n\n"
+                                 f"Заказ автоматически закрыт."
+                        )
+                except Exception as e:
+                    logger.error(f"❌ Ошибка отправки уведомления мастеру {worker_user_id}: {e}")
+
+        logger.info(f"✅ Проверка просроченных заказов завершена. Обработано: {len(expired_orders)}")
+
+    # Добавляем задачу в очередь (запуск каждый час)
+    job_queue = application.job_queue
+    job_queue.run_repeating(
+        check_deadlines_job,
+        interval=3600,  # 3600 секунд = 1 час
+        first=10  # Первый запуск через 10 секунд после старта бота
+    )
+
+    logger.info("⏰ Фоновая задача проверки дедлайнов активирована (каждый час)")
 
     logger.info("Бот запущен. Опрос обновлений...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
