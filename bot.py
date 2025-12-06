@@ -533,6 +533,14 @@ def main():
         )
     )
 
+    # --- Обработчики чатов ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.open_chat,
+            pattern="^open_chat_"
+        )
+    )
+
     # --- ConversationHandler для отзывов ---
     review_conv_handler = ConversationHandler(
         entry_points=[
@@ -606,6 +614,14 @@ def main():
     # Команда для массовой рассылки уведомлений (только для администратора)
     application.add_handler(
         CommandHandler("announce", handlers.announce_command)
+    )
+
+    # Глобальный обработчик сообщений для чатов (ВАЖНО: должен быть ДО unknown_command)
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handlers.handle_chat_message
+        )
     )
 
     # Обработчик неизвестных команд
