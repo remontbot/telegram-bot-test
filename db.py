@@ -482,6 +482,9 @@ def delete_user_profile(telegram_id):
 # --- Профили мастеров и заказчиков ---
 
 def create_worker_profile(user_id, name, phone, city, regions, categories, experience, description, portfolio_photos=""):
+    """
+    ОБНОВЛЕНО: Добавляет категории в нормализованную таблицу worker_categories.
+    """
     # Валидация входных данных
     name = validate_string_length(name, MAX_NAME_LENGTH, "name")
     phone = validate_string_length(phone, MAX_PHONE_LENGTH, "phone")
@@ -497,7 +500,13 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
             INSERT INTO workers (user_id, name, phone, city, regions, categories, experience, description, portfolio_photos)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (user_id, name, phone, city, regions, categories, experience, description, portfolio_photos))
+        worker_id = cursor.lastrowid
         conn.commit()
+
+    # ИСПРАВЛЕНИЕ: Добавляем категории в нормализованную таблицу
+    if categories:
+        categories_list = [cat.strip() for cat in categories.split(',') if cat.strip()]
+        add_worker_categories(worker_id, categories_list)
 
 
 def create_client_profile(user_id, name, phone, city, description):
@@ -982,21 +991,23 @@ def update_client_field(user_id, field_name, new_value):
 
 def get_all_workers(city=None, category=None):
     """
+    ИСПРАВЛЕНО: Использует точный поиск по категориям вместо LIKE.
+
     Получает список всех мастеров с фильтрами.
-    
+
     Args:
         city: Фильтр по городу (опционально)
         category: Фильтр по категории (опционально)
-    
+
     Returns:
         List of worker profiles with user info
     """
     with get_db_connection() as conn:
-        
+
         cursor = get_cursor(conn)
-        
+
         query = """
-            SELECT 
+            SELECT
                 w.*,
                 u.telegram_id
             FROM workers w
@@ -1004,17 +1015,26 @@ def get_all_workers(city=None, category=None):
             WHERE 1=1
         """
         params = []
-        
+
         if city:
-            query += " AND w.city LIKE ?"
-            params.append(f"%{city}%")
-        
+            # Точное совпадение города (без LIKE)
+            query += " AND w.city = ?"
+            params.append(city)
+
         if category:
-            query += " AND w.categories LIKE ?"
-            params.append(f"%{category}%")
-        
+            # ИСПРАВЛЕНО: Точный поиск по категории через worker_categories
+            # Раньше: LIKE '%Электрика%' (находил 'Неэлектрика')
+            # Теперь: EXISTS с точным совпадением
+            query += """
+                AND EXISTS (
+                    SELECT 1 FROM worker_categories wc
+                    WHERE wc.worker_id = w.id AND wc.category = ?
+                )
+            """
+            params.append(category)
+
         query += " ORDER BY w.rating DESC, w.rating_count DESC"
-        
+
         cursor.execute(query, params)
         return cursor.fetchall()
 
@@ -1036,6 +1056,74 @@ def get_worker_by_id(worker_id):
         
         return cursor.fetchone()
 
+
+# --- Категории мастеров (новая нормализованная система) ---
+
+def add_worker_categories(worker_id, categories_list):
+    """
+    Добавляет категории для мастера в таблицу worker_categories.
+
+    Args:
+        worker_id: ID мастера
+        categories_list: список категорий ["Электрика", "Сантехника"]
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        for category in categories_list:
+            if not category or not category.strip():
+                continue
+
+            try:
+                cursor.execute("""
+                    INSERT INTO worker_categories (worker_id, category)
+                    VALUES (?, ?)
+                """, (worker_id, category.strip()))
+            except:
+                # Игнорируем дубликаты (UNIQUE constraint)
+                pass
+
+        conn.commit()
+
+
+def get_worker_categories(worker_id):
+    """
+    Получает все категории мастера.
+
+    Returns:
+        Список категорий: ["Электрика", "Сантехника"]
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT category FROM worker_categories
+            WHERE worker_id = ?
+            ORDER BY category
+        """, (worker_id,))
+
+        return [row[0] for row in cursor.fetchall()]
+
+
+def remove_worker_category(worker_id, category):
+    """Удаляет категорию у мастера"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            DELETE FROM worker_categories
+            WHERE worker_id = ? AND category = ?
+        """, (worker_id, category))
+        conn.commit()
+
+
+def clear_worker_categories(worker_id):
+    """Удаляет все категории мастера"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            DELETE FROM worker_categories
+            WHERE worker_id = ?
+        """, (worker_id,))
+        conn.commit()
 
 
 def migrate_add_order_photos():
@@ -1599,6 +1687,110 @@ def migrate_add_notification_settings():
 
         except Exception as e:
             print(f"⚠️  Ошибка при добавлении настроек уведомлений: {e}")
+            import traceback
+            traceback.print_exc()
+
+
+def migrate_normalize_categories():
+    """
+    ИСПРАВЛЕНИЕ: Создает отдельную таблицу для категорий мастеров.
+
+    ПРОБЛЕМА: categories LIKE '%Электрика%' находит 'Неэлектрика'
+    РЕШЕНИЕ: Отдельная таблица worker_categories с точным поиском
+
+    Создает:
+    1. Таблицу worker_categories (worker_id, category)
+    2. Переносит данные из workers.categories
+    3. Создает индексы для быстрого поиска
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            # Проверяем существует ли уже таблица
+            if USE_POSTGRES:
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_name = 'worker_categories'
+                    )
+                """)
+                table_exists = cursor.fetchone()[0]
+            else:
+                cursor.execute("""
+                    SELECT name FROM sqlite_master
+                    WHERE type='table' AND name='worker_categories'
+                """)
+                table_exists = cursor.fetchone() is not None
+
+            if table_exists:
+                print("ℹ️  Таблица worker_categories уже существует, пропускаем миграцию")
+                return
+
+            # Создаем таблицу worker_categories
+            if USE_POSTGRES:
+                cursor.execute("""
+                    CREATE TABLE worker_categories (
+                        id SERIAL PRIMARY KEY,
+                        worker_id INTEGER NOT NULL,
+                        category VARCHAR(100) NOT NULL,
+                        FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE CASCADE,
+                        UNIQUE (worker_id, category)
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS worker_categories (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        worker_id INTEGER NOT NULL,
+                        category TEXT NOT NULL,
+                        FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE CASCADE,
+                        UNIQUE (worker_id, category)
+                    )
+                """)
+
+            # Переносим существующие категории из workers.categories
+            cursor.execute("SELECT id, categories FROM workers WHERE categories IS NOT NULL AND categories != ''")
+            workers = cursor.fetchall()
+
+            migrated_count = 0
+            for worker in workers:
+                worker_id = worker[0]
+                categories_str = worker[1]
+
+                if not categories_str:
+                    continue
+
+                # Разбиваем строку "Электрика, Сантехника" на список
+                categories = [cat.strip() for cat in categories_str.split(',') if cat.strip()]
+
+                for category in categories:
+                    try:
+                        cursor.execute("""
+                            INSERT INTO worker_categories (worker_id, category)
+                            VALUES (?, ?)
+                        """, (worker_id, category))
+                        migrated_count += 1
+                    except:
+                        # Пропускаем дубликаты
+                        pass
+
+            # Создаем индексы для быстрого поиска
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_worker_categories_worker
+                ON worker_categories(worker_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_worker_categories_category
+                ON worker_categories(category)
+            """)
+
+            conn.commit()
+            print(f"✅ Категории нормализованы! Перенесено {migrated_count} категорий")
+            print("   Теперь поиск будет точным, без ложных совпадений")
+
+        except Exception as e:
+            print(f"⚠️  Ошибка при нормализации категорий: {e}")
             import traceback
             traceback.print_exc()
 

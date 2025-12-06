@@ -78,6 +78,7 @@ def main():
     db.migrate_add_chat_system()  # Создаём таблицы для чата между клиентом и мастером
     db.migrate_add_transactions()  # Создаём таблицу для истории транзакций
     db.migrate_add_notification_settings()  # Добавляем настройки уведомлений для мастеров
+    db.migrate_normalize_categories()  # ИСПРАВЛЕНИЕ: Нормализация категорий (точный поиск вместо LIKE)
     db.create_indexes()  # Создаем индексы для оптимизации производительности
 
     token = get_bot_token()
