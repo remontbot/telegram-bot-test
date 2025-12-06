@@ -2430,6 +2430,61 @@ def get_orders_by_category(category, page=1, per_page=10):
         return orders, total_count, has_next_page
 
 
+def get_orders_by_categories(categories_list, per_page=30):
+    """
+    ИСПРАВЛЕНИЕ: Получает заказы для НЕСКОЛЬКИХ категорий ОДНИМ запросом.
+
+    Раньше: 5 категорий = 5 SQL запросов (N+1 проблема)
+    Теперь: 5 категорий = 1 SQL запрос
+
+    Args:
+        categories_list: Список категорий ["Электрика", "Сантехника"]
+        per_page: Максимум заказов (по умолчанию 30)
+
+    Returns:
+        Список заказов, отсортированных по дате (новые первые)
+    """
+    if not categories_list:
+        return []
+
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Создаем условие WHERE с OR для каждой категории
+        # Используем точный поиск через LIKE для каждой категории
+        where_conditions = []
+        params = []
+
+        for category in categories_list:
+            if category and category.strip():
+                where_conditions.append("o.category LIKE ?")
+                params.append(f"%{category.strip()}%")
+
+        if not where_conditions:
+            return []
+
+        where_clause = " OR ".join(where_conditions)
+
+        # Один запрос для всех категорий
+        query = f"""
+            SELECT DISTINCT
+                o.*,
+                c.name as client_name,
+                c.rating as client_rating,
+                c.rating_count as client_rating_count
+            FROM orders o
+            JOIN clients c ON o.client_id = c.id
+            WHERE o.status = 'open'
+            AND ({where_clause})
+            ORDER BY o.created_at DESC
+            LIMIT ?
+        """
+        params.append(per_page)
+
+        cursor.execute(query, params)
+        return cursor.fetchall()
+
+
 def get_client_orders(client_id, page=1, per_page=10):
     """
     Получает заказы клиента с пагинацией.

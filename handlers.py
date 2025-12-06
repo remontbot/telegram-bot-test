@@ -3035,22 +3035,12 @@ async def worker_view_orders(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         worker_dict = dict(worker_profile)
         categories = worker_dict.get("categories", "").split(", ")
-        
-        # Собираем заказы по категориям мастера (с пагинацией - первые 10 на категорию)
-        all_orders = []
-        seen_order_ids = set()
 
-        for category in categories:
-            if category.strip():
-                orders, _, _ = db.get_orders_by_category(category.strip(), page=1, per_page=10)
-                for order in orders:
-                    order_dict = dict(order)
-                    if order_dict['id'] not in seen_order_ids:
-                        all_orders.append(order_dict)
-                        seen_order_ids.add(order_dict['id'])
-        
-        # Сортируем по дате (новые первые)
-        all_orders.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        # ИСПРАВЛЕНО: Один запрос для всех категорий вместо N запросов
+        # Раньше: 5 категорий = 5 SQL запросов
+        # Теперь: 5 категорий = 1 SQL запрос
+        all_orders = db.get_orders_by_categories(categories, per_page=30)
+        all_orders = [dict(order) for order in all_orders]
         
         if not all_orders:
             keyboard = [
