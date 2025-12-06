@@ -207,6 +207,8 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", handlers.cancel),
+            CommandHandler("start", handlers.cancel_from_start),  # КРИТИЧНО: выход из застрявшего диалога
+            MessageHandler(filters.Regex("^(Отмена|отмена|cancel)$"), handlers.cancel),
         ],
         allow_reentry=True,
     )
@@ -238,6 +240,8 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", handlers.cancel),
+            CommandHandler("start", handlers.cancel_from_start),  # КРИТИЧНО: выход из застрявшего диалога
+            MessageHandler(filters.Regex("^(Отмена|отмена|cancel)$"), handlers.cancel),
         ],
         allow_reentry=True,
     )
@@ -283,6 +287,8 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", handlers.cancel),
+            CommandHandler("start", handlers.cancel_from_start),  # КРИТИЧНО: выход из застрявшего диалога
+            MessageHandler(filters.Regex("^(Отмена|отмена|cancel)$"), handlers.cancel),
             CallbackQueryHandler(handlers.show_worker_profile, pattern="^worker_profile$"),
         ],
         allow_reentry=True,
@@ -665,6 +671,49 @@ def main():
     application.add_handler(
         MessageHandler(filters.COMMAND, handlers.unknown_command)
     )
+
+    # --- ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК ---
+    async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        КРИТИЧЕСКИ ВАЖНО: Глобальный обработчик всех необработанных ошибок.
+        Предотвращает крашинг бота и помогает пользователям восстановиться.
+        """
+        logger.error(
+            f"❌ EXCEPTION while handling update {update}",
+            exc_info=context.error
+        )
+
+        # Логируем контекст для debugging
+        if context.user_data:
+            logger.error(f"User data: {context.user_data}")
+
+        try:
+            # Пытаемся уведомить пользователя
+            if update and update.effective_message:
+                error_message = (
+                    "❌ <b>Произошла ошибка</b>\n\n"
+                    "К сожалению, что-то пошло не так.\n\n"
+                    "Попробуйте:\n"
+                    "• Отправить /start для возврата в главное меню\n"
+                    "• Повторить действие через минуту\n\n"
+                    "Если проблема повторяется, обратитесь в поддержку."
+                )
+
+                await update.effective_message.reply_text(
+                    error_message,
+                    parse_mode="HTML"
+                )
+            elif update and update.callback_query:
+                # Если это callback query, отвечаем через answer
+                await update.callback_query.answer(
+                    "❌ Произошла ошибка. Попробуйте отправить /start",
+                    show_alert=True
+                )
+        except Exception as e:
+            logger.error(f"❌ Error in error_handler itself: {e}", exc_info=True)
+
+    # Регистрируем обработчик ошибок
+    application.add_error_handler(error_handler)
 
     # --- ФОНОВАЯ ЗАДАЧА: Проверка просроченных заказов ---
     async def check_deadlines_job(context):

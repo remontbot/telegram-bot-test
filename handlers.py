@@ -22,6 +22,45 @@ logger = logging.getLogger(__name__)
 
 # ===== HELPER FUNCTIONS =====
 
+async def safe_edit_message(query, text, **kwargs):
+    """
+    КРИТИЧЕСКИ ВАЖНО: Безопасное редактирование сообщения.
+
+    Обрабатывает:
+    - Timeout callback_query (>30 сек)
+    - Попытка редактировать одинаковый текст
+    - Другие BadRequest ошибки
+
+    Если редактирование невозможно, отправляет новое сообщение.
+    """
+    import telegram
+
+    try:
+        await query.edit_message_text(text, **kwargs)
+    except telegram.error.BadRequest as e:
+        error_msg = str(e).lower()
+
+        if "message is not modified" in error_msg:
+            # Текст не изменился, ничего не делаем
+            logger.debug("Message not modified, skipping")
+            return
+
+        if "query is too old" in error_msg or "message can't be edited" in error_msg:
+            # Callback устарел (>30 сек), отправляем новое сообщение
+            logger.warning("Callback query too old, sending new message")
+            try:
+                await query.message.reply_text(text, **kwargs)
+            except Exception as send_error:
+                logger.error(f"Failed to send new message: {send_error}")
+        else:
+            # Другая BadRequest ошибка, логируем и пробрасываем
+            logger.error(f"BadRequest in edit_message: {e}")
+            raise
+    except Exception as e:
+        logger.error(f"Unexpected error in safe_edit_message: {e}", exc_info=True)
+        raise
+
+
 def _get_bids_word(count):
     """Возвращает правильное склонение слова 'отклик'"""
     if count % 10 == 1 and count % 100 != 11:
@@ -3040,9 +3079,32 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ------- СЛУЖЕБНЫЕ -------
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    ИСПРАВЛЕНО: Полная отмена любого активного диалога с возвратом в главное меню.
+    """
     context.user_data.clear()
-    await update.message.reply_text("Действие отменено.", reply_markup=ReplyKeyboardRemove())
+
+    keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu_fresh")]]
+
+    await update.message.reply_text(
+        "❌ Действие отменено.\n\n"
+        "Возвращаемся в главное меню...",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     return ConversationHandler.END
+
+
+async def cancel_from_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    КРИТИЧЕСКИ ВАЖНО: Обработка /start во время ConversationHandler.
+
+    Позволяет пользователю выйти из застрявшего диалога.
+    """
+    context.user_data.clear()
+    logger.info(f"User {update.effective_user.id} cancelled conversation via /start")
+
+    # Вызываем обычный start_command для показа меню
+    return await start_command(update, context)
 
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
