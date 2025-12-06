@@ -116,6 +116,89 @@ def validate_string_length(value, max_length, field_name):
 
     return value_str
 
+
+def validate_telegram_file_id(file_id, field_name="file_id"):
+    """
+    НОВОЕ: Валидация Telegram file_id для предотвращения сохранения некорректных данных.
+
+    Telegram file_id должен быть:
+    - Непустой строкой
+    - Содержать только допустимые символы (буквы, цифры, _, -, =)
+    - Иметь разумную длину (обычно 30-200 символов)
+
+    Args:
+        file_id: ID файла от Telegram
+        field_name: Название поля для сообщения об ошибке
+
+    Returns:
+        str: Валидный file_id
+
+    Raises:
+        ValueError: Если file_id невалидный
+    """
+    if not file_id:
+        raise ValueError(f"❌ {field_name}: file_id не может быть пустым")
+
+    file_id_str = str(file_id).strip()
+
+    if not file_id_str:
+        raise ValueError(f"❌ {field_name}: file_id не может быть пустым после strip()")
+
+    # Проверяем длину (Telegram file_id обычно 30-200 символов)
+    if len(file_id_str) < 10:
+        raise ValueError(f"❌ {field_name}: file_id слишком короткий ({len(file_id_str)} символов)")
+
+    if len(file_id_str) > 300:
+        raise ValueError(f"❌ {field_name}: file_id слишком длинный ({len(file_id_str)} символов)")
+
+    # Проверяем допустимые символы (Telegram использует base64-like формат)
+    import re
+    if not re.match(r'^[A-Za-z0-9_\-=]+$', file_id_str):
+        raise ValueError(f"❌ {field_name}: file_id содержит недопустимые символы")
+
+    logger.debug(f"✅ file_id валидирован: {file_id_str[:20]}... ({len(file_id_str)} символов)")
+    return file_id_str
+
+
+def validate_photo_list(photo_ids, field_name="photos"):
+    """
+    НОВОЕ: Валидация списка file_id фотографий.
+
+    Args:
+        photo_ids: Список или строка с file_id через запятую
+        field_name: Название поля для логирования
+
+    Returns:
+        list: Список валидных file_id
+
+    Raises:
+        ValueError: Если хотя бы один file_id невалидный
+    """
+    if not photo_ids:
+        return []
+
+    # Преобразуем в список если передана строка
+    if isinstance(photo_ids, str):
+        ids_list = [pid.strip() for pid in photo_ids.split(',') if pid.strip()]
+    elif isinstance(photo_ids, list):
+        ids_list = [str(pid).strip() for pid in photo_ids if pid]
+    else:
+        raise ValueError(f"❌ {field_name}: должен быть список или строка")
+
+    # Валидируем каждый file_id
+    validated = []
+    for i, file_id in enumerate(ids_list):
+        try:
+            valid_id = validate_telegram_file_id(file_id, f"{field_name}[{i}]")
+            validated.append(valid_id)
+        except ValueError as e:
+            logger.warning(f"⚠️ Пропускаем невалидный file_id: {e}")
+            # Пропускаем невалидные, но не падаем полностью
+
+    logger.info(f"✅ {field_name}: валидировано {len(validated)} из {len(ids_list)} file_id")
+    return validated
+
+
 if DATABASE_URL:
     # Используем PostgreSQL
     import psycopg2
@@ -577,6 +660,7 @@ def delete_user_profile(telegram_id):
 def create_worker_profile(user_id, name, phone, city, regions, categories, experience, description, portfolio_photos=""):
     """
     ОБНОВЛЕНО: Добавляет категории в нормализованную таблицу worker_categories.
+    ИСПРАВЛЕНО: Валидация file_id для portfolio_photos.
     """
     # Валидация входных данных
     name = validate_string_length(name, MAX_NAME_LENGTH, "name")
@@ -586,6 +670,11 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
     categories = validate_string_length(categories, MAX_CATEGORY_LENGTH, "categories")
     experience = validate_string_length(experience, MAX_EXPERIENCE_LENGTH, "experience")
     description = validate_string_length(description, MAX_DESCRIPTION_LENGTH, "description")
+
+    # ИСПРАВЛЕНИЕ: Валидация file_id для фотографий
+    if portfolio_photos:
+        validated_photos = validate_photo_list(portfolio_photos, "portfolio_photos")
+        portfolio_photos = ",".join(validated_photos)
 
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
@@ -1012,7 +1101,8 @@ def update_worker_field(user_id, field_name, new_value):
         "categories": "categories",
         "experience": "experience",
         "description": "description",
-        "portfolio_photos": "portfolio_photos"
+        "portfolio_photos": "portfolio_photos",
+        "profile_photo": "profile_photo"  # Фото профиля мастера
     }
 
     if field_name not in allowed_fields:
@@ -1031,6 +1121,15 @@ def update_worker_field(user_id, field_name, new_value):
         new_value = validate_string_length(new_value, MAX_EXPERIENCE_LENGTH, "experience")
     elif field_name == "description":
         new_value = validate_string_length(new_value, MAX_DESCRIPTION_LENGTH, "description")
+    elif field_name == "portfolio_photos":
+        # ИСПРАВЛЕНИЕ: Валидация file_id для фотографий портфолио
+        if new_value:
+            validated_photos = validate_photo_list(new_value, "portfolio_photos")
+            new_value = ",".join(validated_photos)
+    elif field_name == "profile_photo":
+        # ИСПРАВЛЕНИЕ: Валидация file_id для фото профиля
+        if new_value:
+            new_value = validate_telegram_file_id(new_value, "profile_photo")
 
     # Используем безопасное имя поля из whitelist
     safe_field = allowed_fields[field_name]
@@ -1225,6 +1324,49 @@ def clear_worker_categories(worker_id):
             WHERE worker_id = ?
         """, (worker_id,))
         conn.commit()
+
+
+def add_order_categories(order_id, categories_list):
+    """
+    НОВОЕ: Добавляет категории для заказа в таблицу order_categories.
+
+    Args:
+        order_id: ID заказа
+        categories_list: список категорий ["Электрика", "Сантехника"]
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        for category in categories_list:
+            if not category or not category.strip():
+                continue
+
+            try:
+                cursor.execute("""
+                    INSERT INTO order_categories (order_id, category)
+                    VALUES (?, ?)
+                """, (order_id, category.strip()))
+            except:
+                # Игнорируем дубликаты (UNIQUE constraint)
+                pass
+
+
+def get_order_categories(order_id):
+    """
+    НОВОЕ: Получает все категории заказа.
+
+    Returns:
+        Список категорий: ["Электрика", "Сантехника"]
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT category FROM order_categories
+            WHERE order_id = ?
+            ORDER BY category
+        """, (order_id,))
+
+        return [row[0] for row in cursor.fetchall()]
 
 
 def migrate_add_order_photos():
@@ -1891,9 +2033,90 @@ def migrate_normalize_categories():
             print("   Теперь поиск будет точным, без ложных совпадений")
 
         except Exception as e:
-            print(f"⚠️  Ошибка при нормализации категорий: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.warning(f"⚠️ Ошибка при нормализации категорий мастеров: {e}", exc_info=True)
+
+
+def migrate_normalize_order_categories():
+    """
+    ИСПРАВЛЕНИЕ: Создает отдельную таблицу для категорий заказов.
+
+    Проблема: категории хранятся как TEXT со значениями вида "Электрика, Сантехника"
+    Поиск через LIKE '%Электрика%' находит также "Неэлектрика" (ложное совпадение)
+
+    Решение: нормализованная таблица order_categories с точным поиском
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            # 1. Создаем таблицу order_categories
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS order_categories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id INTEGER NOT NULL,
+                    category TEXT NOT NULL,
+                    FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+                    UNIQUE (order_id, category)
+                )
+            """)
+
+            logger.info("📋 Таблица order_categories создана")
+
+            # 2. Проверяем есть ли уже данные в order_categories
+            cursor.execute("SELECT COUNT(*) FROM order_categories")
+            existing_count = cursor.fetchone()[0] if not USE_POSTGRES else cursor.fetchone()['count']
+
+            if existing_count > 0:
+                logger.info(f"✅ Категории заказов уже мигрированы ({existing_count} записей)")
+                return
+
+            # 3. Переносим существующие категории из orders.category в order_categories
+            cursor.execute("SELECT id, category FROM orders WHERE category IS NOT NULL AND category != ''")
+            orders = cursor.fetchall()
+
+            migrated_count = 0
+            for order in orders:
+                if USE_POSTGRES:
+                    order_id = order['id']
+                    categories_str = order['category']
+                else:
+                    order_id = order[0]
+                    categories_str = order[1]
+
+                if not categories_str:
+                    continue
+
+                # Разбиваем строку на категории
+                categories = [cat.strip() for cat in categories_str.split(',') if cat.strip()]
+
+                # Добавляем каждую категорию
+                for category in categories:
+                    try:
+                        cursor.execute("""
+                            INSERT INTO order_categories (order_id, category)
+                            VALUES (?, ?)
+                        """, (order_id, category))
+                        migrated_count += 1
+                    except Exception as e:
+                        # Игнорируем дубликаты (UNIQUE constraint)
+                        if "UNIQUE constraint failed" not in str(e) and "duplicate key" not in str(e):
+                            logger.warning(f"⚠️ Ошибка при добавлении категории '{category}' для заказа {order_id}: {e}")
+
+            # 4. Создаем индексы для быстрого поиска
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_order_categories_order
+                ON order_categories(order_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_order_categories_category
+                ON order_categories(category)
+            """)
+
+            logger.info(f"✅ Категории заказов нормализованы! Перенесено {migrated_count} категорий")
+            logger.info("   Теперь поиск заказов будет точным, без ложных совпадений")
+
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка при нормализации категорий заказов: {e}", exc_info=True)
 
 
 def migrate_add_moderation():
@@ -2438,7 +2661,10 @@ def create_indexes():
             print(f"⚠️  Предупреждение при создании индексов: {e}")
 
 def create_order(client_id, city, categories, description, photos, budget_type="none", budget_value=0):
-    """Создаёт новый заказ"""
+    """
+    Создаёт новый заказ.
+    ИСПРАВЛЕНО: Валидация file_id для фотографий.
+    """
     # Rate limiting: проверяем лимит заказов
     allowed, remaining_seconds = _rate_limiter.is_allowed(client_id, "create_order", RATE_LIMIT_ORDERS_PER_HOUR)
     if not allowed:
@@ -2448,6 +2674,11 @@ def create_order(client_id, city, categories, description, photos, budget_type="
     # Валидация входных данных
     city = validate_string_length(city, MAX_CITY_LENGTH, "city")
     description = validate_string_length(description, MAX_DESCRIPTION_LENGTH, "description")
+
+    # ИСПРАВЛЕНИЕ: Валидация file_id для фотографий заказа
+    if photos:
+        validated_photos = validate_photo_list(photos, "order_photos")
+        photos = validated_photos  # Сохраняем как список для последующего преобразования
 
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
@@ -2469,10 +2700,16 @@ def create_order(client_id, city, categories, description, photos, budget_type="
             VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)
         """, (client_id, city, categories_str, description, photos_str, budget_type, budget_value, now))
 
-        conn.commit()
         order_id = cursor.lastrowid
         logger.info(f"✅ Создан заказ: ID={order_id}, Клиент={client_id}, Город={city}, Категории={categories_str}")
-        return order_id
+
+    # ИСПРАВЛЕНИЕ: Добавляем категории в нормализованную таблицу
+    if categories:
+        categories_list = categories if isinstance(categories, list) else [cat.strip() for cat in categories.split(',') if cat.strip()]
+        add_order_categories(order_id, categories_list)
+        logger.info(f"📋 Добавлены категории для заказа {order_id}: {categories_list}")
+
+    return order_id
 
 
 def get_orders_by_category(category, page=1, per_page=10):
@@ -2521,10 +2758,15 @@ def get_orders_by_category(category, page=1, per_page=10):
 
 def get_orders_by_categories(categories_list, per_page=30):
     """
-    ИСПРАВЛЕНИЕ: Получает заказы для НЕСКОЛЬКИХ категорий ОДНИМ запросом.
+    ИСПРАВЛЕНО: Получает заказы для НЕСКОЛЬКИХ категорий ОДНИМ запросом с ТОЧНЫМ поиском.
 
-    Раньше: 5 категорий = 5 SQL запросов (N+1 проблема)
-    Теперь: 5 категорий = 1 SQL запрос
+    Раньше:
+    - 5 категорий = 5 SQL запросов (N+1 проблема)
+    - LIKE '%Электрика%' находил "Неэлектрика" (ложные совпадения)
+
+    Теперь:
+    - 5 категорий = 1 SQL запрос
+    - Точное совпадение через order_categories таблицу
 
     Args:
         categories_list: Список категорий ["Электрика", "Сантехника"]
@@ -2539,22 +2781,10 @@ def get_orders_by_categories(categories_list, per_page=30):
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
-        # Создаем условие WHERE с OR для каждой категории
-        # Используем точный поиск через LIKE для каждой категории
-        where_conditions = []
-        params = []
+        # Создаем IN clause для точного поиска по категориям
+        # Используем нормализованную таблицу order_categories
+        placeholders = ', '.join(['?' for _ in categories_list])
 
-        for category in categories_list:
-            if category and category.strip():
-                where_conditions.append("o.category LIKE ?")
-                params.append(f"%{category.strip()}%")
-
-        if not where_conditions:
-            return []
-
-        where_clause = " OR ".join(where_conditions)
-
-        # Один запрос для всех категорий
         query = f"""
             SELECT DISTINCT
                 o.*,
@@ -2563,11 +2793,14 @@ def get_orders_by_categories(categories_list, per_page=30):
                 c.rating_count as client_rating_count
             FROM orders o
             JOIN clients c ON o.client_id = c.id
+            JOIN order_categories oc ON o.id = oc.order_id
             WHERE o.status = 'open'
-            AND ({where_clause})
+            AND oc.category IN ({placeholders})
             ORDER BY o.created_at DESC
             LIMIT ?
         """
+
+        params = [cat.strip() for cat in categories_list if cat and cat.strip()]
         params.append(per_page)
 
         cursor.execute(query, params)
