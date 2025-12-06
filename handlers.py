@@ -61,6 +61,55 @@ async def safe_edit_message(query, text, **kwargs):
         raise
 
 
+def safe_get_user_data(context, keys, default=None):
+    """
+    КРИТИЧЕСКИ ВАЖНО: Безопасное получение данных из context.user_data.
+
+    Args:
+        context: Telegram context
+        keys: str или list - ключ или список ключей для проверки
+        default: значение по умолчанию если ключа нет
+
+    Returns:
+        dict: {key: value} или {key: default} для каждого ключа
+
+    Пример:
+        data = safe_get_user_data(context, ["name", "phone", "city"])
+        if None in data.values():
+            # Не хватает данных
+            return error_message
+    """
+    if isinstance(keys, str):
+        keys = [keys]
+
+    result = {}
+    for key in keys:
+        result[key] = context.user_data.get(key, default)
+
+    return result
+
+
+def validate_required_fields(context, required_fields):
+    """
+    КРИТИЧЕСКИ ВАЖНО: Проверяет наличие обязательных полей в context.user_data.
+
+    Args:
+        context: Telegram context
+        required_fields: list - список обязательных ключей
+
+    Returns:
+        tuple: (bool, list) - (все ли есть, список отсутствующих)
+
+    Пример:
+        ok, missing = validate_required_fields(context, ["name", "phone"])
+        if not ok:
+            logger.error(f"Missing fields: {missing}")
+            return error
+    """
+    missing = [f for f in required_fields if f not in context.user_data]
+    return (len(missing) == 0, missing)
+
+
 def _get_bids_word(count):
     """Возвращает правильное склонение слова 'отклик'"""
     if count % 10 == 1 and count % 100 != 11:
@@ -572,8 +621,31 @@ async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def finalize_master_registration(update, context):
-    """Финальное создание профиля мастера"""
+    """
+    Финальное создание профиля мастера.
+    ИСПРАВЛЕНО: Валидация обязательных полей перед созданием.
+    """
     telegram_id = update.effective_user.id if update.message else update.callback_query.from_user.id
+
+    # КРИТИЧНО: Проверяем наличие всех обязательных полей
+    required_fields = ["name", "phone", "city", "regions", "categories", "experience", "description"]
+    ok, missing = validate_required_fields(context, required_fields)
+
+    if not ok:
+        logger.error(f"Missing required fields in master registration: {missing}")
+        keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")]]
+        error_msg = (
+            "❌ Ошибка: недостаточно данных для создания профиля.\n\n"
+            "Пожалуйста, начните регистрацию заново: /start"
+        )
+
+        if update.message:
+            await update.message.reply_text(error_msg, reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await update.callback_query.message.reply_text(error_msg, reply_markup=InlineKeyboardMarkup(keyboard))
+
+        context.user_data.clear()
+        return ConversationHandler.END
 
     # ИСПРАВЛЕНО: Проверяем существование пользователя перед созданием
     existing_user = db.get_user(telegram_id)
@@ -4240,15 +4312,33 @@ async def create_order_skip_photos(update: Update, context: ContextTypes.DEFAULT
 
 
 async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Публикация заказа"""
-    
+    """
+    Публикация заказа.
+    ИСПРАВЛЕНО: Валидация обязательных полей перед созданием.
+    """
+
     if hasattr(update, 'callback_query'):
         query = update.callback_query
         await query.answer()
         message = query.message
     else:
         message = update.message
-    
+
+    # КРИТИЧНО: Проверяем наличие всех обязательных полей
+    required_fields = ["order_client_id", "order_city", "order_categories", "order_description"]
+    ok, missing = validate_required_fields(context, required_fields)
+
+    if not ok:
+        logger.error(f"Missing required fields in create_order: {missing}")
+        keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")]]
+        await message.reply_text(
+            "❌ Ошибка: недостаточно данных для создания заказа.\n\n"
+            "Пожалуйста, начните создание заказа заново.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+
     try:
         logger.info("=== Публикация заказа ===")
         logger.info(f"client_id: {context.user_data.get('order_client_id')}")
@@ -4256,7 +4346,7 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.info(f"categories: {context.user_data.get('order_categories')}")
         logger.info(f"description: {context.user_data.get('order_description')}")
         logger.info(f"photos: {len(context.user_data.get('order_photos', []))}")
-        
+
         # Создаём заказ в БД (может вызвать ValueError при rate limiting)
         try:
             order_id = db.create_order(

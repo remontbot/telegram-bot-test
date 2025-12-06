@@ -661,7 +661,14 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
     """
     ОБНОВЛЕНО: Добавляет категории в нормализованную таблицу worker_categories.
     ИСПРАВЛЕНО: Валидация file_id для portfolio_photos.
+    ИСПРАВЛЕНО: Проверка существования профиля для предотвращения race condition.
     """
+    # КРИТИЧНО: Проверяем что профиль еще не существует (race condition защита)
+    existing_profile = get_worker_profile(user_id)
+    if existing_profile:
+        logger.warning(f"⚠️ Попытка создать дубликат профиля мастера для user_id={user_id}")
+        raise ValueError(f"У пользователя {user_id} уже есть профиль мастера")
+
     # Валидация входных данных
     name = validate_string_length(name, MAX_NAME_LENGTH, "name")
     phone = validate_string_length(phone, MAX_PHONE_LENGTH, "phone")
@@ -683,7 +690,6 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (user_id, name, phone, city, regions, categories, experience, description, portfolio_photos))
         worker_id = cursor.lastrowid
-        conn.commit()
         logger.info(f"✅ Создан профиль мастера: ID={worker_id}, User={user_id}, Имя={name}, Город={city}")
 
     # ИСПРАВЛЕНИЕ: Добавляем категории в нормализованную таблицу
@@ -694,6 +700,15 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
 
 
 def create_client_profile(user_id, name, phone, city, description):
+    """
+    ИСПРАВЛЕНО: Проверка существования профиля для предотвращения race condition.
+    """
+    # КРИТИЧНО: Проверяем что профиль еще не существует (race condition защита)
+    existing_profile = get_client_profile(user_id)
+    if existing_profile:
+        logger.warning(f"⚠️ Попытка создать дубликат профиля клиента для user_id={user_id}")
+        raise ValueError(f"У пользователя {user_id} уже есть профиль клиента")
+
     # Валидация входных данных
     name = validate_string_length(name, MAX_NAME_LENGTH, "name")
     phone = validate_string_length(phone, MAX_PHONE_LENGTH, "phone")
