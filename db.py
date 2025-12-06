@@ -173,8 +173,11 @@ class DatabaseConnection:
             # Нет ошибок - коммитим изменения
             try:
                 self.conn.commit()
-            except:
-                pass
+            except Exception as e:
+                # КРИТИЧЕСКИ ВАЖНО: не игнорируем ошибки commit!
+                logger.error(f"❌ ОШИБКА COMMIT БД: {e}", exc_info=True)
+                return_connection(self.conn)
+                raise  # Пробрасываем ошибку дальше
         return_connection(self.conn)
         return False
 
@@ -420,6 +423,12 @@ def get_user(telegram_id):
         return cursor.fetchone()
 
 
+# Алиас для совместимости с кодом в handlers.py
+def get_user_by_telegram_id(telegram_id):
+    """Алиас для get_user() - возвращает пользователя по telegram_id"""
+    return get_user(telegram_id)
+
+
 def get_user_by_id(user_id):
     """Получает пользователя по внутреннему ID"""
     with get_db_connection() as conn:
@@ -510,7 +519,7 @@ def create_client_profile(user_id, name, phone, city, description):
 def get_worker_profile(user_id):
     """Возвращает профиль мастера по user_id"""
     with get_db_connection() as conn:
-        
+
         cursor = get_cursor(conn)
         cursor.execute("""
             SELECT w.*, u.telegram_id
@@ -519,6 +528,12 @@ def get_worker_profile(user_id):
             WHERE w.user_id = ?
         """, (user_id,))
         return cursor.fetchone()
+
+
+# Алиас для совместимости с кодом в handlers.py
+def get_worker_by_user_id(user_id):
+    """Алиас для get_worker_profile() - возвращает профиль мастера по user_id"""
+    return get_worker_profile(user_id)
 
 
 def get_client_profile(user_id):
@@ -546,52 +561,45 @@ def get_client_by_id(client_id):
         return cursor.fetchone()
 
 
-def get_user_by_id(user_id):
-    """Возвращает пользователя по user_id"""
-    with get_db_connection() as conn:
-        
-        cursor = get_cursor(conn)
-        cursor.execute("""
-            SELECT * FROM users WHERE id = ?
-        """, (user_id,))
-        return cursor.fetchone()
+# УДАЛЕНА ДУБЛИРУЮЩАЯСЯ ФУНКЦИЯ get_user_by_id() - используется версия из строки 429
 
 
 # --- Рейтинг и отзывы ---
 
 def update_user_rating(user_id, new_rating, role_to):
+    """
+    ИСПРАВЛЕНО: Использует атомарный UPDATE для предотвращения race conditions.
+    Теперь вычисление нового рейтинга происходит внутри SQL запроса,
+    что гарантирует консистентность даже при одновременных обновлениях.
+    """
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
         if role_to == "worker":
-            cursor.execute("SELECT rating, rating_count FROM workers WHERE user_id = ?", (user_id,))
-            row = cursor.fetchone()
-            current_rating = row[0] if row else 0.0
-            rating_count = row[1] if row else 0
-
-            new_total = current_rating * rating_count + new_rating
-            new_count = rating_count + 1
-            avg = new_total / new_count if new_count > 0 else 0.0
-
-            cursor.execute(
-                "UPDATE workers SET rating = ?, rating_count = ? WHERE user_id = ?",
-                (avg, new_count, user_id),
-            )
+            # Атомарный UPDATE: вычисление происходит в БД, не в Python
+            cursor.execute("""
+                UPDATE workers
+                SET
+                    rating = CASE
+                        WHEN rating_count = 0 THEN ?
+                        ELSE (rating * rating_count + ?) / (rating_count + 1)
+                    END,
+                    rating_count = rating_count + 1
+                WHERE user_id = ?
+            """, (new_rating, new_rating, user_id))
 
         elif role_to == "client":
-            cursor.execute("SELECT rating, rating_count FROM clients WHERE user_id = ?", (user_id,))
-            row = cursor.fetchone()
-            current_rating = row[0] if row else 0.0
-            rating_count = row[1] if row else 0
-
-            new_total = current_rating * rating_count + new_rating
-            new_count = rating_count + 1
-            avg = new_total / new_count if new_count > 0 else 0.0
-
-            cursor.execute(
-                "UPDATE clients SET rating = ?, rating_count = ? WHERE user_id = ?",
-                (avg, new_count, user_id),
-            )
+            # Атомарный UPDATE для клиентов
+            cursor.execute("""
+                UPDATE clients
+                SET
+                    rating = CASE
+                        WHEN rating_count = 0 THEN ?
+                        ELSE (rating * rating_count + ?) / (rating_count + 1)
+                    END,
+                    rating_count = rating_count + 1
+                WHERE user_id = ?
+            """, (new_rating, new_rating, user_id))
 
         conn.commit()
 
@@ -2406,38 +2414,59 @@ def get_bids_for_worker(worker_id):
 
 
 def select_bid(bid_id):
-    """Отмечает отклик как выбранный"""
+    """
+    ИСПРАВЛЕНО: Отмечает отклик как выбранный с защитой от race conditions.
+    Проверяет что заказ еще не был выбран другим пользователем.
+    """
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
-        
-        # Получаем order_id из отклика
-        cursor.execute("SELECT order_id FROM bids WHERE id = ?", (bid_id,))
+
+        # Получаем order_id и проверяем статус заказа одним запросом
+        cursor.execute("""
+            SELECT b.order_id, o.status
+            FROM bids b
+            JOIN orders o ON b.order_id = o.id
+            WHERE b.id = ?
+        """, (bid_id,))
         result = cursor.fetchone()
         if not result:
+            logger.warning(f"Отклик {bid_id} не найден")
             return False
-        
-        order_id = result[0]
-        
+
+        order_id, order_status = result[0], result[1]
+
+        # ЗАЩИТА ОТ RACE CONDITION: проверяем что заказ еще не был выбран
+        if order_status not in ('open', 'waiting_master_confirmation'):
+            logger.warning(f"Заказ {order_id} уже в статусе '{order_status}', нельзя выбрать мастера")
+            return False
+
         # Обновляем статус выбранного отклика
         cursor.execute("""
-            UPDATE bids 
+            UPDATE bids
             SET status = 'selected'
             WHERE id = ?
         """, (bid_id,))
-        
+
         # Остальные отклики отмечаем как rejected
         cursor.execute("""
-            UPDATE bids 
+            UPDATE bids
             SET status = 'rejected'
             WHERE order_id = ? AND id != ?
         """, (order_id, bid_id))
-        
-        # Обновляем статус заказа
+
+        # Обновляем статус заказа ТОЛЬКО если он еще в open/waiting_master_confirmation
+        # Это гарантирует что только один bid может быть выбран
         cursor.execute("""
             UPDATE orders
             SET status = 'master_selected'
-            WHERE id = ?
+            WHERE id = ? AND status IN ('open', 'waiting_master_confirmation')
         """, (order_id,))
+
+        # Проверяем что UPDATE действительно произошел
+        if cursor.rowcount == 0:
+            logger.warning(f"Не удалось обновить заказ {order_id} - возможно race condition")
+            conn.rollback()
+            return False
 
         conn.commit()
         return True

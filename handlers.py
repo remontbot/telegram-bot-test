@@ -535,7 +535,15 @@ async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYP
 async def finalize_master_registration(update, context):
     """Финальное создание профиля мастера"""
     telegram_id = update.effective_user.id if update.message else update.callback_query.from_user.id
-    user_id = db.create_user(telegram_id, "worker")
+
+    # ИСПРАВЛЕНО: Проверяем существование пользователя перед созданием
+    existing_user = db.get_user(telegram_id)
+    if existing_user:
+        user_id = existing_user['id']
+        logger.info(f"Пользователь {telegram_id} уже существует, используем существующий ID: {user_id}")
+    else:
+        user_id = db.create_user(telegram_id, "worker")
+        logger.info(f"Создан новый пользователь {telegram_id} с ID: {user_id}")
 
     # Сохраняем фото работ (если есть)
     portfolio_photos = context.user_data.get("portfolio_photos", [])
