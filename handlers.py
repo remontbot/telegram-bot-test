@@ -2416,7 +2416,7 @@ async def pay_with_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def test_payment_success(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Тестовая функция для имитации успешной оплаты"""
+    """Тестовая функция для имитации успешной оплаты - создаёт чат вместо выдачи контакта"""
     query = update.callback_query
     await query.answer()
 
@@ -2435,56 +2435,104 @@ async def test_payment_success(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.edit_message_text("❌ Ошибка: отклик не найден.")
             return
 
-        # Отмечаем отклик как выбранный
-        success = db.select_bid(bid_id)
-
-        if not success:
-            await query.edit_message_text("❌ Ошибка при выборе мастера.")
-            return
-
-        # Получаем контакт мастера
-        worker_phone = selected_bid.get('worker_phone', 'Не указан')
+        order_id = selected_bid['order_id']
+        worker_id = selected_bid['worker_id']
         worker_name = selected_bid['worker_name']
         worker_telegram_id = selected_bid.get('worker_telegram_id')
-        order_id = selected_bid['order_id']
 
-        # Получаем информацию о клиенте для уведомления мастера
+        # Получаем информацию о клиенте
         user = db.get_user(query.from_user.id)
-        client_profile = db.get_client_profile(user["id"]) if user else None
+        if not user:
+            await query.edit_message_text("❌ Ошибка: пользователь не найден.")
+            return
 
-        # Отправляем уведомление мастеру
+        client_profile = db.get_client_profile(user["id"])
+        if not client_profile:
+            await query.edit_message_text("❌ Ошибка: профиль клиента не найден.")
+            return
+
+        # 1. Создаём транзакцию (оплата 5 BYN за доступ)
+        transaction_id = db.create_transaction(
+            user_id=user["id"],
+            order_id=order_id,
+            bid_id=bid_id,
+            transaction_type="master_contact_access",
+            amount=5.00,
+            currency="BYN",
+            payment_method="test",
+            description=f"Доступ к мастеру для заказа #{order_id}"
+        )
+
+        logger.info(f"✅ Транзакция #{transaction_id} создана: клиент {user['id']} оплатил доступ к мастеру {worker_id}")
+
+        # 2. Получаем worker_user_id (из таблицы workers поле user_id)
+        worker_profile = db.get_worker_by_id(worker_id)
+        if not worker_profile:
+            await query.edit_message_text("❌ Ошибка: профиль мастера не найден.")
+            return
+
+        worker_user_id = worker_profile['user_id']
+
+        # 3. Проверяем существует ли уже чат
+        existing_chat = db.get_chat_by_order_and_bid(order_id, bid_id)
+
+        if existing_chat:
+            chat_id = existing_chat['id']
+            logger.info(f"Чат #{chat_id} уже существует, используем его")
+        else:
+            # Создаём новый чат
+            chat_id = db.create_chat(
+                order_id=order_id,
+                client_user_id=user["id"],
+                worker_user_id=worker_user_id,
+                bid_id=bid_id
+            )
+            logger.info(f"✅ Чат #{chat_id} создан между клиентом {user['id']} и мастером {worker_user_id}")
+
+        # 3. Отмечаем отклик как выбранный, НО заказ в статусе "waiting_master_confirmation"
+        # Изменяем статус заказа
+        db.update_order_status(order_id, "waiting_master_confirmation")
+
+        # Отклик помечаем как selected
+        db.select_bid(bid_id)
+
+        # 4. Уведомляем мастера что его выбрали и открыт чат
         if worker_telegram_id:
             try:
+                keyboard_for_worker = [
+                    [InlineKeyboardButton("💬 Открыть чат", callback_data=f"open_chat_{chat_id}")],
+                ]
+
                 await context.bot.send_message(
                     chat_id=worker_telegram_id,
                     text=(
                         f"🎉 <b>Ваш отклик выбран!</b>\n\n"
                         f"Клиент выбрал вас для выполнения заказа #{order_id}\n\n"
-                        f"📞 Свяжитесь с клиентом:\n"
-                        f"Телефон: {client_profile.get('phone', 'Не указан') if client_profile else 'Не указан'}\n"
-                        f"Имя: {client_profile.get('name', 'Не указано') if client_profile else 'Не указано'}\n\n"
-                        f"✅ Теперь вы можете обсудить детали заказа и приступить к работе!"
+                        f"💬 Открыт чат для обсуждения деталей.\n"
+                        f"⚠️ <b>ВАЖНО:</b> Ответьте клиенту в течение 24 часов, иначе ваш рейтинг снизится!\n\n"
+                        f"Обсудите детали заказа и подтвердите готовность выполнить работу."
                     ),
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard_for_worker)
                 )
             except Exception as e:
                 logger.error(f"Ошибка при отправке уведомления мастеру: {e}")
 
-        # Показываем клиенту контакт мастера
+        # 5. Показываем клиенту что чат открыт
         text = (
             f"✅ <b>Оплата прошла успешно!</b>\n\n"
-            f"👤 <b>Контакт выбранного мастера:</b>\n\n"
-            f"Имя: {worker_name}\n"
-            f"📞 Телефон: <code>{worker_phone}</code>\n\n"
-            f"💡 <b>Следующие шаги:</b>\n"
-            f"1. Позвоните мастеру и обсудите детали заказа\n"
-            f"2. Договоритесь о времени и месте встречи\n"
-            f"3. После завершения работы не забудьте оставить отзыв!\n\n"
-            f"Мастер также получил ваш контакт и может связаться с вами.\n\n"
+            f"👤 <b>Выбран мастер:</b> {worker_name}\n\n"
+            f"💬 <b>Открыт чат для обсуждения деталей</b>\n\n"
+            f"📋 <b>Следующие шаги:</b>\n"
+            f"1. Обсудите с мастером детали заказа в чате\n"
+            f"2. Дождитесь подтверждения мастера (до 24 часов)\n"
+            f"3. Договоритесь о времени и месте встречи\n\n"
+            f"💡 Если мастер не ответит в течение 24 часов, вы сможете выбрать другого мастера БЕЗ дополнительной оплаты.\n\n"
             f"Удачного сотрудничества! 🤝"
         )
 
         keyboard = [
+            [InlineKeyboardButton("💬 Открыть чат", callback_data=f"open_chat_{chat_id}")],
             [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
             [InlineKeyboardButton("🏠 Главное меню", callback_data="show_client_menu")],
         ]

@@ -1421,6 +1421,143 @@ def migrate_add_premium_features():
             traceback.print_exc()
 
 
+def migrate_add_chat_system():
+    """
+    Создаёт таблицы для системы чата между клиентом и мастером
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            # Таблица чатов
+            if USE_POSTGRES:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS chats (
+                        id SERIAL PRIMARY KEY,
+                        order_id INTEGER NOT NULL,
+                        client_user_id INTEGER NOT NULL,
+                        worker_user_id INTEGER NOT NULL,
+                        bid_id INTEGER NOT NULL,
+                        status VARCHAR(50) DEFAULT 'active',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        last_message_at TIMESTAMP,
+                        worker_confirmed BOOLEAN DEFAULT FALSE,
+                        worker_confirmed_at TIMESTAMP,
+                        FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+                        FOREIGN KEY (bid_id) REFERENCES bids(id) ON DELETE CASCADE
+                    )
+                """)
+
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS messages (
+                        id SERIAL PRIMARY KEY,
+                        chat_id INTEGER NOT NULL,
+                        sender_user_id INTEGER NOT NULL,
+                        sender_role VARCHAR(20) NOT NULL,
+                        message_text TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        is_read BOOLEAN DEFAULT FALSE,
+                        FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS chats (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        order_id INTEGER NOT NULL,
+                        client_user_id INTEGER NOT NULL,
+                        worker_user_id INTEGER NOT NULL,
+                        bid_id INTEGER NOT NULL,
+                        status TEXT DEFAULT 'active',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        last_message_at TIMESTAMP,
+                        worker_confirmed INTEGER DEFAULT 0,
+                        worker_confirmed_at TIMESTAMP,
+                        FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+                        FOREIGN KEY (bid_id) REFERENCES bids(id) ON DELETE CASCADE
+                    )
+                """)
+
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        chat_id INTEGER NOT NULL,
+                        sender_user_id INTEGER NOT NULL,
+                        sender_role TEXT NOT NULL,
+                        message_text TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        is_read INTEGER DEFAULT 0,
+                        FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
+                    )
+                """)
+
+            conn.commit()
+            print("✅ Chat system tables created successfully!")
+
+        except Exception as e:
+            print(f"⚠️  Ошибка при создании таблиц чата: {e}")
+            import traceback
+            traceback.print_exc()
+
+
+def migrate_add_transactions():
+    """
+    Создаёт таблицу для истории транзакций (платежей клиентов)
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            if USE_POSTGRES:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS transactions (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL,
+                        order_id INTEGER,
+                        bid_id INTEGER,
+                        transaction_type VARCHAR(50) NOT NULL,
+                        amount DECIMAL(10, 2) NOT NULL,
+                        currency VARCHAR(10) DEFAULT 'BYN',
+                        status VARCHAR(50) DEFAULT 'pending',
+                        payment_method VARCHAR(50),
+                        description TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        completed_at TIMESTAMP,
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                        FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL,
+                        FOREIGN KEY (bid_id) REFERENCES bids(id) ON DELETE SET NULL
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS transactions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        order_id INTEGER,
+                        bid_id INTEGER,
+                        transaction_type TEXT NOT NULL,
+                        amount REAL NOT NULL,
+                        currency TEXT DEFAULT 'BYN',
+                        status TEXT DEFAULT 'pending',
+                        payment_method TEXT,
+                        description TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        completed_at TIMESTAMP,
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                        FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL,
+                        FOREIGN KEY (bid_id) REFERENCES bids(id) ON DELETE SET NULL
+                    )
+                """)
+
+            conn.commit()
+            print("✅ Transactions table created successfully!")
+
+        except Exception as e:
+            print(f"⚠️  Ошибка при создании таблицы транзакций: {e}")
+            import traceback
+            traceback.print_exc()
+
+
 def migrate_add_moderation():
     """
     Добавляет поля для модерации пользователей:
@@ -1489,6 +1626,178 @@ def migrate_add_moderation():
             print(f"⚠️  Ошибка при добавлении модерационных полей: {e}")
             import traceback
             traceback.print_exc()
+
+
+# === CHAT SYSTEM HELPERS ===
+
+def create_chat(order_id, client_user_id, worker_user_id, bid_id):
+    """Создаёт чат между клиентом и мастером"""
+    from datetime import datetime
+
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            INSERT INTO chats (order_id, client_user_id, worker_user_id, bid_id, created_at, last_message_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (order_id, client_user_id, worker_user_id, bid_id, datetime.now().isoformat(), datetime.now().isoformat()))
+        conn.commit()
+        return cursor.lastrowid
+
+
+def get_chat_by_order_and_bid(order_id, bid_id):
+    """Получает чат по заказу и отклику"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT * FROM chats
+            WHERE order_id = ? AND bid_id = ?
+        """, (order_id, bid_id))
+        return cursor.fetchone()
+
+
+def get_chat_by_id(chat_id):
+    """Получает чат по ID"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT * FROM chats WHERE id = ?", (chat_id,))
+        return cursor.fetchone()
+
+
+def get_user_chats(user_id):
+    """Получает все чаты пользователя"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT c.*, o.description as order_description
+            FROM chats c
+            JOIN orders o ON c.order_id = o.id
+            WHERE c.client_user_id = ? OR c.worker_user_id = ?
+            ORDER BY c.last_message_at DESC
+        """, (user_id, user_id))
+        return cursor.fetchall()
+
+
+def send_message(chat_id, sender_user_id, sender_role, message_text):
+    """Отправляет сообщение в чат"""
+    from datetime import datetime
+
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Добавляем сообщение
+        cursor.execute("""
+            INSERT INTO messages (chat_id, sender_user_id, sender_role, message_text, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (chat_id, sender_user_id, sender_role, message_text, datetime.now().isoformat()))
+
+        # Обновляем время последнего сообщения в чате
+        cursor.execute("""
+            UPDATE chats
+            SET last_message_at = ?
+            WHERE id = ?
+        """, (datetime.now().isoformat(), chat_id))
+
+        conn.commit()
+        return cursor.lastrowid
+
+
+def get_chat_messages(chat_id, limit=50):
+    """Получает сообщения чата"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT * FROM messages
+            WHERE chat_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (chat_id, limit))
+        return cursor.fetchall()
+
+
+def mark_messages_as_read(chat_id, user_id):
+    """Отмечает сообщения как прочитанные для пользователя"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            UPDATE messages
+            SET is_read = 1
+            WHERE chat_id = ? AND sender_user_id != ?
+        """, (chat_id, user_id))
+        conn.commit()
+
+
+def get_unread_messages_count(chat_id, user_id):
+    """Получает количество непрочитанных сообщений"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT COUNT(*) FROM messages
+            WHERE chat_id = ? AND sender_user_id != ? AND is_read = 0
+        """, (chat_id, user_id))
+        return cursor.fetchone()[0]
+
+
+def confirm_worker_in_chat(chat_id):
+    """Мастер подтверждает готовность работать (первое сообщение = подтверждение)"""
+    from datetime import datetime
+
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            UPDATE chats
+            SET worker_confirmed = 1, worker_confirmed_at = ?
+            WHERE id = ?
+        """, (datetime.now().isoformat(), chat_id))
+        conn.commit()
+
+
+def is_worker_confirmed(chat_id):
+    """Проверяет подтвердил ли мастер готовность"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT worker_confirmed FROM chats WHERE id = ?", (chat_id,))
+        result = cursor.fetchone()
+        return bool(result[0]) if result else False
+
+
+# === TRANSACTION HELPERS ===
+
+def create_transaction(user_id, order_id, bid_id, transaction_type, amount, currency='BYN', payment_method='test', description=''):
+    """Создаёт транзакцию"""
+    from datetime import datetime
+
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            INSERT INTO transactions
+            (user_id, order_id, bid_id, transaction_type, amount, currency, status, payment_method, description, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?)
+        """, (user_id, order_id, bid_id, transaction_type, amount, currency, payment_method, description, datetime.now().isoformat()))
+        conn.commit()
+        return cursor.lastrowid
+
+
+def get_user_transactions(user_id):
+    """Получает историю транзакций пользователя"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT * FROM transactions
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+        """, (user_id,))
+        return cursor.fetchall()
+
+
+def get_transaction_by_order_bid(order_id, bid_id):
+    """Проверяет была ли оплата за доступ к мастеру"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT * FROM transactions
+            WHERE order_id = ? AND bid_id = ? AND status = 'completed'
+        """, (order_id, bid_id))
+        return cursor.fetchone()
 
 
 # === PREMIUM FEATURES HELPERS ===
@@ -1816,11 +2125,11 @@ def get_client_orders(client_id, page=1, per_page=10):
 def get_order_by_id(order_id):
     """Получает заказ по ID"""
     with get_db_connection() as conn:
-        
+
         cursor = get_cursor(conn)
-        
+
         cursor.execute("""
-            SELECT 
+            SELECT
                 o.*,
                 c.name as client_name,
                 c.phone as client_phone,
@@ -1830,8 +2139,21 @@ def get_order_by_id(order_id):
             JOIN clients c ON o.client_id = c.id
             WHERE o.id = ?
         """, (order_id,))
-        
+
         return cursor.fetchone()
+
+
+def update_order_status(order_id, new_status):
+    """Обновляет статус заказа"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            UPDATE orders
+            SET status = ?
+            WHERE id = ?
+        """, (new_status, order_id))
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 def create_bid(order_id, worker_id, proposed_price, currency, comment=""):

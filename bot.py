@@ -75,6 +75,8 @@ def main():
     db.migrate_add_profile_photo()  # Добавляем поле для фото профиля мастера
     db.migrate_add_premium_features()  # Добавляем поля для premium функций (выключены по умолчанию)
     db.migrate_add_moderation()  # Добавляем поля для модерации и банов
+    db.migrate_add_chat_system()  # Создаём таблицы для чата между клиентом и мастером
+    db.migrate_add_transactions()  # Создаём таблицу для истории транзакций
     db.create_indexes()  # Создаем индексы для оптимизации производительности
 
     token = get_bot_token()
