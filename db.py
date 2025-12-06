@@ -21,10 +21,16 @@ RATE_LIMIT_WINDOW_SECONDS = 3600  # Окно для подсчета (1 час)
 
 
 class RateLimiter:
-    """Простой in-memory rate limiter для защиты от спама"""
+    """
+    ИСПРАВЛЕНО: Автоматическая очистка памяти каждые 100 вызовов.
+
+    In-memory rate limiter для защиты от спама с автоматической очисткой.
+    """
 
     def __init__(self):
         self._requests = defaultdict(list)  # {(user_id, action): [timestamp1, timestamp2, ...]}
+        self._cleanup_counter = 0  # Счетчик для периодической очистки
+        self._cleanup_interval = 100  # Очистка каждые 100 вызовов
 
     def is_allowed(self, user_id, action, max_requests):
         """
@@ -38,6 +44,12 @@ class RateLimiter:
         Returns:
             tuple: (allowed: bool, remaining_seconds: int)
         """
+        # ИСПРАВЛЕНИЕ: Автоматическая очистка памяти
+        self._cleanup_counter += 1
+        if self._cleanup_counter >= self._cleanup_interval:
+            self.cleanup_old_entries()
+            self._cleanup_counter = 0
+
         key = (user_id, action)
         now = datetime.now()
         cutoff = now - timedelta(seconds=RATE_LIMIT_WINDOW_SECONDS)
@@ -57,7 +69,7 @@ class RateLimiter:
         return True, 0
 
     def cleanup_old_entries(self):
-        """Очищает старые записи для экономии памяти (вызывать периодически)"""
+        """Очищает старые записи для экономии памяти (теперь вызывается автоматически)"""
         now = datetime.now()
         cutoff = now - timedelta(seconds=RATE_LIMIT_WINDOW_SECONDS * 2)
 
@@ -69,6 +81,8 @@ class RateLimiter:
 
         for key in keys_to_remove:
             del self._requests[key]
+
+        logger.info(f"RateLimiter cleanup: удалено {len(keys_to_remove)} старых ключей, осталось {len(self._requests)}")
 
 
 # Глобальный экземпляр rate limiter
