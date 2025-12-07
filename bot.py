@@ -566,6 +566,13 @@ def main():
 
     application.add_handler(
         CallbackQueryHandler(
+            handlers.confirm_payment,
+            pattern="^confirm_payment_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
             handlers.test_payment_success,
             pattern="^test_payment_success_"
         )
