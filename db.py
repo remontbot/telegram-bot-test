@@ -1155,14 +1155,32 @@ def update_worker_field(user_id, field_name, new_value):
     # Используем безопасное имя поля из whitelist
     safe_field = allowed_fields[field_name]
 
+    logger.info(f"🔍 update_worker_field: user_id={user_id}, field={field_name}, value_length={len(str(new_value))}")
+
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
+        logger.info(f"🔍 Cursor получен: type={type(cursor)}, has_rowcount={hasattr(cursor, 'rowcount')}")
+
         # Безопасное построение запроса с явным whitelist
         query = f"UPDATE workers SET {safe_field} = ? WHERE user_id = ?"
+        logger.info(f"🔍 Выполняем UPDATE: {query}")
         cursor.execute(query, (new_value, user_id))
-        conn.commit()
+        logger.info(f"🔍 UPDATE выполнен")
 
-        return cursor.rowcount > 0
+        conn.commit()
+        logger.info(f"🔍 COMMIT выполнен")
+
+        try:
+            rowcount = cursor.rowcount
+            logger.info(f"🔍 rowcount получен: {rowcount}")
+            result = rowcount > 0
+            logger.info(f"🔍 Результат: {result}")
+            return result
+        except Exception as e:
+            logger.error(f"❌ ОШИБКА при получении rowcount: {e}", exc_info=True)
+            logger.error(f"❌ Тип cursor: {type(cursor)}")
+            logger.error(f"❌ Атрибуты cursor: {dir(cursor)}")
+            raise
 
 
 def update_client_field(user_id, field_name, new_value):
