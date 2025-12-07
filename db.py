@@ -690,6 +690,7 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (user_id, name, phone, city, regions, categories, experience, description, portfolio_photos))
         worker_id = cursor.lastrowid
+        conn.commit()  # КРИТИЧНО: Без этого транзакция не фиксируется!
         logger.info(f"✅ Создан профиль мастера: ID={worker_id}, User={user_id}, Имя={name}, Город={city}")
 
     # ИСПРАВЛЕНИЕ: Добавляем категории в нормализованную таблицу
@@ -1364,6 +1365,8 @@ def add_order_categories(order_id, categories_list):
             except:
                 # Игнорируем дубликаты (UNIQUE constraint)
                 pass
+
+        conn.commit()  # КРИТИЧНО: Фиксируем транзакцию
 
 
 def get_order_categories(order_id):
@@ -2716,6 +2719,7 @@ def create_order(client_id, city, categories, description, photos, budget_type="
         """, (client_id, city, categories_str, description, photos_str, budget_type, budget_value, now))
 
         order_id = cursor.lastrowid
+        conn.commit()  # КРИТИЧНО: Фиксируем транзакцию создания заказа
         logger.info(f"✅ Создан заказ: ID={order_id}, Клиент={client_id}, Город={city}, Категории={categories_str}")
 
     # ИСПРАВЛЕНИЕ: Добавляем категории в нормализованную таблицу
