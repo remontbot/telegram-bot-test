@@ -167,7 +167,7 @@ def main():
                     pattern="^add_photos_",
                 ),
                 MessageHandler(
-                    filters.PHOTO | filters.TEXT,
+                    filters.PHOTO | filters.TEXT | filters.VIDEO | filters.Document.ALL,
                     handlers.handle_master_photos,
                 ),
             ],
@@ -209,6 +209,9 @@ def main():
             CommandHandler("cancel", handlers.cancel),
             CommandHandler("start", handlers.cancel_from_start),  # КРИТИЧНО: выход из застрявшего диалога
             MessageHandler(filters.Regex("^(Отмена|отмена|cancel)$"), handlers.cancel),
+            CallbackQueryHandler(handlers.cancel_from_callback, pattern="^go_main_menu$"),  # КРИТИЧНО: выход через кнопку меню
+            CallbackQueryHandler(handlers.cancel_from_callback, pattern="^show_worker_menu$"),  # КРИТИЧНО: выход через кнопку меню мастера
+            CallbackQueryHandler(handlers.cancel_from_callback, pattern="^show_client_menu$"),  # КРИТИЧНО: выход через кнопку меню клиента
         ],
         allow_reentry=True,
     )

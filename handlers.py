@@ -607,25 +607,61 @@ async def register_master_photos(update: Update, context: ContextTypes.DEFAULT_T
 async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка загруженных фотографий"""
     logger.info(f"handle_master_photos вызван. Текст: {update.message.text if update.message.text else 'фото'}")
-    
+
+    # КРИТИЧНО: Проверка на видео/документы (не фото)
+    if update.message.video:
+        logger.warning("Пользователь отправил видео вместо фото")
+        await update.message.reply_text(
+            "⚠️ <b>Можно отправлять только фотографии!</b>\n\n"
+            "Видео не поддерживаются.\n"
+            "Пожалуйста, отправьте фото или:\n"
+            "• Напишите /done_photos для завершения\n"
+            "• Напишите: готово",
+            parse_mode="HTML"
+        )
+        return REGISTER_MASTER_PHOTOS
+
+    # КРИТИЧНО: Проверка на документы (файлы)
+    if update.message.document:
+        # Если это изображение-документ (файл), разрешаем
+        if update.message.document.mime_type and update.message.document.mime_type.startswith('image/'):
+            logger.info("Получено изображение как документ - обрабатываем как фото")
+            # Обрабатываем как фото дальше по коду
+        else:
+            logger.warning(f"Пользователь отправил документ (не изображение): {update.message.document.mime_type}")
+            await update.message.reply_text(
+                "⚠️ <b>Можно отправлять только изображения!</b>\n\n"
+                "Документы, видео и другие файлы не поддерживаются.\n"
+                "Пожалуйста, отправьте фото или:\n"
+                "• Напишите /done_photos для завершения\n"
+                "• Напишите: готово",
+                parse_mode="HTML"
+            )
+            return REGISTER_MASTER_PHOTOS
+
     # Проверяем текст сообщения
     if update.message.text:
         text = update.message.text.strip().lower()
         logger.info(f"Получен текст: '{text}'")
-        
+
         # Проверяем различные варианты команды
         if text in ['/done_photos', 'done_photos', '/donephotos', 'donephotos', 'готово']:
             logger.info("Команда завершения фото распознана, вызываем finalize")
             return await finalize_master_registration(update, context)
-    
+
     # Обработка фото
-    if update.message.photo:
+    if update.message.photo or (update.message.document and update.message.document.mime_type and update.message.document.mime_type.startswith('image/')):
         logger.info("Получено фото")
         if "portfolio_photos" not in context.user_data:
             context.user_data["portfolio_photos"] = []
 
-        photo = update.message.photo[-1]  # Берём самое большое разрешение
-        file_id = photo.file_id
+        # Получаем file_id (может быть photo или document)
+        if update.message.photo:
+            photo = update.message.photo[-1]  # Берём самое большое разрешение
+            file_id = photo.file_id
+        else:
+            # Это document с image/ mime_type
+            file_id = update.message.document.file_id
 
         # КРИТИЧНО: Валидация file_id
         if not validate_file_id(file_id):
@@ -3480,6 +3516,31 @@ async def cancel_from_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Вызываем обычный start_command для показа меню
     return await start_command(update, context)
+
+
+async def cancel_from_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    КРИТИЧЕСКИ ВАЖНО: Обработка кнопок меню во время ConversationHandler.
+
+    Позволяет пользователю выйти из застрявшего диалога через кнопки меню.
+    Исправляет баг, когда бот зависал после ошибки при загрузке фото.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    context.user_data.clear()
+    logger.info(f"User {query.from_user.id} cancelled conversation via callback: {query.data}")
+
+    # Перенаправляем на соответствующий обработчик меню
+    if query.data == "go_main_menu":
+        return await go_main_menu(update, context)
+    elif query.data == "show_worker_menu":
+        return await show_worker_menu(update, context)
+    elif query.data == "show_client_menu":
+        return await show_client_menu(update, context)
+
+    # По умолчанию возвращаемся в главное меню
+    return await go_main_menu(update, context)
 
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
