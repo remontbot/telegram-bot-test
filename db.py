@@ -437,6 +437,11 @@ class DBCursor:
             return self._lastrowid
         return self.cursor.lastrowid
 
+    @property
+    def rowcount(self):
+        """КРИТИЧНО: Проксируем rowcount к внутреннему cursor"""
+        return self.cursor.rowcount
+
 
 def init_db():
     with get_db_connection() as conn:
