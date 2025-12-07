@@ -781,13 +781,15 @@ def main():
 
     # Добавляем задачу в очередь (запуск каждый час)
     job_queue = application.job_queue
-    job_queue.run_repeating(
-        check_deadlines_job,
-        interval=3600,  # 3600 секунд = 1 час
-        first=10  # Первый запуск через 10 секунд после старта бота
-    )
-
-    logger.info("⏰ Фоновая задача проверки дедлайнов активирована (каждый час)")
+    if job_queue is not None:
+        job_queue.run_repeating(
+            check_deadlines_job,
+            interval=3600,  # 3600 секунд = 1 час
+            first=10  # Первый запуск через 10 секунд после старта бота
+        )
+        logger.info("⏰ Фоновая задача проверки дедлайнов активирована (каждый час)")
+    else:
+        logger.warning("⚠️ JobQueue не доступен. Проверка дедлайнов отключена.")
 
     logger.info("Бот запущен. Опрос обновлений...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
