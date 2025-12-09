@@ -4796,7 +4796,7 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
 
             for category in context.user_data["order_categories"]:
                 # ВАЖНО: фильтруем мастеров по городу И категории
-                workers, _, _ = db.get_all_workers(city=order_city, category=category)
+                workers = db.get_all_workers(city=order_city, category=category)
                 for worker in workers:
                     worker_dict = dict(worker)
                     worker_id = worker_dict['id']
