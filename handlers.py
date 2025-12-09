@@ -1118,9 +1118,18 @@ async def show_worker_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_notifications")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")],
     ]
-    await query.edit_message_text(
-        "🧰 <b>Меню мастера</b>\n\n"
-        "Выберите действие:",
+
+    # Удаляем старое сообщение и отправляем новое
+    # (работает с любым типом сообщения: текст, фото, медиа)
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="🧰 <b>Меню мастера</b>\n\n"
+             "Выберите действие:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -1266,10 +1275,19 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔍 Найти мастера", callback_data="client_browse_workers")],
         [InlineKeyboardButton("🧰 Главное меню", callback_data="go_main_menu")],
     ]
-    await query.edit_message_text(
-        "🏠 <b>Меню заказчика</b>\n\n"
-        "Создайте заказ - мастера увидят его и откликнутся!\n"
-        "Или найдите мастера самостоятельно.",
+
+    # Удаляем старое сообщение и отправляем новое
+    # (работает с любым типом сообщения: текст, фото, медиа)
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="🏠 <b>Меню заказчика</b>\n\n"
+             "Создайте заказ - мастера увидят его и откликнутся!\n"
+             "Или найдите мастера самостоятельно.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -4421,9 +4439,16 @@ async def go_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += "Вы зарегистрированы как мастер.\n\nХотите также стать заказчиком?"
     elif has_client:
         message += "Вы зарегистрированы как заказчик.\n\nХотите также стать мастером?"
-    
-    await query.edit_message_text(
-        message,
+
+    # Удаляем старое сообщение и отправляем новое
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text=message,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
