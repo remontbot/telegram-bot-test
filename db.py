@@ -3205,7 +3205,7 @@ def get_bids_for_worker(worker_id):
                 o.title as order_title,
                 o.description as order_description,
                 o.city as order_city,
-                o.categories as order_categories,
+                o.category as order_category,
                 o.status as order_status,
                 o.created_at as order_created_at,
                 c.name as client_name,

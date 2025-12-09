@@ -2115,9 +2115,16 @@ async def show_edit_profile_menu(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton("⬅️ Назад к профилю", callback_data="worker_profile")],
     ]
 
-    await query.edit_message_text(
-        "✏️ <b>Редактирование профиля</b>\n\n"
-        "Выберите что хотите изменить:",
+    # Удаляем старое сообщение и отправляем новое
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="✏️ <b>Редактирование профиля</b>\n\n"
+             "Выберите что хотите изменить:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
