@@ -3738,8 +3738,15 @@ async def worker_view_order_details(update: Update, context: ContextTypes.DEFAUL
         # Проверяем есть ли уже отклик от этого мастера
         user = db.get_user(query.from_user.id)
         worker_profile = db.get_worker_profile(user["id"])
-        
+
         already_bid = db.check_worker_bid_exists(order_id, worker_profile["id"])
+
+        # ПРОВЕРКА: Мастер не может откликаться на свой заказ
+        client = db.get_client_by_id(order_dict['client_id'])
+        is_own_order = False
+        if client:
+            client_dict = dict(client)
+            is_own_order = (client_dict['user_id'] == user["id"])
         
         # Формируем текст
         text = f"📋 <b>Заказ #{order_id}</b>\n\n"
@@ -3785,7 +3792,9 @@ async def worker_view_order_details(update: Update, context: ContextTypes.DEFAUL
                 keyboard.append([InlineKeyboardButton("✅ Работа завершена", callback_data=f"worker_complete_order_{order_id}")])
             # Кнопка отклика (только для открытых заказов)
             elif order_status == 'open':
-                if already_bid:
+                if is_own_order:
+                    keyboard.append([InlineKeyboardButton("🚫 Это ваш заказ", callback_data="noop")])
+                elif already_bid:
                     keyboard.append([InlineKeyboardButton("✅ Вы уже откликнулись", callback_data="noop")])
                 else:
                     keyboard.append([InlineKeyboardButton("💰 Откликнуться", callback_data=f"bid_on_order_{order_id}")])
@@ -3811,7 +3820,9 @@ async def worker_view_order_details(update: Update, context: ContextTypes.DEFAUL
                 keyboard.append([InlineKeyboardButton("✅ Работа завершена", callback_data=f"worker_complete_order_{order_id}")])
             # Кнопка отклика (только для открытых заказов)
             elif order_status == 'open':
-                if already_bid:
+                if is_own_order:
+                    keyboard.append([InlineKeyboardButton("🚫 Это ваш заказ", callback_data="noop")])
+                elif already_bid:
                     keyboard.append([InlineKeyboardButton("✅ Вы уже откликнулись", callback_data="noop")])
                 else:
                     keyboard.append([InlineKeyboardButton("💰 Откликнуться", callback_data=f"bid_on_order_{order_id}")])
@@ -3863,7 +3874,14 @@ async def worker_order_photo_nav(update: Update, context: ContextTypes.DEFAULT_T
         user = db.get_user(query.from_user.id)
         worker_profile = db.get_worker_profile(user["id"])
         already_bid = db.check_worker_bid_exists(order_id, worker_profile["id"])
-        
+
+        # ПРОВЕРКА: Мастер не может откликаться на свой заказ
+        client = db.get_client_by_id(order_dict['client_id'])
+        is_own_order = False
+        if client:
+            client_dict = dict(client)
+            is_own_order = (client_dict['user_id'] == user["id"])
+
         # Формируем текст
         text = f"📋 <b>Заказ #{order_id}</b>\n\n"
         text += f"📍 <b>Город:</b> {order_dict.get('city', 'Не указан')}\n"
@@ -3880,7 +3898,9 @@ async def worker_order_photo_nav(update: Update, context: ContextTypes.DEFAULT_T
         nav_buttons.append(InlineKeyboardButton("▶️", callback_data=f"order_photo_next_{order_id}"))
         keyboard.append(nav_buttons)
         
-        if already_bid:
+        if is_own_order:
+            keyboard.append([InlineKeyboardButton("🚫 Это ваш заказ", callback_data="noop")])
+        elif already_bid:
             keyboard.append([InlineKeyboardButton("✅ Вы уже откликнулись", callback_data="noop")])
         else:
             keyboard.append([InlineKeyboardButton("💰 Откликнуться", callback_data=f"bid_on_order_{order_id}")])
@@ -4161,6 +4181,17 @@ async def worker_bid_on_order(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     profile_dict = dict(worker_profile)
     worker_id = profile_dict.get("id")
+
+    # ПРОВЕРКА: Мастер не может откликаться на свой заказ
+    order = db.get_order_by_id(order_id)
+    if order:
+        order_dict = dict(order)
+        client = db.get_client_by_id(order_dict['client_id'])
+        if client:
+            client_dict = dict(client)
+            if client_dict['user_id'] == user_dict.get("id"):
+                await query.answer("❌ Вы не можете откликнуться на свой заказ!", show_alert=True)
+                return ConversationHandler.END
 
     if db.check_worker_bid_exists(order_id, worker_id):
         await query.answer("Вы уже откликнулись на этот заказ!", show_alert=True)
