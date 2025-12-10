@@ -6,6 +6,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     ReplyKeyboardRemove,
+    InputMediaPhoto,
 )
 from telegram.ext import (
     ContextTypes,
@@ -3885,15 +3886,10 @@ async def worker_order_photo_nav(update: Update, context: ContextTypes.DEFAULT_T
             keyboard.append([InlineKeyboardButton("💰 Откликнуться", callback_data=f"bid_on_order_{order_id}")])
         
         keyboard.append([InlineKeyboardButton("⬅️ К списку заказов", callback_data="worker_view_orders")])
-        
+
         # Обновляем фото
         await query.message.edit_media(
-            media=query.message.photo[0].file_id if hasattr(query.message, 'photo') else photo_ids[current_index],
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        await query.message.edit_caption(
-            caption=text,
-            parse_mode="HTML",
+            media=InputMediaPhoto(media=photo_ids[current_index], caption=text, parse_mode="HTML"),
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
@@ -4293,7 +4289,7 @@ async def worker_bid_publish(update: Update, context: ContextTypes.DEFAULT_TYPE)
         comment = context.user_data.get('bid_comment', '')
         
         # Получаем worker_id
-        if hasattr(update, 'callback_query'):
+        if update.callback_query:
             telegram_id = update.callback_query.from_user.id
             message = update.callback_query.message
         else:
@@ -4314,7 +4310,7 @@ async def worker_bid_publish(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
         except ValueError as e:
             # Rate limiting error
-            if hasattr(update, 'callback_query'):
+            if update.callback_query:
                 message = update.callback_query.message
             else:
                 message = update.message
@@ -4366,8 +4362,8 @@ async def worker_bid_publish(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
     except Exception as e:
         logger.error(f"Ошибка создания отклика: {e}", exc_info=True)
-        
-        if hasattr(update, 'callback_query'):
+
+        if update.callback_query:
             message = update.callback_query.message
         else:
             message = update.message
@@ -4727,7 +4723,7 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
     ИСПРАВЛЕНО: Валидация обязательных полей перед созданием.
     """
 
-    if hasattr(update, 'callback_query'):
+    if update.callback_query:
         query = update.callback_query
         await query.answer()
         message = query.message
