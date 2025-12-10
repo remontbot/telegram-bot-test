@@ -2776,7 +2776,7 @@ async def view_order_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Получаем заказ
-        order = db.get_order(order_id)
+        order = db.get_order_by_id(order_id)
         if not order or order['client_id'] != client_profile['id']:
             await query.edit_message_text(
                 "❌ Заказ не найден или у вас нет доступа к нему.",
