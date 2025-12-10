@@ -4328,13 +4328,15 @@ async def worker_bid_publish(update: Update, context: ContextTypes.DEFAULT_TYPE)
             message = update.message
         
         user = db.get_user(telegram_id)
-        worker_profile = db.get_worker_profile(user["id"])
-        
+        user_dict = dict(user)
+        worker_profile = db.get_worker_profile(user_dict["id"])
+        worker_profile_dict = dict(worker_profile)
+
         # Создаём отклик (может вызвать ValueError при rate limiting)
         try:
             bid_id = db.create_bid(
                 order_id=order_id,
-                worker_id=worker_profile["id"],
+                worker_id=worker_profile_dict["id"],
                 proposed_price=price,
                 currency=currency,
                 comment=comment
@@ -4355,7 +4357,7 @@ async def worker_bid_publish(update: Update, context: ContextTypes.DEFAULT_TYPE)
             context.user_data.clear()
             return ConversationHandler.END
 
-        logger.info(f"✅ Отклик #{bid_id} создан мастером {worker_profile['id']} на заказ {order_id}")
+        logger.info(f"✅ Отклик #{bid_id} создан мастером {worker_profile_dict['id']} на заказ {order_id}")
 
         # Отправляем уведомление клиенту
         order = db.get_order_by_id(order_id)
@@ -4364,7 +4366,7 @@ async def worker_bid_publish(update: Update, context: ContextTypes.DEFAULT_TYPE)
             client = db.get_client_by_id(order['client_id'])
             client_user = db.get_user_by_id(client['user_id'])
 
-            worker_name = worker_profile.get('name', 'Мастер')
+            worker_name = worker_profile_dict.get('name', 'Мастер')
 
             # Используем новую функцию уведомления
             await notify_client_new_bid(
