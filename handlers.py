@@ -3015,7 +3015,7 @@ async def select_master(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         order_id = selected_bid['order_id']
         worker_name = selected_bid['worker_name']
-        price = selected_bid['price']
+        price = selected_bid['proposed_price']
         currency = selected_bid['currency']
 
         # Показываем окно подтверждения с оплатой
