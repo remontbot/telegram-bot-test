@@ -1226,14 +1226,18 @@ async def worker_my_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if selected_bids:
         text += "✅ <b>Выбраны клиентом:</b>\n"
         for bid in selected_bids[:5]:  # Показываем до 5 выбранных
-            text += f"  • {bid['order_title'][:30]}... - {bid['proposed_price']} {bid['currency']}\n"
+            order_title = bid.get('order_title') or 'Без названия'
+            order_title_short = order_title[:30] + '...' if len(order_title) > 30 else order_title
+            text += f"  • {order_title_short} - {bid['proposed_price']} {bid['currency']}\n"
             text += f"    Статус заказа: {_get_order_status_text(bid['order_status'])}\n"
         text += "\n"
 
     if pending_bids:
         text += "⏳ <b>Ожидают ответа клиента:</b>\n"
         for bid in pending_bids[:5]:  # Показываем до 5 ожидающих
-            text += f"  • {bid['order_title'][:30]}... - {bid['proposed_price']} {bid['currency']}\n"
+            order_title = bid.get('order_title') or 'Без названия'
+            order_title_short = order_title[:30] + '...' if len(order_title) > 30 else order_title
+            text += f"  • {order_title_short} - {bid['proposed_price']} {bid['currency']}\n"
         if len(pending_bids) > 5:
             text += f"  ... и ещё {len(pending_bids) - 5}\n"
         text += "\n"
