@@ -1304,8 +1304,9 @@ async def worker_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         bid_dict['order_description'] = order_dict.get('description', '')
                         active_orders.append(bid_dict)
 
-        # Формируем текст
+        # Формируем текст и кнопки
         text = "📦 <b>Мои заказы в работе</b>\n\n"
+        keyboard = []
 
         if active_orders:
             for i, order in enumerate(active_orders[:10], 1):  # Показываем до 10
@@ -1316,10 +1317,16 @@ async def worker_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text += f"   📍 {order.get('order_city', 'Не указан')}\n"
                 text += f"   💰 {order['proposed_price']} {order['currency']}\n"
                 text += f"   📊 Статус: {_get_order_status_text(order.get('order_status', 'unknown'))}\n"
+                text += "\n"
 
                 # Добавляем кнопку для открытия чата с клиентом
-                text += f"   💬 Чат с клиентом\n"
-                text += "\n"
+                chat = db.get_chat_by_order(order['order_id'])
+                if chat:
+                    chat_dict = dict(chat)
+                    keyboard.append([InlineKeyboardButton(
+                        f"💬 Чат по заказу #{order['order_id']}",
+                        callback_data=f"open_chat_{chat_dict['id']}"
+                    )])
 
             if len(active_orders) > 10:
                 text += f"... и ещё {len(active_orders) - 10} заказов\n\n"
@@ -1329,7 +1336,7 @@ async def worker_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += "У вас пока нет заказов в работе.\n\n"
             text += "Когда клиент выберет ваш отклик, заказ появится здесь."
 
-        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")]]
+        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")])
 
         await safe_edit_message(
             query,
@@ -2749,12 +2756,25 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     callback_data=f"cancel_order_{order_id}"
                 )])
 
-            # НОВОЕ: Кнопка завершения для заказов с переданными контактами
-            if order_status in ('contact_shared', 'master_selected', 'master_confirmed'):
-                keyboard.append([InlineKeyboardButton(
-                    f"✅ Завершить заказ #{order_id}",
-                    callback_data=f"complete_order_{order_id}"
-                )])
+            # НОВОЕ: Если мастер выбран, показываем кнопки чата и завершения
+            selected_worker_id = order_dict.get('selected_worker_id')
+            if selected_worker_id:
+                # Проверяем существует ли чат
+                chat = db.get_chat_by_order(order_id)
+                if chat:
+                    chat_dict = dict(chat)
+                    keyboard.append([InlineKeyboardButton(
+                        f"💬 Чат с мастером",
+                        callback_data=f"open_chat_{chat_dict['id']}"
+                    )])
+
+                # КРИТИЧНО: Кнопка завершения доступна СРАЗУ после выбора мастера
+                # Клиент НЕ зависит от подтверждения мастера!
+                if order_status not in ('done', 'completed', 'cancelled'):
+                    keyboard.append([InlineKeyboardButton(
+                        f"✅ Завершить заказ #{order_id}",
+                        callback_data=f"complete_order_{order_id}"
+                    )])
 
             orders_text += f"📅 {order_dict.get('created_at', '')}\n"
             orders_text += "\n"
@@ -2894,12 +2914,12 @@ async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_T
             await safe_edit_message(query, "❌ Это не ваш заказ.")
             return
 
-        # Проверяем статус заказа
-        if order_dict['status'] not in ('contact_shared', 'master_selected', 'master_confirmed'):
+        # Проверяем статус заказа - нельзя завершить уже завершённый или отменённый
+        if order_dict['status'] in ('done', 'completed', 'cancelled'):
             await safe_edit_message(
                 query,
-                f"❌ Заказ нельзя завершить в текущем статусе: {order_dict['status']}\n\n"
-                f"Завершить можно только заказ, по которому вы уже выбрали мастера.",
+                f"❌ Этот заказ уже завершён или отменён.\n\n"
+                f"Статус: {order_dict['status']}",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")

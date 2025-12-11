@@ -2412,6 +2412,21 @@ def get_chat_by_order_and_bid(order_id, bid_id):
         return cursor.fetchone()
 
 
+def get_chat_by_order(order_id):
+    """
+    НОВОЕ: Получает чат по заказу (для упрощения доступа из списка заказов).
+    Возвращает первый найденный чат для этого заказа.
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT * FROM chats
+            WHERE order_id = ?
+            LIMIT 1
+        """, (order_id,))
+        return cursor.fetchone()
+
+
 def get_chat_by_id(chat_id):
     """Получает чат по ID"""
     with get_db_connection() as conn:
