@@ -357,6 +357,57 @@ def main():
         )
     )
 
+    # НОВОЕ: Обработчики фотографий завершённых работ
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_upload_work_photo_start,
+            pattern="^upload_work_photo_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_skip_work_photo,
+            pattern="^skip_work_photo_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_finish_work_photos,
+            pattern="^finish_work_photos_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_cancel_work_photos,
+            pattern="^cancel_work_photos_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_check_work_photos,
+            pattern="^check_work_photos_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_verify_work_photo,
+            pattern="^verify_photo_"
+        )
+    )
+
+    # MessageHandler для приёма фото завершённых работ от мастера
+    application.add_handler(
+        MessageHandler(
+            filters.PHOTO & ~filters.COMMAND,
+            handlers.worker_upload_work_photo_receive
+        )
+    )
+
     # --- Обработчики для добавления фото (БЕЗ ConversationHandler) ---
     
     # Начало добавления фото

@@ -563,6 +563,21 @@ def init_db():
             );
         """)
 
+        # НОВОЕ: Таблица для фотографий завершённых работ
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS completed_work_photos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id INTEGER NOT NULL,
+                worker_id INTEGER NOT NULL,
+                photo_id TEXT NOT NULL,
+                verified BOOLEAN DEFAULT 0,
+                verified_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (order_id) REFERENCES orders(id),
+                FOREIGN KEY (worker_id) REFERENCES workers(id)
+            );
+        """)
+
         conn.commit()
 
 
@@ -916,6 +931,146 @@ def increment_verified_reviews(user_id):
             WHERE user_id = ?
         """, (user_id,))
         conn.commit()
+
+
+# --- НОВОЕ: Фотографии завершённых работ ---
+
+def add_completed_work_photo(order_id, worker_id, photo_id):
+    """
+    Добавляет фотографию завершённой работы от мастера.
+
+    Args:
+        order_id: ID заказа
+        worker_id: ID мастера
+        photo_id: Telegram file_id фотографии
+
+    Returns:
+        int: ID добавленной фотографии или None при ошибке
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        created_at = datetime.now().isoformat()
+        try:
+            cursor.execute("""
+                INSERT INTO completed_work_photos
+                (order_id, worker_id, photo_id, verified, created_at)
+                VALUES (?, ?, ?, 0, ?)
+            """, (order_id, worker_id, photo_id, created_at))
+            conn.commit()
+
+            if USE_POSTGRES:
+                cursor.execute("SELECT LASTVAL()")
+            else:
+                cursor.execute("SELECT last_insert_rowid()")
+
+            result = cursor.fetchone()
+            return result[0] if result else None
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении фото завершённой работы: {e}")
+            return None
+
+
+def verify_completed_work_photo(photo_id):
+    """
+    Подтверждает фотографию завершённой работы клиентом.
+
+    Args:
+        photo_id: ID фотографии в таблице completed_work_photos
+
+    Returns:
+        bool: True если успешно, False при ошибке
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        verified_at = datetime.now().isoformat()
+        try:
+            cursor.execute("""
+                UPDATE completed_work_photos
+                SET verified = 1, verified_at = ?
+                WHERE id = ?
+            """, (verified_at, photo_id))
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Ошибка при подтверждении фото: {e}")
+            return False
+
+
+def get_completed_work_photos(order_id):
+    """
+    Получает все фотографии завершённой работы для заказа.
+
+    Args:
+        order_id: ID заказа
+
+    Returns:
+        list: Список фотографий с информацией о подтверждении
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT * FROM completed_work_photos
+            WHERE order_id = ?
+            ORDER BY created_at DESC
+        """, (order_id,))
+        return cursor.fetchall()
+
+
+def get_worker_verified_photos(worker_id, limit=20):
+    """
+    Получает подтверждённые фотографии работ мастера для показа в профиле.
+
+    Args:
+        worker_id: ID мастера
+        limit: Максимальное количество фото (по умолчанию 20)
+
+    Returns:
+        list: Список подтверждённых фотографий с информацией о заказах
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT
+                cwp.*,
+                o.title as order_title,
+                o.category as order_category,
+                r.rating as order_rating
+            FROM completed_work_photos cwp
+            JOIN orders o ON cwp.order_id = o.id
+            LEFT JOIN reviews r ON o.id = r.order_id AND r.role_to = 'worker'
+            WHERE cwp.worker_id = ? AND cwp.verified = 1
+            ORDER BY cwp.created_at DESC
+            LIMIT ?
+        """, (worker_id, limit))
+        return cursor.fetchall()
+
+
+def get_unverified_photos_for_client(user_id):
+    """
+    Получает неподтверждённые фотографии работ для заказов клиента.
+
+    Args:
+        user_id: ID пользователя (клиента)
+
+    Returns:
+        list: Список неподтверждённых фотографий, ожидающих проверки
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT
+                cwp.*,
+                o.title as order_title,
+                o.id as order_id,
+                w.name as worker_name
+            FROM completed_work_photos cwp
+            JOIN orders o ON cwp.order_id = o.id
+            JOIN clients c ON o.client_id = c.id
+            JOIN workers w ON cwp.worker_id = w.id
+            WHERE c.user_id = ? AND cwp.verified = 0
+            ORDER BY cwp.created_at DESC
+        """, (user_id,))
+        return cursor.fetchall()
 
 
 def get_order_by_id(order_id):

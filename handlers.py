@@ -2960,15 +2960,28 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
             if worker_user:
                 worker_user_dict = dict(worker_user)
                 stars = "⭐" * rating
+
+                # НОВОЕ: Кнопка для загрузки фото работы
+                keyboard = [
+                    [InlineKeyboardButton("📸 Загрузить фото работы", callback_data=f"upload_work_photo_{order_id}")],
+                    [InlineKeyboardButton("➡️ Пропустить", callback_data=f"skip_work_photo_{order_id}")]
+                ]
+
                 await context.bot.send_message(
                     chat_id=worker_user_dict['telegram_id'],
                     text=(
                         f"✅ <b>Заказ #{order_id} завершен!</b>\n\n"
                         f"Клиент завершил заказ и оставил вам оценку:\n"
                         f"{stars} ({rating}/5)\n\n"
-                        f"🎉 Поздравляем с успешно выполненной работой!"
+                        f"🎉 Поздравляем с успешно выполненной работой!\n\n"
+                        f"📸 <b>Загрузите фото выполненной работы:</b>\n"
+                        f"• Это повысит доверие будущих клиентов\n"
+                        f"• Фото будут видны в вашем профиле\n"
+                        f"• Клиент сможет подтвердить подлинность фото\n"
+                        f"• Подтверждённые фото получат специальный значок ✅"
                     ),
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
                 )
         except Exception as e:
             logger.warning(f"Не удалось отправить уведомление мастеру {worker_user_id}: {e}")
@@ -3005,6 +3018,326 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
                 InlineKeyboardButton("⬅️ Назад", callback_data="client_my_orders")
             ]])
         )
+
+
+async def worker_upload_work_photo_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    НОВОЕ: Начало загрузки фото завершённой работы мастером.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # Извлекаем order_id из callback_data
+        order_id = int(query.data.replace("upload_work_photo_", ""))
+
+        # Сохраняем order_id в context для последующей загрузки фото
+        context.user_data['uploading_work_photo_order_id'] = order_id
+
+        text = (
+            f"📸 <b>Загрузка фото работы для заказа #{order_id}</b>\n\n"
+            f"Отправьте фотографии выполненной работы (до 10 фото).\n\n"
+            f"💡 <b>Советы для качественных фото:</b>\n"
+            f"• Убедитесь, что работа хорошо видна\n"
+            f"• Используйте хорошее освещение\n"
+            f"• Покажите результат с разных ракурсов\n"
+            f"• Избегайте размытых фото\n\n"
+            f"После загрузки всех фото нажмите «Завершить»."
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("✅ Завершить загрузку", callback_data=f"finish_work_photos_{order_id}")],
+            [InlineKeyboardButton("❌ Отменить", callback_data=f"cancel_work_photos_{order_id}")]
+        ]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+        # Инициализируем список загруженных фото
+        context.user_data['uploaded_work_photos'] = []
+
+        logger.info(f"Мастер начал загрузку фото для заказа {order_id}")
+
+    except Exception as e:
+        logger.error(f"Ошибка при начале загрузки фото работы: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Произошла ошибка:\n{str(e)}",
+            parse_mode="HTML"
+        )
+
+
+async def worker_skip_work_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    НОВОЕ: Пропуск загрузки фото работы.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        order_id = int(query.data.replace("skip_work_photo_", ""))
+
+        await query.edit_message_text(
+            "✅ Фото работы можно добавить позже через профиль.\n\n"
+            "Спасибо за работу!",
+            parse_mode="HTML"
+        )
+
+        logger.info(f"Мастер пропустил загрузку фото для заказа {order_id}")
+
+    except Exception as e:
+        logger.error(f"Ошибка при пропуске загрузки фото: {e}", exc_info=True)
+
+
+async def worker_upload_work_photo_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    НОВОЕ: Получение фото завершённой работы от мастера.
+    """
+    try:
+        # Проверяем, что идёт процесс загрузки фото работы
+        order_id = context.user_data.get('uploading_work_photo_order_id')
+        if not order_id:
+            return  # Игнорируем фото, если не в процессе загрузки
+
+        # Получаем file_id фото
+        if update.message.photo:
+            photo_id = update.message.photo[-1].file_id  # Берём фото максимального размера
+
+            # Добавляем в список загруженных
+            if 'uploaded_work_photos' not in context.user_data:
+                context.user_data['uploaded_work_photos'] = []
+
+            context.user_data['uploaded_work_photos'].append(photo_id)
+            count = len(context.user_data['uploaded_work_photos'])
+
+            # Подтверждаем получение
+            await update.message.reply_text(
+                f"✅ Фото {count} получено.\n\n"
+                f"Можете отправить ещё фото или нажмите «Завершить загрузку».",
+                parse_mode="HTML"
+            )
+
+            logger.info(f"Получено фото {count} для заказа {order_id}")
+
+    except Exception as e:
+        logger.error(f"Ошибка при получении фото работы: {e}", exc_info=True)
+
+
+async def worker_finish_work_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    НОВОЕ: Завершение загрузки фото работы и сохранение в БД.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        order_id = int(query.data.replace("finish_work_photos_", ""))
+        photos = context.user_data.get('uploaded_work_photos', [])
+
+        if not photos:
+            await query.edit_message_text(
+                "❌ Вы не загрузили ни одного фото.\n\n"
+                "Нажмите «Загрузить фото работы» чтобы попробовать снова.",
+                parse_mode="HTML"
+            )
+            return
+
+        # Получаем информацию о мастере
+        user = db.get_user(query.from_user.id)
+        if not user:
+            await query.edit_message_text("❌ Пользователь не найден.")
+            return
+
+        user_dict = dict(user)
+        worker_profile = db.get_worker_profile(user_dict["id"])
+        if not worker_profile:
+            await query.edit_message_text("❌ Профиль мастера не найден.")
+            return
+
+        worker_dict = dict(worker_profile)
+
+        # Сохраняем каждое фото в БД
+        saved_count = 0
+        for photo_id in photos:
+            result = db.add_completed_work_photo(order_id, worker_dict['id'], photo_id)
+            if result:
+                saved_count += 1
+
+        # Получаем заказ для уведомления клиента
+        order = db.get_order_by_id(order_id)
+        if order:
+            order_dict = dict(order)
+            client = db.get_client_by_id(order_dict['client_id'])
+            if client:
+                client_dict = dict(client)
+                client_user = db.get_user_by_id(client_dict['user_id'])
+                if client_user:
+                    client_user_dict = dict(client_user)
+
+                    # Уведомляем клиента о загруженных фото
+                    keyboard = [
+                        [InlineKeyboardButton("📸 Проверить фото", callback_data=f"check_work_photos_{order_id}")],
+                        [InlineKeyboardButton("➡️ Позже", callback_data="noop")]
+                    ]
+
+                    try:
+                        await context.bot.send_message(
+                            chat_id=client_user_dict['telegram_id'],
+                            text=(
+                                f"📸 <b>Мастер загрузил фото работы!</b>\n\n"
+                                f"По заказу #{order_id} мастер <b>{worker_dict.get('name', 'Мастер')}</b> "
+                                f"загрузил {saved_count} {_get_photos_word(saved_count)} выполненной работы.\n\n"
+                                f"✅ <b>Подтвердите фотографии:</b>\n"
+                                f"Если это действительно фото вашего заказа, подтвердите их. "
+                                f"Подтверждённые фото получат специальный значок ✅ и будут показаны в профиле мастера."
+                            ),
+                            parse_mode="HTML",
+                            reply_markup=InlineKeyboardMarkup(keyboard)
+                        )
+                    except Exception as e:
+                        logger.warning(f"Не удалось уведомить клиента о фото: {e}")
+
+        # Подтверждаем мастеру
+        await query.edit_message_text(
+            f"✅ <b>Фотографии загружены!</b>\n\n"
+            f"Загружено {saved_count} {_get_photos_word(saved_count)}.\n\n"
+            f"📨 Клиент получил уведомление и сможет подтвердить подлинность фото.\n"
+            f"Подтверждённые фото будут отмечены значком ✅ в вашем профиле.",
+            parse_mode="HTML"
+        )
+
+        # Очищаем context
+        context.user_data.pop('uploading_work_photo_order_id', None)
+        context.user_data.pop('uploaded_work_photos', None)
+
+        logger.info(f"Мастер {worker_dict['id']} загрузил {saved_count} фото для заказа {order_id}")
+
+    except Exception as e:
+        logger.error(f"Ошибка при завершении загрузки фото: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Произошла ошибка при сохранении фото:\n{str(e)}",
+            parse_mode="HTML"
+        )
+
+
+async def worker_cancel_work_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    НОВОЕ: Отмена загрузки фото работы.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # Очищаем context
+        context.user_data.pop('uploading_work_photo_order_id', None)
+        context.user_data.pop('uploaded_work_photos', None)
+
+        await query.edit_message_text(
+            "❌ Загрузка фото отменена.\n\n"
+            "Вы сможете добавить фото позже через профиль.",
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка при отмене загрузки фото: {e}", exc_info=True)
+
+
+async def client_check_work_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    НОВОЕ: Просмотр фото работы клиентом для подтверждения.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        order_id = int(query.data.replace("check_work_photos_", ""))
+
+        # Получаем фото работы
+        photos = db.get_completed_work_photos(order_id)
+        if not photos:
+            await query.edit_message_text(
+                "❌ Фотографии не найдены.",
+                parse_mode="HTML"
+            )
+            return
+
+        # Отправляем фото с кнопками подтверждения
+        text = (
+            f"📸 <b>Фотографии работы по заказу #{order_id}</b>\n\n"
+            f"Всего фото: {len(photos)}\n\n"
+            f"Подтвердите, что это фото вашего заказа:"
+        )
+
+        for idx, photo in enumerate(photos):
+            photo_dict = dict(photo)
+            status = "✅ Подтверждено" if photo_dict['verified'] else "⏳ Ожидает подтверждения"
+
+            keyboard = []
+            if not photo_dict['verified']:
+                keyboard.append([InlineKeyboardButton(
+                    f"✅ Подтвердить фото #{idx+1}",
+                    callback_data=f"verify_photo_{photo_dict['id']}"
+                )])
+
+            try:
+                await context.bot.send_photo(
+                    chat_id=query.message.chat_id,
+                    photo=photo_dict['photo_id'],
+                    caption=f"Фото #{idx+1} - {status}",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при отправке фото: {e}")
+
+        await query.message.delete()
+
+    except Exception as e:
+        logger.error(f"Ошибка при просмотре фото работы: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Произошла ошибка:\n{str(e)}",
+            parse_mode="HTML"
+        )
+
+
+async def client_verify_work_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    НОВОЕ: Подтверждение фото работы клиентом.
+    """
+    query = update.callback_query
+    await query.answer("✅ Фото подтверждено!")
+
+    try:
+        photo_id = int(query.data.replace("verify_photo_", ""))
+
+        # Подтверждаем фото в БД
+        success = db.verify_completed_work_photo(photo_id)
+
+        if success:
+            await query.edit_message_caption(
+                caption="✅ <b>Фото подтверждено клиентом</b>\n\n"
+                        "Это фото теперь будет отображаться в профиле мастера с отметкой о подтверждении.",
+                parse_mode="HTML"
+            )
+            logger.info(f"Клиент подтвердил фото {photo_id}")
+        else:
+            await query.answer("❌ Ошибка при подтверждении фото", show_alert=True)
+
+    except Exception as e:
+        logger.error(f"Ошибка при подтверждении фото: {e}", exc_info=True)
+        await query.answer("❌ Произошла ошибка", show_alert=True)
+
+
+def _get_photos_word(count):
+    """Вспомогательная функция для склонения слова 'фото'"""
+    if count % 10 == 1 and count % 100 != 11:
+        return "фото"
+    elif count % 10 in [2, 3, 4] and count % 100 not in [12, 13, 14]:
+        return "фото"
+    else:
+        return "фото"
 
 
 async def view_order_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
