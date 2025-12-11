@@ -2793,12 +2793,13 @@ async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_T
 
         # Проверяем, что заказ принадлежит клиенту
         if order_dict['client_id'] != client_dict['id']:
-            await query.edit_message_text("❌ Это не ваш заказ.")
+            await safe_edit_message(query, "❌ Это не ваш заказ.")
             return
 
         # Проверяем статус заказа
         if order_dict['status'] not in ('contact_shared', 'master_selected'):
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 f"❌ Заказ нельзя завершить в текущем статусе: {order_dict['status']}\n\n"
                 f"Завершить можно только заказ, по которому вы уже выбрали мастера.",
                 parse_mode="HTML",
@@ -2811,7 +2812,8 @@ async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_T
         # Получаем выбранного мастера
         selected_worker_id = order_dict.get('selected_worker_id')
         if not selected_worker_id:
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 "❌ Для завершения заказа необходимо сначала выбрать мастера.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([[
@@ -2823,7 +2825,7 @@ async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_T
         # Получаем информацию о мастере
         worker_profile = db.get_worker_profile_by_id(selected_worker_id)
         if not worker_profile:
-            await query.edit_message_text("❌ Информация о мастере не найдена.")
+            await safe_edit_message(query, "❌ Информация о мастере не найдена.")
             return
 
         worker_dict = dict(worker_profile)
@@ -2831,7 +2833,8 @@ async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_T
         # Проверяем, не оставлен ли уже отзыв
         existing_review = db.check_review_exists(order_id, user_dict['id'])
         if existing_review:
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 "✅ Вы уже завершили этот заказ и оставили отзыв.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([[
@@ -2863,7 +2866,8 @@ async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_T
             [InlineKeyboardButton("❌ Отмена", callback_data="client_my_orders")]
         ]
 
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -2900,7 +2904,7 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Получаем пользователя
         user = db.get_user(query.from_user.id)
         if not user:
-            await query.edit_message_text("❌ Пользователь не найден.")
+            await safe_edit_message(query, "❌ Пользователь не найден.")
             return
 
         user_dict = dict(user)
@@ -2908,7 +2912,7 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Получаем заказ
         order = db.get_order_by_id(order_id)
         if not order:
-            await query.edit_message_text("❌ Заказ не найден.")
+            await safe_edit_message(query, "❌ Заказ не найден.")
             return
 
         order_dict = dict(order)
@@ -2916,13 +2920,13 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Получаем выбранного мастера
         selected_worker_id = order_dict.get('selected_worker_id')
         if not selected_worker_id:
-            await query.edit_message_text("❌ Мастер не выбран.")
+            await safe_edit_message(query, "❌ Мастер не выбран.")
             return
 
         # Получаем информацию о мастере
         worker_profile = db.get_worker_profile_by_id(selected_worker_id)
         if not worker_profile:
-            await query.edit_message_text("❌ Информация о мастере не найдена.")
+            await safe_edit_message(query, "❌ Информация о мастере не найдена.")
             return
 
         worker_dict = dict(worker_profile)
@@ -2942,7 +2946,8 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
         if not review_saved:
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 "❌ Не удалось сохранить отзыв. Возможно, вы уже оценили этот заказ.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([[
@@ -3001,7 +3006,8 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
             [InlineKeyboardButton("🏠 Главное меню", callback_data="show_client_menu")]
         ]
 
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -3011,7 +3017,8 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     except Exception as e:
         logger.error(f"Ошибка при сохранении оценки заказа: {e}", exc_info=True)
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             f"❌ Произошла ошибка при сохранении оценки:\n{str(e)}",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
@@ -3050,7 +3057,8 @@ async def worker_upload_work_photo_start(update: Update, context: ContextTypes.D
             [InlineKeyboardButton("❌ Отменить", callback_data=f"cancel_work_photos_{order_id}")]
         ]
 
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -3063,7 +3071,8 @@ async def worker_upload_work_photo_start(update: Update, context: ContextTypes.D
 
     except Exception as e:
         logger.error(f"Ошибка при начале загрузки фото работы: {e}", exc_info=True)
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             f"❌ Произошла ошибка:\n{str(e)}",
             parse_mode="HTML"
         )
@@ -3079,7 +3088,8 @@ async def worker_skip_work_photo(update: Update, context: ContextTypes.DEFAULT_T
     try:
         order_id = int(query.data.replace("skip_work_photo_", ""))
 
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             "✅ Фото работы можно добавить позже через профиль.\n\n"
             "Спасибо за работу!",
             parse_mode="HTML"
@@ -3137,7 +3147,8 @@ async def worker_finish_work_photos(update: Update, context: ContextTypes.DEFAUL
         photos = context.user_data.get('uploaded_work_photos', [])
 
         if not photos:
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 "❌ Вы не загрузили ни одного фото.\n\n"
                 "Нажмите «Загрузить фото работы» чтобы попробовать снова.",
                 parse_mode="HTML"
@@ -3147,13 +3158,13 @@ async def worker_finish_work_photos(update: Update, context: ContextTypes.DEFAUL
         # Получаем информацию о мастере
         user = db.get_user(query.from_user.id)
         if not user:
-            await query.edit_message_text("❌ Пользователь не найден.")
+            await safe_edit_message(query, "❌ Пользователь не найден.")
             return
 
         user_dict = dict(user)
         worker_profile = db.get_worker_profile(user_dict["id"])
         if not worker_profile:
-            await query.edit_message_text("❌ Профиль мастера не найден.")
+            await safe_edit_message(query, "❌ Профиль мастера не найден.")
             return
 
         worker_dict = dict(worker_profile)
@@ -3200,7 +3211,8 @@ async def worker_finish_work_photos(update: Update, context: ContextTypes.DEFAUL
                         logger.warning(f"Не удалось уведомить клиента о фото: {e}")
 
         # Подтверждаем мастеру
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             f"✅ <b>Фотографии загружены!</b>\n\n"
             f"Загружено {saved_count} {_get_photos_word(saved_count)}.\n\n"
             f"📨 Клиент получил уведомление и сможет подтвердить подлинность фото.\n"
@@ -3216,7 +3228,8 @@ async def worker_finish_work_photos(update: Update, context: ContextTypes.DEFAUL
 
     except Exception as e:
         logger.error(f"Ошибка при завершении загрузки фото: {e}", exc_info=True)
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             f"❌ Произошла ошибка при сохранении фото:\n{str(e)}",
             parse_mode="HTML"
         )
@@ -3234,7 +3247,8 @@ async def worker_cancel_work_photos(update: Update, context: ContextTypes.DEFAUL
         context.user_data.pop('uploading_work_photo_order_id', None)
         context.user_data.pop('uploaded_work_photos', None)
 
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             "❌ Загрузка фото отменена.\n\n"
             "Вы сможете добавить фото позже через профиль.",
             parse_mode="HTML"
@@ -3257,7 +3271,8 @@ async def client_check_work_photos(update: Update, context: ContextTypes.DEFAULT
         # Получаем фото работы
         photos = db.get_completed_work_photos(order_id)
         if not photos:
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 "❌ Фотографии не найдены.",
                 parse_mode="HTML"
             )
@@ -3296,7 +3311,8 @@ async def client_check_work_photos(update: Update, context: ContextTypes.DEFAULT
 
     except Exception as e:
         logger.error(f"Ошибка при просмотре фото работы: {e}", exc_info=True)
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             f"❌ Произошла ошибка:\n{str(e)}",
             parse_mode="HTML"
         )
