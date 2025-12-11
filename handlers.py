@@ -4481,18 +4481,20 @@ async def worker_view_orders(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         if len(all_orders) > 5:
             orders_text += f"<i>... и ещё {len(all_orders) - 5} заказов</i>\n\n"
-        
+
         keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")])
-        
-        await query.edit_message_text(
+
+        await safe_edit_message(
+            query,
             orders_text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        
+
     except Exception as e:
         logger.error(f"Ошибка при просмотре заказов: {e}", exc_info=True)
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             "❌ Произошла ошибка при загрузке заказов.\n\n"
             "Попробуйте позже.",
             reply_markup=InlineKeyboardMarkup([
