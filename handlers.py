@@ -6007,16 +6007,31 @@ async def show_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE):
     role = parts[2]  # worker или client
     profile_user_id = int(parts[3])
 
+    # Получаем текущего пользователя для проверки, смотрит ли он свой профиль
+    current_user = db.get_user(query.from_user.id)
+    is_own_profile = False
+    if current_user:
+        current_user_dict = dict(current_user)
+        is_own_profile = (current_user_dict['id'] == profile_user_id)
+
     # Получаем отзывы
     reviews = db.get_reviews_for_user(profile_user_id, role)
 
     if not reviews:
+        # Определяем callback для кнопки "Назад"
+        if is_own_profile:
+            # Если смотрим свой профиль - возврат в меню
+            back_callback = "show_worker_menu" if role == "worker" else "show_client_menu"
+        else:
+            # Если смотрим чужой профиль - возврат в профиль
+            back_callback = "worker_profile" if role == "worker" else "show_client_menu"
+
         await query.edit_message_text(
             "📊 <b>Отзывы</b>\n\n"
             "Пока нет отзывов.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("⬅️ Назад", callback_data=f"show_{role}_profile_{profile_user_id}")
+                InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)
             ]])
         )
         return
@@ -6043,11 +6058,19 @@ async def show_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(reviews) > 10:
         message_text += f"<i>Показано 10 из {len(reviews)} отзывов</i>\n"
 
+    # Определяем callback для кнопки "Назад"
+    if is_own_profile:
+        # Если смотрим свой профиль - возврат в меню
+        back_callback = "show_worker_menu" if role == "worker" else "show_client_menu"
+    else:
+        # Если смотрим чужой профиль - возврат в профиль
+        back_callback = "worker_profile" if role == "worker" else "show_client_menu"
+
     await query.edit_message_text(
         message_text,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("⬅️ Назад", callback_data=f"show_{role}_profile_{profile_user_id}")
+            InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)
         ]])
     )
 
