@@ -2651,6 +2651,13 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     callback_data=f"cancel_order_{order_id}"
                 )])
 
+            # НОВОЕ: Кнопка завершения для заказов с переданными контактами
+            if order_status in ('contact_shared', 'master_selected'):
+                keyboard.append([InlineKeyboardButton(
+                    f"✅ Завершить заказ #{order_id}",
+                    callback_data=f"complete_order_{order_id}"
+                )])
+
             orders_text += f"📅 {order_dict.get('created_at', '')}\n"
             orders_text += "\n"
 
@@ -2742,6 +2749,257 @@ async def cancel_order_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error(f"Ошибка при отмене заказа: {e}", exc_info=True)
         await query.edit_message_text(
             f"❌ Произошла ошибка при отмене заказа:\n{str(e)}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data="client_my_orders")
+            ]])
+        )
+
+
+async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    НОВОЕ: Обработчик завершения заказа клиентом с оценкой мастера.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # Извлекаем order_id из callback_data
+        order_id = int(query.data.replace("complete_order_", ""))
+
+        # Получаем пользователя
+        user = db.get_user(query.from_user.id)
+        if not user:
+            await query.edit_message_text("❌ Пользователь не найден.")
+            return
+
+        user_dict = dict(user)
+
+        # Получаем профиль клиента
+        client_profile = db.get_client_profile(user_dict["id"])
+        if not client_profile:
+            await query.edit_message_text("❌ Профиль клиента не найден.")
+            return
+
+        client_dict = dict(client_profile)
+
+        # Получаем заказ
+        order = db.get_order_by_id(order_id)
+        if not order:
+            await query.edit_message_text("❌ Заказ не найден.")
+            return
+
+        order_dict = dict(order)
+
+        # Проверяем, что заказ принадлежит клиенту
+        if order_dict['client_id'] != client_dict['id']:
+            await query.edit_message_text("❌ Это не ваш заказ.")
+            return
+
+        # Проверяем статус заказа
+        if order_dict['status'] not in ('contact_shared', 'master_selected'):
+            await query.edit_message_text(
+                f"❌ Заказ нельзя завершить в текущем статусе: {order_dict['status']}\n\n"
+                f"Завершить можно только заказ, по которому вы уже выбрали мастера.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")
+                ]])
+            )
+            return
+
+        # Получаем выбранного мастера
+        selected_worker_id = order_dict.get('selected_worker_id')
+        if not selected_worker_id:
+            await query.edit_message_text(
+                "❌ Для завершения заказа необходимо сначала выбрать мастера.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")
+                ]])
+            )
+            return
+
+        # Получаем информацию о мастере
+        worker_profile = db.get_worker_profile_by_id(selected_worker_id)
+        if not worker_profile:
+            await query.edit_message_text("❌ Информация о мастере не найдена.")
+            return
+
+        worker_dict = dict(worker_profile)
+
+        # Проверяем, не оставлен ли уже отзыв
+        existing_review = db.check_review_exists(order_id, user_dict['id'])
+        if existing_review:
+            await query.edit_message_text(
+                "✅ Вы уже завершили этот заказ и оставили отзыв.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")
+                ]])
+            )
+            return
+
+        # Показываем форму оценки
+        text = (
+            f"✅ <b>Завершение заказа #{order_id}</b>\n\n"
+            f"👤 <b>Мастер:</b> {worker_dict.get('name', 'Без имени')}\n"
+            f"🔧 <b>Специализация:</b> {worker_dict.get('category', 'Не указана')}\n\n"
+            f"📊 <b>Оцените работу мастера:</b>\n"
+            f"Ваша оценка поможет другим клиентам сделать правильный выбор."
+        )
+
+        # Кнопки с оценками от 1 до 5 звезд
+        keyboard = [
+            [
+                InlineKeyboardButton("⭐", callback_data=f"rate_order_{order_id}_1"),
+                InlineKeyboardButton("⭐⭐", callback_data=f"rate_order_{order_id}_2"),
+                InlineKeyboardButton("⭐⭐⭐", callback_data=f"rate_order_{order_id}_3"),
+            ],
+            [
+                InlineKeyboardButton("⭐⭐⭐⭐", callback_data=f"rate_order_{order_id}_4"),
+                InlineKeyboardButton("⭐⭐⭐⭐⭐", callback_data=f"rate_order_{order_id}_5"),
+            ],
+            [InlineKeyboardButton("❌ Отмена", callback_data="client_my_orders")]
+        ]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+        logger.info(f"Клиент {user_dict['id']} открыл форму завершения заказа {order_id}")
+
+    except Exception as e:
+        logger.error(f"Ошибка при открытии формы завершения заказа: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Произошла ошибка:\n{str(e)}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data="client_my_orders")
+            ]])
+        )
+
+
+async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    НОВОЕ: Обработчик сохранения оценки заказа.
+    Callback data format: rate_order_{order_id}_{rating}
+    """
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # Извлекаем order_id и rating из callback_data
+        # Формат: rate_order_{order_id}_{rating}
+        data_parts = query.data.replace("rate_order_", "").split("_")
+        order_id = int(data_parts[0])
+        rating = int(data_parts[1])
+
+        # Получаем пользователя
+        user = db.get_user(query.from_user.id)
+        if not user:
+            await query.edit_message_text("❌ Пользователь не найден.")
+            return
+
+        user_dict = dict(user)
+
+        # Получаем заказ
+        order = db.get_order_by_id(order_id)
+        if not order:
+            await query.edit_message_text("❌ Заказ не найден.")
+            return
+
+        order_dict = dict(order)
+
+        # Получаем выбранного мастера
+        selected_worker_id = order_dict.get('selected_worker_id')
+        if not selected_worker_id:
+            await query.edit_message_text("❌ Мастер не выбран.")
+            return
+
+        # Получаем информацию о мастере
+        worker_profile = db.get_worker_profile_by_id(selected_worker_id)
+        if not worker_profile:
+            await query.edit_message_text("❌ Информация о мастере не найдена.")
+            return
+
+        worker_dict = dict(worker_profile)
+
+        # Получаем user_id мастера
+        worker_user_id = worker_dict['user_id']
+
+        # Сохраняем отзыв (пока без комментария)
+        review_saved = db.add_review(
+            from_user_id=user_dict['id'],
+            to_user_id=worker_user_id,
+            order_id=order_id,
+            role_from='client',
+            role_to='worker',
+            rating=rating,
+            comment=None  # Пока без комментария, добавим позже
+        )
+
+        if not review_saved:
+            await query.edit_message_text(
+                "❌ Не удалось сохранить отзыв. Возможно, вы уже оценили этот заказ.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")
+                ]])
+            )
+            return
+
+        # Обновляем статус заказа на "done"
+        db.update_order_status(order_id, 'done')
+
+        # Уведомляем мастера о завершении и оценке
+        try:
+            worker_user = db.get_user_by_id(worker_user_id)
+            if worker_user:
+                worker_user_dict = dict(worker_user)
+                stars = "⭐" * rating
+                await context.bot.send_message(
+                    chat_id=worker_user_dict['telegram_id'],
+                    text=(
+                        f"✅ <b>Заказ #{order_id} завершен!</b>\n\n"
+                        f"Клиент завершил заказ и оставил вам оценку:\n"
+                        f"{stars} ({rating}/5)\n\n"
+                        f"🎉 Поздравляем с успешно выполненной работой!"
+                    ),
+                    parse_mode="HTML"
+                )
+        except Exception as e:
+            logger.warning(f"Не удалось отправить уведомление мастеру {worker_user_id}: {e}")
+
+        # Показываем клиенту сообщение об успехе
+        stars = "⭐" * rating
+        text = (
+            f"✅ <b>Заказ завершен!</b>\n\n"
+            f"Спасибо за вашу оценку: {stars} ({rating}/5)\n\n"
+            f"👤 <b>Мастер:</b> {worker_dict.get('name', 'Без имени')}\n\n"
+            f"💬 Хотите оставить комментарий к отзыву?"
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("💬 Оставить комментарий", callback_data=f"add_comment_{order_id}")],
+            [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="show_client_menu")]
+        ]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+        logger.info(f"Клиент {user_dict['id']} завершил заказ {order_id} с оценкой {rating}")
+
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении оценки заказа: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Произошла ошибка при сохранении оценки:\n{str(e)}",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("⬅️ Назад", callback_data="client_my_orders")

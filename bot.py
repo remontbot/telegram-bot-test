@@ -342,6 +342,21 @@ def main():
         )
     )
 
+    # НОВОЕ: Обработчики завершения заказа и оценки мастера
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.complete_order_handler,
+            pattern="^complete_order_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.submit_order_rating,
+            pattern="^rate_order_"
+        )
+    )
+
     # --- Обработчики для добавления фото (БЕЗ ConversationHandler) ---
     
     # Начало добавления фото
