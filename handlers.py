@@ -2953,7 +2953,7 @@ async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_T
         # Получаем информацию о противоположной стороне
         if is_client:
             # Клиент оценивает мастера
-            target_profile = db.get_worker_profile_by_id(selected_worker_id)
+            target_profile = db.get_worker_by_id(selected_worker_id)
             if not target_profile:
                 await safe_edit_message(query, "❌ Информация о мастере не найдена.")
                 return
@@ -3061,7 +3061,7 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
         # Получаем информацию о мастере
-        worker_profile = db.get_worker_profile_by_id(selected_worker_id)
+        worker_profile = db.get_worker_by_id(selected_worker_id)
         if not worker_profile:
             await safe_edit_message(query, "❌ Информация о мастере не найдена.")
             return
