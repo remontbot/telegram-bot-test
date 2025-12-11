@@ -4947,7 +4947,7 @@ async def browse_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------- ОТКЛИКИ МАСТЕРОВ НА ЗАКАЗЫ -------
 
 async def worker_bid_on_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало создания отклика - ввод цены"""
+    """Начало создания отклика - выбор валюты"""
     query = update.callback_query
     await query.answer()
 
@@ -4985,51 +4985,9 @@ async def worker_bid_on_order(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = (
         "💰 <b>Ваш отклик на заказ</b>\n\n"
         "⚠️ <b>ВНИМАНИЕ:</b> Цену изменить будет НЕЛЬЗЯ!\n\n"
-        "Введите вашу цену (только число):\n"
-        "Например: <code>150</code>"
+        "💵 Сначала выберите валюту, в которой будете указывать цену:"
     )
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("❌ Отмена", callback_data="cancel_bid")
-    ]])
-
-    # Пробуем отредактировать как caption (если есть фото), иначе как text
-    try:
-        await query.edit_message_caption(
-            caption=text,
-            parse_mode="HTML",
-            reply_markup=keyboard
-        )
-    except:
-        # Если не получилось (нет фото), редактируем текст
-        await query.edit_message_text(
-            text=text,
-            parse_mode="HTML",
-            reply_markup=keyboard
-        )
-
-    return BID_ENTER_PRICE
-
-
-async def worker_bid_enter_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка ввода цены"""
-    price_text = update.message.text.strip()
-    
-    # Проверяем что это число
-    try:
-        price = float(price_text.replace(',', '.'))
-        if price <= 0:
-            raise ValueError
-    except:
-        await update.message.reply_text(
-            "❌ Пожалуйста, введите корректную цену (только число).\n\n"
-            "Например: <code>150</code> или <code>99.50</code>",
-            parse_mode="HTML"
-        )
-        return BID_ENTER_PRICE
-    
-    context.user_data['bid_price'] = price
-    
     # Выбор валюты
     keyboard = [
         [
@@ -5041,28 +4999,48 @@ async def worker_bid_enter_price(update: Update, context: ContextTypes.DEFAULT_T
         ],
         [InlineKeyboardButton("❌ Отмена", callback_data="cancel_bid")],
     ]
-    
-    await update.message.reply_text(
-        f"💵 Выберите валюту для цены <b>{price}</b>:",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    
+
+    # Пробуем отредактировать как caption (если есть фото), иначе как text
+    try:
+        await query.edit_message_caption(
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except:
+        # Если не получилось (нет фото), редактируем текст
+        await query.edit_message_text(
+            text=text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
     return BID_SELECT_CURRENCY
 
 
-async def worker_bid_select_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора валюты"""
-    query = update.callback_query
-    await query.answer()
-    
-    currency = query.data.replace("bid_currency_", "")
-    context.user_data['bid_currency'] = currency
-    
-    price = context.user_data['bid_price']
-    
+async def worker_bid_enter_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка ввода цены - переход к комментарию"""
+    price_text = update.message.text.strip()
+
+    # Проверяем что это число
+    try:
+        price = float(price_text.replace(',', '.'))
+        if price <= 0:
+            raise ValueError
+    except:
+        currency = context.user_data.get('bid_currency', 'BYN')
+        await update.message.reply_text(
+            f"❌ Пожалуйста, введите корректную цену в {currency} (только число).\n\n"
+            "Например: <code>150</code> или <code>99.50</code>",
+            parse_mode="HTML"
+        )
+        return BID_ENTER_PRICE
+
+    context.user_data['bid_price'] = price
+    currency = context.user_data.get('bid_currency', 'BYN')
+
     # Спрашиваем комментарий
-    await query.edit_message_text(
+    await update.message.reply_text(
         f"💰 Ваша цена: <b>{price} {currency}</b>\n\n"
         "📝 Хотите добавить комментарий?\n"
         "(Например: \"Могу завтра утром\" или \"Есть все материалы\")\n\n"
@@ -5073,8 +5051,40 @@ async def worker_bid_select_currency(update: Update, context: ContextTypes.DEFAU
             InlineKeyboardButton("❌ Отмена", callback_data="cancel_bid")
         ]])
     )
-    
+
     return BID_ENTER_COMMENT
+
+
+async def worker_bid_select_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора валюты - переход к вводу цены"""
+    query = update.callback_query
+    await query.answer()
+
+    currency = query.data.replace("bid_currency_", "")
+    context.user_data['bid_currency'] = currency
+
+    # Получаем символ валюты для отображения
+    currency_symbols = {
+        'BYN': '₽',
+        'USD': '$',
+        'EUR': '€'
+    }
+    currency_symbol = currency_symbols.get(currency, currency)
+
+    # Спрашиваем цену в выбранной валюте
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("❌ Отмена", callback_data="cancel_bid")
+    ]])
+
+    await query.edit_message_text(
+        f"💰 <b>Валюта выбрана: {currency} ({currency_symbol})</b>\n\n"
+        f"Теперь введите вашу цену в {currency} (только число):\n\n"
+        "Например: <code>150</code> или <code>99.50</code>",
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+    return BID_ENTER_PRICE
 
 
 async def worker_bid_enter_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):

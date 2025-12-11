@@ -307,11 +307,11 @@ def main():
             CallbackQueryHandler(handlers.worker_bid_on_order, pattern="^bid_on_order_")
         ],
         states={
-            handlers.BID_ENTER_PRICE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.worker_bid_enter_price),
-            ],
             handlers.BID_SELECT_CURRENCY: [
                 CallbackQueryHandler(handlers.worker_bid_select_currency, pattern="^bid_currency_"),
+            ],
+            handlers.BID_ENTER_PRICE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.worker_bid_enter_price),
             ],
             handlers.BID_ENTER_COMMENT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.worker_bid_enter_comment),
