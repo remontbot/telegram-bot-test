@@ -1115,6 +1115,7 @@ async def show_worker_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📋 Доступные заказы", callback_data="worker_view_orders")],
         [InlineKeyboardButton("💼 Мои отклики", callback_data="worker_my_bids")],
+        [InlineKeyboardButton("📦 Мои заказы", callback_data="worker_my_orders")],
         [InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
         [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_notifications")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")],
@@ -1254,6 +1255,99 @@ async def worker_my_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+
+async def worker_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    НОВОЕ: Показывает мастеру его заказы в работе (подтвержденные заказы).
+    """
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # Получаем пользователя и профиль мастера
+        user = db.get_user(query.from_user.id)
+        if not user:
+            await safe_edit_message(query, "❌ Пользователь не найден.")
+            return
+
+        user_dict = dict(user)
+        worker_profile = db.get_worker_profile(user_dict["id"])
+        if not worker_profile:
+            await safe_edit_message(
+                query,
+                "❌ Профиль мастера не найден.\n\n"
+                "Возможно произошла ошибка при регистрации.\n"
+                "Нажмите /start и зарегистрируйтесь заново.",
+                parse_mode="HTML"
+            )
+            return
+
+        worker_dict = dict(worker_profile)
+
+        # Получаем все отклики мастера
+        bids = db.get_bids_for_worker(worker_dict['id'])
+
+        # Фильтруем только выбранные отклики (заказы в работе)
+        active_orders = []
+        for bid in bids:
+            bid_dict = dict(bid)
+            if bid_dict['status'] == 'selected':
+                # Получаем актуальный статус заказа
+                order = db.get_order_by_id(bid_dict['order_id'])
+                if order:
+                    order_dict = dict(order)
+                    # Показываем только заказы в работе (не завершенные)
+                    if order_dict['status'] in ('master_selected', 'contact_shared', 'master_confirmed'):
+                        bid_dict['order_status'] = order_dict['status']
+                        bid_dict['order_city'] = order_dict.get('city', 'Не указан')
+                        bid_dict['order_description'] = order_dict.get('description', '')
+                        active_orders.append(bid_dict)
+
+        # Формируем текст
+        text = "📦 <b>Мои заказы в работе</b>\n\n"
+
+        if active_orders:
+            for i, order in enumerate(active_orders[:10], 1):  # Показываем до 10
+                order_title = order.get('order_title') or 'Без названия'
+                order_title_short = order_title[:40] + '...' if len(order_title) > 40 else order_title
+
+                text += f"{i}. <b>{order_title_short}</b>\n"
+                text += f"   📍 {order.get('order_city', 'Не указан')}\n"
+                text += f"   💰 {order['proposed_price']} {order['currency']}\n"
+                text += f"   📊 Статус: {_get_order_status_text(order.get('order_status', 'unknown'))}\n"
+
+                # Добавляем кнопку для открытия чата с клиентом
+                text += f"   💬 Чат с клиентом\n"
+                text += "\n"
+
+            if len(active_orders) > 10:
+                text += f"... и ещё {len(active_orders) - 10} заказов\n\n"
+
+            text += f"<b>Всего активных заказов:</b> {len(active_orders)}"
+        else:
+            text += "У вас пока нет заказов в работе.\n\n"
+            text += "Когда клиент выберет ваш отклик, заказ появится здесь."
+
+        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")]]
+
+        await safe_edit_message(
+            query,
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в worker_my_orders: {e}", exc_info=True)
+        await safe_edit_message(
+            query,
+            f"❌ Произошла ошибка при загрузке заказов:\n{str(e)}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")
+            ]])
+        )
 
 
 def _get_order_status_text(status):
@@ -2656,7 +2750,7 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )])
 
             # НОВОЕ: Кнопка завершения для заказов с переданными контактами
-            if order_status in ('contact_shared', 'master_selected'):
+            if order_status in ('contact_shared', 'master_selected', 'master_confirmed'):
                 keyboard.append([InlineKeyboardButton(
                     f"✅ Завершить заказ #{order_id}",
                     callback_data=f"complete_order_{order_id}"
@@ -2801,7 +2895,7 @@ async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         # Проверяем статус заказа
-        if order_dict['status'] not in ('contact_shared', 'master_selected'):
+        if order_dict['status'] not in ('contact_shared', 'master_selected', 'master_confirmed'):
             await safe_edit_message(
                 query,
                 f"❌ Заказ нельзя завершить в текущем статусе: {order_dict['status']}\n\n"

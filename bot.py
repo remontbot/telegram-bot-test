@@ -462,6 +462,14 @@ def main():
         )
     )
 
+    # НОВОЕ: Мои заказы мастера (заказы в работе)
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_my_orders,
+            pattern="^worker_my_orders$",
+        )
+    )
+
     application.add_handler(
         CallbackQueryHandler(
             handlers.show_client_menu,
