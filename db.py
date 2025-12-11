@@ -3399,9 +3399,9 @@ def select_bid(bid_id):
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
-        # Получаем order_id и проверяем статус заказа одним запросом
+        # КРИТИЧНО: Получаем order_id, worker_id и проверяем статус заказа одним запросом
         cursor.execute("""
-            SELECT b.order_id, o.status
+            SELECT b.order_id, b.worker_id, o.status
             FROM bids b
             JOIN orders o ON b.order_id = o.id
             WHERE b.id = ?
@@ -3411,7 +3411,7 @@ def select_bid(bid_id):
             logger.warning(f"Отклик {bid_id} не найден")
             return False
 
-        order_id, order_status = result[0], result[1]
+        order_id, worker_id, order_status = result[0], result[1], result[2]
 
         # ЗАЩИТА ОТ RACE CONDITION: проверяем что заказ еще не был выбран
         if order_status not in ('open', 'waiting_master_confirmation'):
@@ -3432,13 +3432,13 @@ def select_bid(bid_id):
             WHERE order_id = ? AND id != ?
         """, (order_id, bid_id))
 
-        # Обновляем статус заказа ТОЛЬКО если он еще в open/waiting_master_confirmation
-        # Это гарантирует что только один bid может быть выбран
+        # КРИТИЧНО: Обновляем статус заказа И устанавливаем selected_worker_id
+        # Это необходимо для показа кнопок чата и завершения заказа
         cursor.execute("""
             UPDATE orders
-            SET status = 'master_selected'
+            SET status = 'master_selected', selected_worker_id = ?
             WHERE id = ? AND status IN ('open', 'waiting_master_confirmation')
-        """, (order_id,))
+        """, (worker_id, order_id))
 
         # Проверяем что UPDATE действительно произошел
         if cursor.rowcount == 0:
@@ -3447,6 +3447,7 @@ def select_bid(bid_id):
             return False
 
         conn.commit()
+        logger.info(f"✅ Заказ {order_id}: выбран мастер {worker_id}, установлен selected_worker_id")
         return True
 
 
