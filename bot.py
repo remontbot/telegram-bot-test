@@ -76,6 +76,7 @@ def main():
     db.migrate_add_profile_photo()  # Добавляем поле для фото профиля мастера
     db.migrate_add_premium_features()  # Добавляем поля для premium функций (выключены по умолчанию)
     db.migrate_add_moderation()  # Добавляем поля для модерации и банов
+    db.migrate_add_regions_to_clients()  # Добавляем поле regions в таблицу clients
     db.migrate_add_chat_system()  # Создаём таблицы для чата между клиентом и мастером
     db.migrate_add_transactions()  # Создаём таблицу для истории транзакций
     db.migrate_add_notification_settings()  # Добавляем настройки уведомлений для мастеров
@@ -115,6 +116,12 @@ def main():
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     handlers.register_master_phone,
+                )
+            ],
+            handlers.REGISTER_MASTER_REGION_SELECT: [
+                CallbackQueryHandler(
+                    handlers.register_master_region_select,
+                    pattern="^masterregion_",
                 )
             ],
             handlers.REGISTER_MASTER_CITY: [
@@ -184,6 +191,12 @@ def main():
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     handlers.register_client_phone,
+                )
+            ],
+            handlers.REGISTER_CLIENT_REGION_SELECT: [
+                CallbackQueryHandler(
+                    handlers.register_client_region_select,
+                    pattern="^clientregion_",
                 )
             ],
             handlers.REGISTER_CLIENT_CITY: [

@@ -21,6 +21,50 @@ import db
 logger = logging.getLogger(__name__)
 
 
+# ===== BELARUS REGIONS AND CITIES =====
+
+BELARUS_REGIONS = {
+    "Минск": {
+        "type": "city",  # Минск - отдельный город, не часть Минской области
+        "display": "🏛 Минск"
+    },
+    "Брестская область": {
+        "type": "region",
+        "display": "🌾 Брестская область",
+        "cities": ["Брест", "Барановичи", "Пинск", "Кобрин", "Лунинец"]
+    },
+    "Витебская область": {
+        "type": "region",
+        "display": "🌲 Витебская область",
+        "cities": ["Витебск", "Полоцк", "Новополоцк", "Орша", "Глубокое"]
+    },
+    "Гомельская область": {
+        "type": "region",
+        "display": "🏭 Гомельская область",
+        "cities": ["Гомель", "Мозырь", "Жлобин", "Светлогорск", "Речица"]
+    },
+    "Гродненская область": {
+        "type": "region",
+        "display": "🏰 Гродненская область",
+        "cities": ["Гродно", "Лида", "Слоним", "Волковыск", "Сморгонь"]
+    },
+    "Минская область": {
+        "type": "region",
+        "display": "🌳 Минская область",
+        "cities": ["Солигорск", "Борисов", "Молодечно", "Жодино", "Слуцк"]
+    },
+    "Могилёвская область": {
+        "type": "region",
+        "display": "🌾 Могилёвская область",
+        "cities": ["Могилёв", "Бобруйск", "Осиповичи", "Горки", "Кричев"]
+    },
+    "Вся Беларусь": {
+        "type": "country",
+        "display": "🇧🇾 Вся Беларусь"
+    }
+}
+
+
 # ===== HELPER FUNCTIONS =====
 
 async def safe_edit_message(query, text, **kwargs):
@@ -163,6 +207,7 @@ def _get_bids_word(count):
     SELECTING_ROLE,
     REGISTER_MASTER_NAME,
     REGISTER_MASTER_PHONE,
+    REGISTER_MASTER_REGION_SELECT,
     REGISTER_MASTER_CITY,
     REGISTER_MASTER_CITY_SELECT,
     REGISTER_MASTER_CITY_OTHER,
@@ -173,6 +218,7 @@ def _get_bids_word(count):
     REGISTER_MASTER_PHOTOS,
     REGISTER_CLIENT_NAME,
     REGISTER_CLIENT_PHONE,
+    REGISTER_CLIENT_REGION_SELECT,
     REGISTER_CLIENT_CITY,
     REGISTER_CLIENT_CITY_SELECT,
     REGISTER_CLIENT_CITY_OTHER,
@@ -181,6 +227,7 @@ def _get_bids_word(count):
     EDIT_PROFILE_MENU,
     EDIT_NAME,
     EDIT_PHONE,
+    EDIT_REGION_SELECT,
     EDIT_CITY,
     EDIT_CATEGORIES_SELECT,
     EDIT_CATEGORIES_OTHER,
@@ -189,6 +236,7 @@ def _get_bids_word(count):
     ADD_PHOTOS_MENU,
     ADD_PHOTOS_UPLOAD,
     # Состояния для создания заказа
+    CREATE_ORDER_REGION_SELECT,
     CREATE_ORDER_CITY,
     CREATE_ORDER_CATEGORIES,
     CREATE_ORDER_DESCRIPTION,
@@ -200,7 +248,7 @@ def _get_bids_word(count):
     # Состояния для оставления отзыва
     REVIEW_SELECT_RATING,
     REVIEW_ENTER_COMMENT,
-) = range(36)
+) = range(40)
 
 
 def is_valid_name(name: str) -> bool:
@@ -347,50 +395,127 @@ async def register_master_phone(update: Update, context: ContextTypes.DEFAULT_TY
             "Пожалуйста, укажите номер в формате: +375 29 123 45 67"
         )
         return REGISTER_MASTER_PHONE
-    
+
     context.user_data["phone"] = phone
-    
-    # Предлагаем выбор города из Беларуси
-    cities = [
-        "Минск", "Гомель", "Могилёв", "Витебск",
-        "Гродно", "Брест", "Бобруйск", "Барановичи",
-        "Борисов", "Пинск", "Орша", "Мозырь",
-        "Новополоцк", "Лида", "Солигорск",
-        "Вся Беларусь", "Другой город"
-    ]
-    
+
+    # Показываем регионы Беларуси
     keyboard = []
-    row = []
-    for i, city in enumerate(cities):
-        row.append(InlineKeyboardButton(city, callback_data=f"mastercity_{city}"))
-        if len(row) == 2 or i == len(cities) - 1:
-            keyboard.append(row)
-            row = []
-    
+    for region_name, region_data in BELARUS_REGIONS.items():
+        keyboard.append([InlineKeyboardButton(
+            region_data["display"],
+            callback_data=f"masterregion_{region_name}"
+        )])
+
     await update.message.reply_text(
         "🏙 <b>Где вы работаете?</b>\n\n"
-        "Можете выбрать \"Вся Беларусь\" если работаете по всей стране.",
+        "Выберите регион или город:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return REGISTER_MASTER_CITY_SELECT
+    return REGISTER_MASTER_REGION_SELECT
+
+
+async def register_master_region_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора региона мастером"""
+    query = update.callback_query
+    await query.answer()
+
+    region = query.data.replace("masterregion_", "")
+    region_data = BELARUS_REGIONS.get(region)
+
+    if not region_data:
+        await query.edit_message_text("❌ Ошибка выбора региона. Попробуйте снова.")
+        return REGISTER_MASTER_REGION_SELECT
+
+    context.user_data["region"] = region
+
+    # Если выбран Минск или "Вся Беларусь" - сохраняем и переходим к категориям
+    if region_data["type"] in ["city", "country"]:
+        context.user_data["city"] = region
+        context.user_data["regions"] = region
+
+        # Переходим к выбору категорий
+        keyboard = [
+            [
+                InlineKeyboardButton("Электрика", callback_data="cat_Электрика"),
+                InlineKeyboardButton("Сантехника", callback_data="cat_Сантехника"),
+            ],
+            [
+                InlineKeyboardButton("Отделка", callback_data="cat_Отделка"),
+                InlineKeyboardButton("Сборка мебели", callback_data="cat_Сборка мебели"),
+            ],
+            [
+                InlineKeyboardButton("Окна/двери", callback_data="cat_Окна/двери"),
+                InlineKeyboardButton("Бытовая техника", callback_data="cat_Бытовая техника"),
+            ],
+            [
+                InlineKeyboardButton("Напольные покрытия", callback_data="cat_Напольные покрытия"),
+                InlineKeyboardButton("Мелкий ремонт", callback_data="cat_Мелкий ремонт"),
+            ],
+            [
+                InlineKeyboardButton("Дизайн", callback_data="cat_Дизайн"),
+                InlineKeyboardButton("Другое", callback_data="cat_Другое"),
+            ],
+            [InlineKeyboardButton("✅ Завершить выбор", callback_data="cat_done")],
+        ]
+
+        context.user_data["categories"] = []
+
+        await query.edit_message_text(
+            f"📍 Регион: {region}\n\n"
+            "🔧 Какие виды работ вы выполняете?\n\n"
+            "Нажимайте подходящие кнопки (можно несколько).\n"
+            "Если нужного варианта нет — выберите «Другое» и впишите свои.\n"
+            "Когда закончите — нажмите «✅ Завершить выбор».",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return REGISTER_MASTER_CATEGORIES_SELECT
+
+    # Если выбрана область - показываем города
+    else:
+        cities = region_data.get("cities", [])
+        keyboard = []
+        row = []
+        for city in cities:
+            row.append(InlineKeyboardButton(city, callback_data=f"mastercity_{city}"))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:  # Добавляем оставшиеся города
+            keyboard.append(row)
+
+        # Добавляем кнопку "Другой город в области"
+        keyboard.append([InlineKeyboardButton(
+            f"📍 Другой город в области",
+            callback_data="mastercity_other"
+        )])
+
+        await query.edit_message_text(
+            f"🏙 Выберите город в регионе <b>{region}</b>:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return REGISTER_MASTER_CITY_SELECT
 
 
 async def register_master_city_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора города мастером"""
+    """Обработка выбора города мастером после выбора региона"""
     query = update.callback_query
     await query.answer()
-    
+
     city = query.data.replace("mastercity_", "")
-    
-    if city == "Другой город":
+
+    if city == "other":
+        region = context.user_data.get("region", "")
         await query.edit_message_text(
-            "🏙 Напишите где вы работаете:"
+            f"🏙 Напишите название города в регионе <b>{region}</b>:",
+            parse_mode="HTML"
         )
         return REGISTER_MASTER_CITY_OTHER
     else:
         context.user_data["city"] = city
-        context.user_data["regions"] = city
+        region = context.user_data.get("region", city)
+        context.user_data["regions"] = region
         
         # Переходим к выбору категорий
         keyboard = [
@@ -431,10 +556,11 @@ async def register_master_city_select(update: Update, context: ContextTypes.DEFA
 
 
 async def register_master_city_other(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ввод другого города мастером"""
+    """Ввод другого города мастером вручную"""
     city = update.message.text.strip()
     context.user_data["city"] = city
-    context.user_data["regions"] = city
+    region = context.user_data.get("region", city)
+    context.user_data["regions"] = region
     
     # Переходим к выбору категорий
     keyboard = [
@@ -873,57 +999,51 @@ async def register_client_phone(update: Update, context: ContextTypes.DEFAULT_TY
         return REGISTER_CLIENT_PHONE
 
     context.user_data["phone"] = phone
-    
-    # Предлагаем выбор города из Беларуси
-    cities = [
-        "Минск", "Гомель", "Могилёв", "Витебск",
-        "Гродно", "Брест", "Бобруйск", "Барановичи",
-        "Борисов", "Пинск", "Орша", "Мозырь",
-        "Новополоцк", "Лида", "Солигорск",
-        "Вся Беларусь", "Другой город"
-    ]
-    
+
+    # Показываем регионы Беларуси
     keyboard = []
-    row = []
-    for i, city in enumerate(cities):
-        row.append(InlineKeyboardButton(city, callback_data=f"clientcity_{city}"))
-        if len(row) == 2 or i == len(cities) - 1:
-            keyboard.append(row)
-            row = []
-    
+    for region_name, region_data in BELARUS_REGIONS.items():
+        keyboard.append([InlineKeyboardButton(
+            region_data["display"],
+            callback_data=f"clientregion_{region_name}"
+        )])
+
     await update.message.reply_text(
-        "🏙 <b>Выберите ваш город:</b>\n\n"
-        "Можете выбрать \"Вся Беларусь\" если работаете по всей стране.\n"
-        "Если вашего города нет - нажмите \"Другой город\"",
+        "🏙 <b>Где вы находитесь?</b>\n\n"
+        "Выберите регион или город:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return REGISTER_CLIENT_CITY_SELECT
+    return REGISTER_CLIENT_REGION_SELECT
 
 
-async def register_client_city_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора города из списка"""
+async def register_client_region_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора региона клиентом"""
     query = update.callback_query
     await query.answer()
-    
-    city = query.data.replace("clientcity_", "")
-    
-    if city == "Другой город":
-        await query.edit_message_text(
-            "🏙 Напишите название вашего города:"
-        )
-        return REGISTER_CLIENT_CITY_OTHER
-    else:
-        context.user_data["city"] = city
-        
-        # Создаём профиль
+
+    region = query.data.replace("clientregion_", "")
+    region_data = BELARUS_REGIONS.get(region)
+
+    if not region_data:
+        await query.edit_message_text("❌ Ошибка выбора региона. Попробуйте снова.")
+        return REGISTER_CLIENT_REGION_SELECT
+
+    context.user_data["region"] = region
+
+    # Если выбран Минск или "Вся Беларусь" - создаём профиль сразу
+    if region_data["type"] in ["city", "country"]:
+        context.user_data["city"] = region
+        context.user_data["regions"] = region
+
+        # Создаём профиль клиента
         telegram_id = query.from_user.id
-        
+
         logger.info(f"=== Создание профиля клиента ===")
         logger.info(f"Telegram ID: {telegram_id}")
         logger.info(f"Имя: {context.user_data.get('name')}")
         logger.info(f"Телефон: {context.user_data.get('phone')}")
-        logger.info(f"Город: {city}")
+        logger.info(f"Регион: {region}")
 
         # КРИТИЧНО: Обработка ошибок БД при создании пользователя и профиля
         user_created = False  # Флаг для отслеживания создания нового пользователя
@@ -946,6 +1066,150 @@ async def register_client_city_select(update: Update, context: ContextTypes.DEFA
                 phone=context.user_data["phone"],
                 city=context.user_data["city"],
                 description="",
+                regions=context.user_data["regions"],
+            )
+            logger.info("✅ Профиль клиента успешно создан в БД!")
+
+        except ValueError as e:
+            # Ошибки валидации (например, дубликат профиля)
+            logger.error(f"❌ Ошибка валидации при создании профиля клиента: {e}")
+
+            # КРИТИЧНО: Откатываем создание пользователя если создали его, но профиль не создался
+            if user_created and user_id:
+                try:
+                    db.delete_user_profile(telegram_id)
+                    logger.info(f"🔄 Откат: удален пользователь {telegram_id} после ошибки создания профиля")
+                except Exception as rollback_error:
+                    logger.error(f"❌ Ошибка при откате создания пользователя: {rollback_error}")
+
+            await query.edit_message_text(
+                f"❌ Не удалось создать профиль.\n\n"
+                f"Причина: {str(e)}\n\n"
+                f"Попробуйте еще раз или обратитесь в поддержку.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")
+                ]])
+            )
+            context.user_data.clear()
+            return ConversationHandler.END
+
+        except Exception as e:
+            # Любые другие ошибки БД
+            logger.error(f"❌ Ошибка БД при создании профиля клиента: {e}", exc_info=True)
+
+            # КРИТИЧНО: Откатываем создание пользователя если создали его, но профиль не создался
+            if user_created and user_id:
+                try:
+                    db.delete_user_profile(telegram_id)
+                    logger.info(f"🔄 Откат: удален пользователь {telegram_id} после ошибки создания профиля")
+                except Exception as rollback_error:
+                    logger.error(f"❌ Ошибка при откате создания пользователя: {rollback_error}")
+
+            await query.edit_message_text(
+                "❌ Произошла ошибка при сохранении профиля в базу данных.\n\n"
+                "Пожалуйста, попробуйте еще раз через минуту.\n\n"
+                "Если проблема повторяется, обратитесь в поддержку.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")
+                ]])
+            )
+            context.user_data.clear()
+            return ConversationHandler.END
+
+        keyboard = [[InlineKeyboardButton("🏠 Моё меню заказчика", callback_data="show_client_menu")]]
+        await query.edit_message_text(
+            "🥳 <b>Профиль заказчика создан!</b>\n\n"
+            "Теперь вы можете:\n"
+            "• 📝 Создавать заказы\n"
+            "• 🔍 Искать мастеров\n"
+            "• 💬 Общаться с мастерами\n\n"
+            "Детали о задаче вы опишете при создании заказа!",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+        context.user_data.clear()
+        logger.info("✅ Context очищен")
+        return ConversationHandler.END
+
+    # Если выбрана область - показываем города
+    else:
+        cities = region_data.get("cities", [])
+        keyboard = []
+        row = []
+        for city in cities:
+            row.append(InlineKeyboardButton(city, callback_data=f"clientcity_{city}"))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:  # Добавляем оставшиеся города
+            keyboard.append(row)
+
+        # Добавляем кнопку "Другой город в области"
+        keyboard.append([InlineKeyboardButton(
+            f"📍 Другой город в области",
+            callback_data="clientcity_other"
+        )])
+
+        await query.edit_message_text(
+            f"🏙 Выберите город в регионе <b>{region}</b>:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return REGISTER_CLIENT_CITY_SELECT
+
+
+async def register_client_city_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора города клиентом после выбора региона"""
+    query = update.callback_query
+    await query.answer()
+
+    city = query.data.replace("clientcity_", "")
+
+    if city == "other":
+        region = context.user_data.get("region", "")
+        await query.edit_message_text(
+            f"🏙 Напишите название города в регионе <b>{region}</b>:",
+            parse_mode="HTML"
+        )
+        return REGISTER_CLIENT_CITY_OTHER
+    else:
+        context.user_data["city"] = city
+        region = context.user_data.get("region", city)
+        context.user_data["regions"] = region
+
+        # Создаём профиль
+        telegram_id = query.from_user.id
+
+        logger.info(f"=== Создание профиля клиента ===")
+        logger.info(f"Telegram ID: {telegram_id}")
+        logger.info(f"Имя: {context.user_data.get('name')}")
+        logger.info(f"Телефон: {context.user_data.get('phone')}")
+        logger.info(f"Город: {city}")
+        logger.info(f"Регион: {region}")
+
+        # КРИТИЧНО: Обработка ошибок БД при создании пользователя и профиля
+        user_created = False  # Флаг для отслеживания создания нового пользователя
+        user_id = None
+
+        try:
+            # Проверяем есть ли уже user (если добавляет вторую роль)
+            existing_user = db.get_user(telegram_id)
+            if existing_user:
+                user_id = existing_user["id"]
+                logger.info(f"Существующий user_id: {user_id}")
+            else:
+                user_id = db.create_user(telegram_id, "client")
+                user_created = True  # КРИТИЧНО: Отмечаем что создали нового пользователя
+                logger.info(f"Создан новый user_id: {user_id}")
+
+            db.create_client_profile(
+                user_id=user_id,
+                name=context.user_data["name"],
+                phone=context.user_data["phone"],
+                city=context.user_data["city"],
+                description="",
+                regions=context.user_data["regions"],
             )
             logger.info("✅ Профиль клиента успешно создан в БД!")
 
@@ -1013,9 +1277,11 @@ async def register_client_city_select(update: Update, context: ContextTypes.DEFA
 
 
 async def register_client_city_other(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ввод другого города вручную"""
+    """Ввод другого города клиентом вручную"""
     city = update.message.text.strip()
     context.user_data["city"] = city
+    region = context.user_data.get("region", city)
+    context.user_data["regions"] = region
 
     # Создаём профиль
     telegram_id = update.effective_user.id
@@ -1039,6 +1305,7 @@ async def register_client_city_other(update: Update, context: ContextTypes.DEFAU
             phone=context.user_data["phone"],
             city=context.user_data["city"],
             description="",
+            regions=context.user_data["regions"],
         )
 
     except ValueError as e:

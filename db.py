@@ -720,9 +720,10 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
         logger.info(f"📋 Добавлены категории для мастера {worker_id}: {categories_list}")
 
 
-def create_client_profile(user_id, name, phone, city, description):
+def create_client_profile(user_id, name, phone, city, description, regions=None):
     """
     ИСПРАВЛЕНО: Проверка существования профиля для предотвращения race condition.
+    Добавлен параметр regions для хранения региона клиента.
     """
     # КРИТИЧНО: Проверяем что профиль еще не существует (race condition защита)
     existing_profile = get_client_profile(user_id)
@@ -736,15 +737,19 @@ def create_client_profile(user_id, name, phone, city, description):
     city = validate_string_length(city, MAX_CITY_LENGTH, "city")
     description = validate_string_length(description, MAX_DESCRIPTION_LENGTH, "description")
 
+    # Валидация regions если указан
+    if regions:
+        regions = validate_string_length(regions, MAX_CITY_LENGTH, "regions")
+
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
         cursor.execute("""
-            INSERT INTO clients (user_id, name, phone, city, description)
-            VALUES (?, ?, ?, ?, ?)
-        """, (user_id, name, phone, city, description))
+            INSERT INTO clients (user_id, name, phone, city, description, regions)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (user_id, name, phone, city, description, regions))
         client_id = cursor.lastrowid
         conn.commit()
-        logger.info(f"✅ Создан профиль клиента: ID={client_id}, User={user_id}, Имя={name}, Город={city}")
+        logger.info(f"✅ Создан профиль клиента: ID={client_id}, User={user_id}, Имя={name}, Город={city}, Регион={regions}")
 
 
 def get_worker_profile(user_id):
@@ -2381,6 +2386,43 @@ def migrate_add_moderation():
 
         except Exception as e:
             print(f"⚠️  Ошибка при добавлении модерационных полей: {e}")
+            import traceback
+            traceback.print_exc()
+
+
+def migrate_add_regions_to_clients():
+    """
+    Добавляет поле regions в таблицу clients для хранения региона клиента.
+    Аналогично полю regions в таблице workers.
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            if USE_POSTGRES:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'clients' AND column_name = 'regions'
+                        ) THEN
+                            ALTER TABLE clients ADD COLUMN regions TEXT;
+                        END IF;
+                    END $$;
+                """)
+            else:
+                cursor.execute("PRAGMA table_info(clients)")
+                columns = [column[1] for column in cursor.fetchall()]
+
+                if 'regions' not in columns:
+                    cursor.execute("ALTER TABLE clients ADD COLUMN regions TEXT")
+
+            conn.commit()
+            print("✅ Regions field migration for clients completed successfully!")
+
+        except Exception as e:
+            print(f"⚠️  Ошибка при добавлении поля regions в clients: {e}")
             import traceback
             traceback.print_exc()
 
