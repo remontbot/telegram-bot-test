@@ -1328,6 +1328,13 @@ async def worker_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         callback_data=f"open_chat_{chat_dict['id']}"
                     )])
 
+                # КРИТИЧНО: Мастер тоже может завершить заказ независимо!
+                # Защита от недобросовестных клиентов, которые не завершают заказ
+                keyboard.append([InlineKeyboardButton(
+                    f"✅ Завершить заказ #{order['order_id']}",
+                    callback_data=f"complete_order_{order['order_id']}"
+                )])
+
             if len(active_orders) > 10:
                 text += f"... и ещё {len(active_orders) - 10} заказов\n\n"
 
@@ -2876,7 +2883,8 @@ async def cancel_order_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    НОВОЕ: Обработчик завершения заказа клиентом с оценкой мастера.
+    ОБНОВЛЕНО: Обработчик завершения заказа с оценкой - работает для ОБЕИХ сторон.
+    Клиент оценивает мастера, мастер оценивает клиента.
     """
     query = update.callback_query
     await query.answer()
@@ -2893,14 +2901,6 @@ async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_T
 
         user_dict = dict(user)
 
-        # Получаем профиль клиента
-        client_profile = db.get_client_profile(user_dict["id"])
-        if not client_profile:
-            await query.edit_message_text("❌ Профиль клиента не найден.")
-            return
-
-        client_dict = dict(client_profile)
-
         # Получаем заказ
         order = db.get_order_by_id(order_id)
         if not order:
@@ -2909,21 +2909,13 @@ async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_T
 
         order_dict = dict(order)
 
-        # Проверяем, что заказ принадлежит клиенту
-        if order_dict['client_id'] != client_dict['id']:
-            await safe_edit_message(query, "❌ Это не ваш заказ.")
-            return
-
         # Проверяем статус заказа - нельзя завершить уже завершённый или отменённый
         if order_dict['status'] in ('done', 'completed', 'cancelled'):
             await safe_edit_message(
                 query,
                 f"❌ Этот заказ уже завершён или отменён.\n\n"
                 f"Статус: {order_dict['status']}",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")
-                ]])
+                parse_mode="HTML"
             )
             return
 
@@ -2933,55 +2925,81 @@ async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_T
             await safe_edit_message(
                 query,
                 "❌ Для завершения заказа необходимо сначала выбрать мастера.",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")
-                ]])
+                parse_mode="HTML"
             )
             return
 
-        # Получаем информацию о мастере
-        worker_profile = db.get_worker_profile_by_id(selected_worker_id)
-        if not worker_profile:
-            await safe_edit_message(query, "❌ Информация о мастере не найдена.")
+        # КРИТИЧНО: Определяем, кто вызывает - клиент или мастер
+        client_profile = db.get_client_profile(user_dict["id"])
+        worker_profile_caller = db.get_worker_profile(user_dict["id"])
+
+        is_client = client_profile and order_dict['client_id'] == dict(client_profile)['id']
+        is_worker = worker_profile_caller and dict(worker_profile_caller)['id'] == selected_worker_id
+
+        if not is_client and not is_worker:
+            await safe_edit_message(query, "❌ Вы не являетесь участником этого заказа.")
             return
 
-        worker_dict = dict(worker_profile)
-
-        # Проверяем, не оставлен ли уже отзыв
+        # Проверяем, не оставлен ли уже отзыв этим пользователем
         existing_review = db.check_review_exists(order_id, user_dict['id'])
         if existing_review:
             await safe_edit_message(
                 query,
                 "✅ Вы уже завершили этот заказ и оставили отзыв.",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")
-                ]])
+                parse_mode="HTML"
             )
             return
+
+        # Получаем информацию о противоположной стороне
+        if is_client:
+            # Клиент оценивает мастера
+            target_profile = db.get_worker_profile_by_id(selected_worker_id)
+            if not target_profile:
+                await safe_edit_message(query, "❌ Информация о мастере не найдена.")
+                return
+            target_dict = dict(target_profile)
+            target_name = target_dict.get('name', 'Без имени')
+            target_role = "Мастер"
+            cancel_callback = "client_my_orders"
+        else:
+            # Мастер оценивает клиента
+            client_data = db.get_client_by_id(order_dict['client_id'])
+            if not client_data:
+                await safe_edit_message(query, "❌ Информация о клиенте не найдена.")
+                return
+            client_dict = dict(client_data)
+            client_user = db.get_user_by_id(client_dict['user_id'])
+            if not client_user:
+                await safe_edit_message(query, "❌ Информация о клиенте не найдена.")
+                return
+            client_user_dict = dict(client_user)
+            target_name = client_user_dict.get('first_name', 'Клиент')
+            target_role = "Клиент"
+            cancel_callback = "worker_my_orders"
 
         # Показываем форму оценки
         text = (
             f"✅ <b>Завершение заказа #{order_id}</b>\n\n"
-            f"👤 <b>Мастер:</b> {worker_dict.get('name', 'Без имени')}\n"
-            f"🔧 <b>Специализация:</b> {worker_dict.get('category', 'Не указана')}\n\n"
-            f"📊 <b>Оцените работу мастера:</b>\n"
-            f"Ваша оценка поможет другим клиентам сделать правильный выбор."
+            f"👤 <b>{target_role}:</b> {target_name}\n\n"
+            f"📊 <b>Оцените {'работу мастера' if is_client else 'клиента'}:</b>\n"
+            f"Ваша оценка поможет {'другим клиентам' if is_client else 'другим мастерам'} сделать правильный выбор."
         )
 
         # Кнопки с оценками от 1 до 5 звезд
+        # Формат callback: rate_order_{order_id}_{rating}_{role}
+        # role: 'client' если оценивает клиент, 'worker' если оценивает мастер
+        role_suffix = 'client' if is_client else 'worker'
         keyboard = [
             [
-                InlineKeyboardButton("⭐", callback_data=f"rate_order_{order_id}_1"),
-                InlineKeyboardButton("⭐⭐", callback_data=f"rate_order_{order_id}_2"),
-                InlineKeyboardButton("⭐⭐⭐", callback_data=f"rate_order_{order_id}_3"),
+                InlineKeyboardButton("⭐", callback_data=f"rate_order_{order_id}_1_{role_suffix}"),
+                InlineKeyboardButton("⭐⭐", callback_data=f"rate_order_{order_id}_2_{role_suffix}"),
+                InlineKeyboardButton("⭐⭐⭐", callback_data=f"rate_order_{order_id}_3_{role_suffix}"),
             ],
             [
-                InlineKeyboardButton("⭐⭐⭐⭐", callback_data=f"rate_order_{order_id}_4"),
-                InlineKeyboardButton("⭐⭐⭐⭐⭐", callback_data=f"rate_order_{order_id}_5"),
+                InlineKeyboardButton("⭐⭐⭐⭐", callback_data=f"rate_order_{order_id}_4_{role_suffix}"),
+                InlineKeyboardButton("⭐⭐⭐⭐⭐", callback_data=f"rate_order_{order_id}_5_{role_suffix}"),
             ],
-            [InlineKeyboardButton("❌ Отмена", callback_data="client_my_orders")]
+            [InlineKeyboardButton("❌ Отмена", callback_data=cancel_callback)]
         ]
 
         await safe_edit_message(
@@ -2991,33 +3009,34 @@ async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_T
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-        logger.info(f"Клиент {user_dict['id']} открыл форму завершения заказа {order_id}")
+        logger.info(f"{'Клиент' if is_client else 'Мастер'} {user_dict['id']} открыл форму завершения заказа {order_id}")
 
     except Exception as e:
         logger.error(f"Ошибка при открытии формы завершения заказа: {e}", exc_info=True)
         await query.edit_message_text(
             f"❌ Произошла ошибка:\n{str(e)}",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("⬅️ Назад", callback_data="client_my_orders")
-            ]])
+            parse_mode="HTML"
         )
 
 
 async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    НОВОЕ: Обработчик сохранения оценки заказа.
-    Callback data format: rate_order_{order_id}_{rating}
+    ОБНОВЛЕНО: Обработчик сохранения оценки заказа - работает для ОБЕИХ сторон.
+    Callback data format: rate_order_{order_id}_{rating}_{role}
+    role: 'client' (клиент оценивает мастера) или 'worker' (мастер оценивает клиента)
     """
     query = update.callback_query
     await query.answer()
 
     try:
-        # Извлекаем order_id и rating из callback_data
-        # Формат: rate_order_{order_id}_{rating}
+        # Извлекаем order_id, rating и role из callback_data
+        # Формат: rate_order_{order_id}_{rating}_{role}
         data_parts = query.data.replace("rate_order_", "").split("_")
         order_id = int(data_parts[0])
         rating = int(data_parts[1])
+        role = data_parts[2] if len(data_parts) > 2 else 'client'  # По умолчанию клиент (обратная совместимость)
+
+        is_client = (role == 'client')
 
         # Получаем пользователя
         user = db.get_user(query.from_user.id)
@@ -3048,20 +3067,53 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
         worker_dict = dict(worker_profile)
-
-        # Получаем user_id мастера
         worker_user_id = worker_dict['user_id']
 
-        # Сохраняем отзыв (пока без комментария)
-        review_saved = db.add_review(
-            from_user_id=user_dict['id'],
-            to_user_id=worker_user_id,
-            order_id=order_id,
-            role_from='client',
-            role_to='worker',
-            rating=rating,
-            comment=None  # Пока без комментария, добавим позже
-        )
+        # Получаем информацию о клиенте
+        client_data = db.get_client_by_id(order_dict['client_id'])
+        if not client_data:
+            await safe_edit_message(query, "❌ Информация о клиенте не найдена.")
+            return
+        client_dict = dict(client_data)
+        client_user_id = client_dict['user_id']
+
+        # Сохраняем отзыв в зависимости от того, кто оценивает
+        if is_client:
+            # Клиент оценивает мастера
+            review_saved = db.add_review(
+                from_user_id=user_dict['id'],
+                to_user_id=worker_user_id,
+                order_id=order_id,
+                role_from='client',
+                role_to='worker',
+                rating=rating,
+                comment=None
+            )
+            target_name = worker_dict.get('name', 'Без имени')
+            target_role = "мастера"
+            return_callback = "client_my_orders"
+            return_menu_callback = "show_client_menu"
+            notify_user_id = worker_user_id
+            notify_text_prefix = "Клиент завершил заказ и оставил вам оценку"
+        else:
+            # Мастер оценивает клиента
+            review_saved = db.add_review(
+                from_user_id=user_dict['id'],
+                to_user_id=client_user_id,
+                order_id=order_id,
+                role_from='worker',
+                role_to='client',
+                rating=rating,
+                comment=None
+            )
+            client_user = db.get_user_by_id(client_user_id)
+            client_user_dict = dict(client_user) if client_user else {}
+            target_name = client_user_dict.get('first_name', 'Клиент')
+            target_role = "клиента"
+            return_callback = "worker_my_orders"
+            return_menu_callback = "show_worker_menu"
+            notify_user_id = client_user_id
+            notify_text_prefix = "Мастер завершил заказ и оставил вам оценку"
 
         if not review_saved:
             await safe_edit_message(
@@ -3069,59 +3121,67 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "❌ Не удалось сохранить отзыв. Возможно, вы уже оценили этот заказ.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")
+                    InlineKeyboardButton("⬅️ Назад к заказам", callback_data=return_callback)
                 ]])
             )
             return
 
-        # Обновляем статус заказа на "done"
-        db.update_order_status(order_id, 'done')
+        # Обновляем статус заказа на "done" (только если ещё не done)
+        if order_dict['status'] != 'done':
+            db.update_order_status(order_id, 'done')
 
-        # Уведомляем мастера о завершении и оценке
+        # Уведомляем противоположную сторону
         try:
-            worker_user = db.get_user_by_id(worker_user_id)
-            if worker_user:
-                worker_user_dict = dict(worker_user)
+            notify_user = db.get_user_by_id(notify_user_id)
+            if notify_user:
+                notify_user_dict = dict(notify_user)
                 stars = "⭐" * rating
 
-                # НОВОЕ: Кнопка для загрузки фото работы
-                keyboard = [
-                    [InlineKeyboardButton("📸 Загрузить фото работы", callback_data=f"upload_work_photo_{order_id}")],
-                    [InlineKeyboardButton("➡️ Пропустить", callback_data=f"skip_work_photo_{order_id}")]
-                ]
-
-                await context.bot.send_message(
-                    chat_id=worker_user_dict['telegram_id'],
-                    text=(
-                        f"✅ <b>Заказ #{order_id} завершен!</b>\n\n"
-                        f"Клиент завершил заказ и оставил вам оценку:\n"
-                        f"{stars} ({rating}/5)\n\n"
-                        f"🎉 Поздравляем с успешно выполненной работой!\n\n"
-                        f"📸 <b>Загрузите фото выполненной работы:</b>\n"
+                # Если клиент оценил мастера - предлагаем загрузить фото
+                if is_client:
+                    keyboard = [
+                        [InlineKeyboardButton("📸 Загрузить фото работы", callback_data=f"upload_work_photo_{order_id}")],
+                        [InlineKeyboardButton("➡️ Пропустить", callback_data=f"skip_work_photo_{order_id}")]
+                    ]
+                    extra_text = (
+                        f"\n\n📸 <b>Загрузите фото выполненной работы:</b>\n"
                         f"• Это повысит доверие будущих клиентов\n"
                         f"• Фото будут видны в вашем профиле\n"
                         f"• Клиент сможет подтвердить подлинность фото\n"
                         f"• Подтверждённые фото получат специальный значок ✅"
+                    )
+                else:
+                    keyboard = None
+                    extra_text = "\n\nСпасибо за ваш заказ!"
+
+                await context.bot.send_message(
+                    chat_id=notify_user_dict['telegram_id'],
+                    text=(
+                        f"✅ <b>Заказ #{order_id} завершен!</b>\n\n"
+                        f"{notify_text_prefix}:\n"
+                        f"{stars} ({rating}/5)\n\n"
+                        f"🎉 Поздравляем с успешным {'выполнением работы' if is_client else 'заказом'}!"
+                        f"{extra_text}"
                     ),
                     parse_mode="HTML",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
+                    reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None
                 )
         except Exception as e:
-            logger.warning(f"Не удалось отправить уведомление мастеру {worker_user_id}: {e}")
+            logger.warning(f"Не удалось отправить уведомление пользователю {notify_user_id}: {e}")
 
-        # Показываем клиенту сообщение об успехе
+        # Показываем сообщение об успехе
         stars = "⭐" * rating
         text = (
             f"✅ <b>Заказ завершен!</b>\n\n"
             f"Спасибо за вашу оценку: {stars} ({rating}/5)\n\n"
-            f"👤 <b>Мастер:</b> {worker_dict.get('name', 'Без имени')}\n\n"
+            f"👤 <b>{target_role.capitalize()}:</b> {target_name}\n\n"
             f"💬 Хотите оставить комментарий к отзыву?"
         )
 
         keyboard = [
             [InlineKeyboardButton("💬 Оставить комментарий", callback_data=f"add_comment_{order_id}")],
-            [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
-            [InlineKeyboardButton("🏠 Главное меню", callback_data="show_client_menu")]
+            [InlineKeyboardButton("📂 Мои заказы", callback_data=return_callback)],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data=return_menu_callback)]
         ]
 
         await safe_edit_message(
@@ -3131,17 +3191,14 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-        logger.info(f"Клиент {user_dict['id']} завершил заказ {order_id} с оценкой {rating}")
+        logger.info(f"{'Клиент' if is_client else 'Мастер'} {user_dict['id']} завершил заказ {order_id} с оценкой {rating}")
 
     except Exception as e:
         logger.error(f"Ошибка при сохранении оценки заказа: {e}", exc_info=True)
         await safe_edit_message(
             query,
             f"❌ Произошла ошибка при сохранении оценки:\n{str(e)}",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("⬅️ Назад", callback_data="client_my_orders")
-            ]])
+            parse_mode="HTML"
         )
 
 
