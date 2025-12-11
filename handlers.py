@@ -4022,7 +4022,8 @@ async def open_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("⬅️ Назад", callback_data="show_client_menu" if is_client else "show_worker_menu")],
         ]
 
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -4030,7 +4031,7 @@ async def open_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"Ошибка в open_chat: {e}", exc_info=True)
-        await query.edit_message_text(f"❌ Ошибка при открытии чата:\n{str(e)}")
+        await safe_edit_message(query, f"❌ Ошибка при открытии чата:\n{str(e)}")
 
 
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
