@@ -321,7 +321,7 @@ def _get_bids_word(count):
     # Состояния для оставления отзыва
     REVIEW_SELECT_RATING,
     REVIEW_ENTER_COMMENT,
-) = range(47)
+) = range(46)
 
 
 def is_valid_name(name: str) -> bool:
