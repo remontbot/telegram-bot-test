@@ -5747,96 +5747,123 @@ async def create_order_city_select(update: Update, context: ContextTypes.DEFAULT
         return CREATE_ORDER_CITY
     else:
         context.user_data["order_city"] = city
-        
-        # Переходим к выбору категорий
+
+        # Переходим к выбору типа работ
         keyboard = [
-            [
-                InlineKeyboardButton("Электрика", callback_data="ordercat_Электрика"),
-                InlineKeyboardButton("Сантехника", callback_data="ordercat_Сантехника"),
-            ],
-            [
-                InlineKeyboardButton("Отделка", callback_data="ordercat_Отделка"),
-                InlineKeyboardButton("Сборка мебели", callback_data="ordercat_Сборка мебели"),
-            ],
-            [
-                InlineKeyboardButton("Окна/двери", callback_data="ordercat_Окна/двери"),
-                InlineKeyboardButton("Бытовая техника", callback_data="ordercat_Бытовая техника"),
-            ],
-            [
-                InlineKeyboardButton("Напольные покрытия", callback_data="ordercat_Напольные покрытия"),
-                InlineKeyboardButton("Мелкий ремонт", callback_data="ordercat_Мелкий ремонт"),
-            ],
-            [
-                InlineKeyboardButton("Дизайн", callback_data="ordercat_Дизайн"),
-            ],
-            [InlineKeyboardButton("✅ Завершить выбор", callback_data="ordercat_done")],
+            [InlineKeyboardButton(
+                f"{WORK_CATEGORIES['Наружные работы']['emoji']} Наружные работы",
+                callback_data="order_worktype_Наружные работы"
+            )],
+            [InlineKeyboardButton(
+                f"{WORK_CATEGORIES['Внутренние работы']['emoji']} Внутренние работы",
+                callback_data="order_worktype_Внутренние работы"
+            )],
         ]
-        
-        context.user_data["order_categories"] = []
-        
+
         await query.edit_message_text(
-            f"Город: <b>{city}</b>\n\n"
-            "🔧 <b>Шаг 2:</b> Какие работы нужны?\n\n"
-            "Выберите 1-3 категории.\n"
-            "💡 <i>Выбирайте категории как можно точнее - так мастера быстрее увидят ваш заказ!</i>\n\n"
-            "Нажмите «✅ Завершить выбор» когда готово.",
+            f"🏙 Город: <b>{city}</b>\n\n"
+            "🔧 <b>Шаг 2:</b> Выберите тип работ:",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
-        return CREATE_ORDER_CATEGORIES
+        return CREATE_ORDER_WORK_TYPE
 
 
-async def create_order_categories_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора категорий для заказа"""
+async def create_order_work_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора типа работ для заказа"""
     query = update.callback_query
     await query.answer()
-    
-    data = query.data
-    selected = data.replace("ordercat_", "")
-    
-    if selected == "done":
-        if not context.user_data.get("order_categories"):
-            await query.answer("Выберите хотя бы одну категорию!", show_alert=True)
-            return CREATE_ORDER_CATEGORIES
-        
-        # Переходим к описанию
-        categories_text = ", ".join(context.user_data["order_categories"])
-        
-        await query.edit_message_text(
-            f"Город: <b>{context.user_data['order_city']}</b>\n"
-            f"Категории: <b>{categories_text}</b>\n\n"
-            "📝 <b>Шаг 3:</b> Опишите что нужно сделать\n\n"
-            "💡 <b>Важно!</b> Мастера будут предлагать свою цену за услуги, поэтому укажите:\n"
-            "✓ Объём работ (сколько розеток, метраж, количество)\n"
-            "✓ Размеры и особенности (толщина стен, высота потолков)\n"
-            "✓ Материалы (есть свои или нужна закупка)\n"
-            "✓ Состояние объекта (старая проводка, новострой и т.д.)\n\n"
-            "Пример:\n"
-            "• Заменить 5 розеток в бетонных стенах (материалы куплены)\n"
-            "• Установить смеситель Grohe на кухне (есть в наличии)\n"
-            "• Повесить люстру весом 8кг, высота потолка 3м\n\n"
-            "Чем точнее описание - тем точнее цена и меньше недопониманий!",
-            parse_mode="HTML"
-        )
-        return CREATE_ORDER_DESCRIPTION
-    
-    else:
-        # Добавляем/убираем категорию
-        if "order_categories" not in context.user_data:
-            context.user_data["order_categories"] = []
-        
-        if selected not in context.user_data["order_categories"]:
-            if len(context.user_data["order_categories"]) >= 3:
-                await query.answer("Максимум 3 категории!", show_alert=True)
-                return CREATE_ORDER_CATEGORIES
-            
-            context.user_data["order_categories"].append(selected)
-            await query.answer(f"✅ Добавлено: {selected}")
-        else:
-            context.user_data["order_categories"].remove(selected)
-            await query.answer(f"❌ Убрано: {selected}")
-        
-        return CREATE_ORDER_CATEGORIES
+
+    work_type = query.data.replace("order_worktype_", "")
+    context.user_data["order_work_type"] = work_type
+
+    # Получаем типы зданий для выбранного типа работ
+    building_types = WORK_CATEGORIES[work_type]["types"]
+
+    keyboard = []
+    for building_type, building_data in building_types.items():
+        keyboard.append([InlineKeyboardButton(
+            f"{building_data['emoji']} {building_type}",
+            callback_data=f"order_buildingtype_{building_type}"
+        )])
+
+    city = context.user_data.get("order_city", "")
+    await query.edit_message_text(
+        f"🏙 Город: {city}\n"
+        f"{WORK_CATEGORIES[work_type]['emoji']} Тип работ: {work_type}\n\n"
+        "🏢 <b>Выберите тип объекта:</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return CREATE_ORDER_BUILDING_TYPE
+
+
+async def create_order_building_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора типа здания для заказа"""
+    query = update.callback_query
+    await query.answer()
+
+    building_type = query.data.replace("order_buildingtype_", "")
+    context.user_data["order_building_type"] = building_type
+
+    # Получаем категории для выбранных типа работ и здания
+    work_type = context.user_data.get("order_work_type", "")
+    categories = WORK_CATEGORIES[work_type]["types"][building_type]["categories"]
+
+    # Создаем кнопки категорий (2 в ряд)
+    keyboard = []
+    row = []
+    for category in categories:
+        row.append(InlineKeyboardButton(category, callback_data=f"order_category_{category}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    city = context.user_data.get("order_city", "")
+    building_emoji = WORK_CATEGORIES[work_type]["types"][building_type]["emoji"]
+
+    await query.edit_message_text(
+        f"🏙 Город: {city}\n"
+        f"{WORK_CATEGORIES[work_type]['emoji']} {work_type}\n"
+        f"{building_emoji} {building_type}\n\n"
+        "🔧 <b>Выберите категорию работ:</b>\n\n"
+        "Выберите одну категорию, которая наиболее точно описывает ваш заказ.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return CREATE_ORDER_CATEGORIES_SELECT
+
+
+async def create_order_category_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора категории для заказа (одна категория)"""
+    query = update.callback_query
+    await query.answer()
+
+    category = query.data.replace("order_category_", "")
+    context.user_data["order_category"] = category
+
+    # Переходим к описанию
+    await query.edit_message_text(
+        f"Город: <b>{context.user_data['order_city']}</b>\n"
+        f"Категория: <b>{category}</b>\n\n"
+        "📝 <b>Шаг 3:</b> Опишите что нужно сделать\n\n"
+        "💡 <b>Важно!</b> Мастера будут предлагать свою цену за услуги, поэтому укажите:\n"
+        "✓ Объём работ (сколько розеток, метраж, количество)\n"
+        "✓ Размеры и особенности (толщина стен, высота потолков)\n"
+        "✓ Материалы (есть свои или нужна закупка)\n"
+        "✓ Состояние объекта (старая проводка, новострой и т.д.)\n\n"
+        "Пример:\n"
+        "• Заменить 5 розеток в бетонных стенах (материалы куплены)\n"
+        "• Установить смеситель Grohe на кухне (есть в наличии)\n"
+        "• Повесить люстру весом 8кг, высота потолка 3м\n\n"
+        "Чем точнее описание - тем точнее цена и меньше недопониманий!",
+        parse_mode="HTML"
+    )
+    return CREATE_ORDER_DESCRIPTION
+
+
 
 
 async def create_order_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5933,7 +5960,7 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
         message = update.message
 
     # КРИТИЧНО: Проверяем наличие всех обязательных полей
-    required_fields = ["order_client_id", "order_city", "order_categories", "order_description"]
+    required_fields = ["order_client_id", "order_city", "order_category", "order_description"]
     ok, missing = validate_required_fields(context, required_fields)
 
     if not ok:
@@ -5951,7 +5978,7 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.info("=== Публикация заказа ===")
         logger.info(f"client_id: {context.user_data.get('order_client_id')}")
         logger.info(f"city: {context.user_data.get('order_city')}")
-        logger.info(f"categories: {context.user_data.get('order_categories')}")
+        logger.info(f"category: {context.user_data.get('order_category')}")
         logger.info(f"description: {context.user_data.get('order_description')}")
         logger.info(f"photos: {len(context.user_data.get('order_photos', []))}")
 
@@ -5967,7 +5994,7 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
             order_id = db.create_order(
                 client_id=context.user_data["order_client_id"],
                 city=context.user_data["order_city"],
-                categories=context.user_data["order_categories"],
+                categories=context.user_data["order_category"],
                 description=context.user_data["order_description"],
                 photos=valid_order_photos
             )
@@ -5988,32 +6015,26 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
         if order:
             order_dict = dict(order)
 
-            # Находим всех мастеров в нужных категориях И городе и отправляем уведомления
-            notified_workers = set()  # Чтобы не уведомлять одного мастера несколько раз
+            # Находим всех мастеров в нужной категории И городе и отправляем уведомления
             order_city = context.user_data['order_city']
+            category = context.user_data["order_category"]
 
-            for category in context.user_data["order_categories"]:
-                # ВАЖНО: фильтруем мастеров по городу И категории
-                workers = db.get_all_workers(city=order_city, category=category)
-                for worker in workers:
-                    worker_dict = dict(worker)
-                    worker_id = worker_dict['id']
+            # ВАЖНО: фильтруем мастеров по городу И категории
+            workers = db.get_all_workers(city=order_city, category=category)
+            for worker in workers:
+                worker_dict = dict(worker)
 
-                    if worker_id in notified_workers:
-                        continue
+                worker_user = db.get_user_by_id(worker_dict['user_id'])
+                if worker_user:
+                    # Проверяем включены ли уведомления у мастера
+                    if db.are_notifications_enabled(worker_dict['user_id']):
+                        await notify_worker_new_order(
+                            context,
+                            worker_user['telegram_id'],
+                            order_dict
+                        )
 
-                    worker_user = db.get_user_by_id(worker_dict['user_id'])
-                    if worker_user:
-                        # Проверяем включены ли уведомления у мастера
-                        if db.are_notifications_enabled(worker_dict['user_id']):
-                            await notify_worker_new_order(
-                                context,
-                                worker_user['telegram_id'],
-                                order_dict
-                            )
-                            notified_workers.add(worker_id)
-
-        categories_text = ", ".join(context.user_data["order_categories"])
+        categories_text = context.user_data["order_category"]
         photos_count = len(context.user_data.get("order_photos", []))
 
         keyboard = [

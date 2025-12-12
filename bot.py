@@ -255,8 +255,14 @@ def main():
                 CallbackQueryHandler(handlers.create_order_city_select, pattern="^ordercity_"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.create_order_city_select),
             ],
-            handlers.CREATE_ORDER_CATEGORIES: [
-                CallbackQueryHandler(handlers.create_order_categories_select, pattern="^ordercat_"),
+            handlers.CREATE_ORDER_WORK_TYPE: [
+                CallbackQueryHandler(handlers.create_order_work_type, pattern="^order_worktype_"),
+            ],
+            handlers.CREATE_ORDER_BUILDING_TYPE: [
+                CallbackQueryHandler(handlers.create_order_building_type, pattern="^order_buildingtype_"),
+            ],
+            handlers.CREATE_ORDER_CATEGORIES_SELECT: [
+                CallbackQueryHandler(handlers.create_order_category_select, pattern="^order_category_"),
             ],
             handlers.CREATE_ORDER_DESCRIPTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.create_order_description),
