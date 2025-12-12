@@ -65,6 +65,73 @@ BELARUS_REGIONS = {
 }
 
 
+# ===== WORK CATEGORIES HIERARCHY =====
+
+WORK_CATEGORIES = {
+    "Наружные работы": {
+        "emoji": "🏗",
+        "types": {
+            "Балкон/лоджия": {
+                "emoji": "🏢",
+                "categories": [
+                    "Остекление балконов",
+                    "Утепление балконов",
+                    "Отделка балконов",
+                    "Расширение балконов"
+                ]
+            },
+            "Частный дом": {
+                "emoji": "🏡",
+                "categories": [
+                    "Кровельные работы",
+                    "Фасадные работы",
+                    "Земляные работы",
+                    "Ландшафтные работы",
+                    "Заборы и ворота",
+                    "Тротуарная плитка",
+                    "Наружные коммуникации",
+                    "Бассейны и пруды"
+                ]
+            }
+        }
+    },
+    "Внутренние работы": {
+        "emoji": "🏠",
+        "types": {
+            "Квартира": {
+                "emoji": "🏢",
+                "categories": [
+                    "Электрика",
+                    "Сантехника",
+                    "Отделка стен и потолков",
+                    "Напольные покрытия",
+                    "Окна и двери",
+                    "Встроенная мебель",
+                    "Бытовая техника",
+                    "Дизайн интерьера",
+                    "Мелкий ремонт"
+                ]
+            },
+            "Частный дом": {
+                "emoji": "🏡",
+                "categories": [
+                    "Электрика",
+                    "Сантехника и отопление",
+                    "Отделка стен и потолков",
+                    "Напольные покрытия",
+                    "Окна и двери",
+                    "Лестницы",
+                    "Камины и печи",
+                    "Вентиляция",
+                    "Встроенная мебель",
+                    "Дизайн интерьера"
+                ]
+            }
+        }
+    }
+}
+
+
 # ===== HELPER FUNCTIONS =====
 
 async def safe_edit_message(query, text, **kwargs):
@@ -211,6 +278,8 @@ def _get_bids_word(count):
     REGISTER_MASTER_CITY,
     REGISTER_MASTER_CITY_SELECT,
     REGISTER_MASTER_CITY_OTHER,
+    REGISTER_MASTER_WORK_TYPE,
+    REGISTER_MASTER_BUILDING_TYPE,
     REGISTER_MASTER_CATEGORIES_SELECT,
     REGISTER_MASTER_CATEGORIES_OTHER,
     REGISTER_MASTER_EXPERIENCE,
@@ -229,6 +298,8 @@ def _get_bids_word(count):
     EDIT_PHONE,
     EDIT_REGION_SELECT,
     EDIT_CITY,
+    EDIT_WORK_TYPE,
+    EDIT_BUILDING_TYPE,
     EDIT_CATEGORIES_SELECT,
     EDIT_CATEGORIES_OTHER,
     EDIT_EXPERIENCE,
@@ -238,7 +309,9 @@ def _get_bids_word(count):
     # Состояния для создания заказа
     CREATE_ORDER_REGION_SELECT,
     CREATE_ORDER_CITY,
-    CREATE_ORDER_CATEGORIES,
+    CREATE_ORDER_WORK_TYPE,
+    CREATE_ORDER_BUILDING_TYPE,
+    CREATE_ORDER_CATEGORIES_SELECT,
     CREATE_ORDER_DESCRIPTION,
     CREATE_ORDER_PHOTOS,
     # Состояния для создания отклика
@@ -248,7 +321,7 @@ def _get_bids_word(count):
     # Состояния для оставления отзыва
     REVIEW_SELECT_RATING,
     REVIEW_ENTER_COMMENT,
-) = range(40)
+) = range(47)
 
 
 def is_valid_name(name: str) -> bool:
@@ -429,47 +502,30 @@ async def register_master_region_select(update: Update, context: ContextTypes.DE
 
     context.user_data["region"] = region
 
-    # Если выбран Минск или "Вся Беларусь" - сохраняем и переходим к категориям
+    # Если выбран Минск или "Вся Беларусь" - сохраняем и переходим к выбору типа работ
     if region_data["type"] in ["city", "country"]:
         context.user_data["city"] = region
         context.user_data["regions"] = region
 
-        # Переходим к выбору категорий
+        # Переходим к выбору типа работ
         keyboard = [
-            [
-                InlineKeyboardButton("Электрика", callback_data="cat_Электрика"),
-                InlineKeyboardButton("Сантехника", callback_data="cat_Сантехника"),
-            ],
-            [
-                InlineKeyboardButton("Отделка", callback_data="cat_Отделка"),
-                InlineKeyboardButton("Сборка мебели", callback_data="cat_Сборка мебели"),
-            ],
-            [
-                InlineKeyboardButton("Окна/двери", callback_data="cat_Окна/двери"),
-                InlineKeyboardButton("Бытовая техника", callback_data="cat_Бытовая техника"),
-            ],
-            [
-                InlineKeyboardButton("Напольные покрытия", callback_data="cat_Напольные покрытия"),
-                InlineKeyboardButton("Мелкий ремонт", callback_data="cat_Мелкий ремонт"),
-            ],
-            [
-                InlineKeyboardButton("Дизайн", callback_data="cat_Дизайн"),
-                InlineKeyboardButton("Другое", callback_data="cat_Другое"),
-            ],
-            [InlineKeyboardButton("✅ Завершить выбор", callback_data="cat_done")],
+            [InlineKeyboardButton(
+                f"{WORK_CATEGORIES['Наружные работы']['emoji']} Наружные работы",
+                callback_data="worktype_Наружные работы"
+            )],
+            [InlineKeyboardButton(
+                f"{WORK_CATEGORIES['Внутренние работы']['emoji']} Внутренние работы",
+                callback_data="worktype_Внутренние работы"
+            )],
         ]
-
-        context.user_data["categories"] = []
 
         await query.edit_message_text(
             f"📍 Регион: {region}\n\n"
-            "🔧 Какие виды работ вы выполняете?\n\n"
-            "Нажимайте подходящие кнопки (можно несколько).\n"
-            "Если нужного варианта нет — выберите «Другое» и впишите свои.\n"
-            "Когда закончите — нажмите «✅ Завершить выбор».",
+            "🏗 <b>Выберите тип работ:</b>",
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
-        return REGISTER_MASTER_CATEGORIES_SELECT
+        return REGISTER_MASTER_WORK_TYPE
 
     # Если выбрана область - показываем города
     else:
@@ -516,43 +572,26 @@ async def register_master_city_select(update: Update, context: ContextTypes.DEFA
         context.user_data["city"] = city
         region = context.user_data.get("region", city)
         context.user_data["regions"] = region
-        
-        # Переходим к выбору категорий
+
+        # Переходим к выбору типа работ
         keyboard = [
-            [
-                InlineKeyboardButton("Электрика", callback_data="cat_Электрика"),
-                InlineKeyboardButton("Сантехника", callback_data="cat_Сантехника"),
-            ],
-            [
-                InlineKeyboardButton("Отделка", callback_data="cat_Отделка"),
-                InlineKeyboardButton("Сборка мебели", callback_data="cat_Сборка мебели"),
-            ],
-            [
-                InlineKeyboardButton("Окна/двери", callback_data="cat_Окна/двери"),
-                InlineKeyboardButton("Бытовая техника", callback_data="cat_Бытовая техника"),
-            ],
-            [
-                InlineKeyboardButton("Напольные покрытия", callback_data="cat_Напольные покрытия"),
-                InlineKeyboardButton("Мелкий ремонт", callback_data="cat_Мелкий ремонт"),
-            ],
-            [
-                InlineKeyboardButton("Дизайн", callback_data="cat_Дизайн"),
-                InlineKeyboardButton("Другое", callback_data="cat_Другое"),
-            ],
-            [InlineKeyboardButton("✅ Завершить выбор", callback_data="cat_done")],
+            [InlineKeyboardButton(
+                f"{WORK_CATEGORIES['Наружные работы']['emoji']} Наружные работы",
+                callback_data="worktype_Наружные работы"
+            )],
+            [InlineKeyboardButton(
+                f"{WORK_CATEGORIES['Внутренние работы']['emoji']} Внутренние работы",
+                callback_data="worktype_Внутренние работы"
+            )],
         ]
-        
-        context.user_data["categories"] = []
-        
+
         await query.edit_message_text(
-            f"Город: {city}\n\n"
-            "🔧 Какие виды работ вы выполняете?\n\n"
-            "Нажимайте подходящие кнопки (можно несколько).\n"
-            "Если нужного варианта нет — выберите «Другое» и впишите свои.\n"
-            "Когда закончите — нажмите «✅ Завершить выбор».",
+            f"🏙 Город: {city}\n\n"
+            "🏗 <b>Выберите тип работ:</b>",
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
-        return REGISTER_MASTER_CATEGORIES_SELECT
+        return REGISTER_MASTER_WORK_TYPE
 
 
 async def register_master_city_other(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -561,45 +600,100 @@ async def register_master_city_other(update: Update, context: ContextTypes.DEFAU
     context.user_data["city"] = city
     region = context.user_data.get("region", city)
     context.user_data["regions"] = region
-    
-    # Переходим к выбору категорий
+
+    # Переходим к выбору типа работ
     keyboard = [
-        [
-            InlineKeyboardButton("Электрика", callback_data="cat_Электрика"),
-            InlineKeyboardButton("Сантехника", callback_data="cat_Сантехника"),
-        ],
-        [
-            InlineKeyboardButton("Отделка", callback_data="cat_Отделка"),
-            InlineKeyboardButton("Сборка мебели", callback_data="cat_Сборка мебели"),
-        ],
-        [
-            InlineKeyboardButton("Окна/двери", callback_data="cat_Окна/двери"),
-            InlineKeyboardButton("Бытовая техника", callback_data="cat_Бытовая техника"),
-        ],
-        [
-            InlineKeyboardButton("Напольные покрытия", callback_data="cat_Напольные покрытия"),
-            InlineKeyboardButton("Мелкий ремонт", callback_data="cat_Мелкий ремонт"),
-        ],
-        [
-            InlineKeyboardButton("Дизайн", callback_data="cat_Дизайн"),
-            InlineKeyboardButton("Другое", callback_data="cat_Другое"),
-        ],
-        [InlineKeyboardButton("✅ Завершить выбор", callback_data="cat_done")],
+        [InlineKeyboardButton(
+            f"{WORK_CATEGORIES['Наружные работы']['emoji']} Наружные работы",
+            callback_data="worktype_Наружные работы"
+        )],
+        [InlineKeyboardButton(
+            f"{WORK_CATEGORIES['Внутренние работы']['emoji']} Внутренние работы",
+            callback_data="worktype_Внутренние работы"
+        )],
     ]
-    
-    context.user_data["categories"] = []
-    
+
     await update.message.reply_text(
-        f"Город: {city}\n\n"
-        "🔧 Какие виды работ вы выполняете?\n\n"
+        f"🏙 Город: {city}\n\n"
+        "🏗 <b>Выберите тип работ:</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return REGISTER_MASTER_WORK_TYPE
+
+
+async def register_master_work_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора типа работ (Наружные/Внутренние)"""
+    query = update.callback_query
+    await query.answer()
+
+    work_type = query.data.replace("worktype_", "")
+    context.user_data["work_type"] = work_type
+
+    # Получаем типы зданий для выбранного типа работ
+    building_types = WORK_CATEGORIES[work_type]["types"]
+
+    keyboard = []
+    for building_type, building_data in building_types.items():
+        keyboard.append([InlineKeyboardButton(
+            f"{building_data['emoji']} {building_type}",
+            callback_data=f"buildingtype_{building_type}"
+        )])
+
+    city = context.user_data.get("city", "")
+    await query.edit_message_text(
+        f"🏙 Город: {city}\n"
+        f"{WORK_CATEGORIES[work_type]['emoji']} Тип работ: {work_type}\n\n"
+        "🏢 <b>Выберите тип объекта:</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return REGISTER_MASTER_BUILDING_TYPE
+
+
+async def register_master_building_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора типа здания и показ категорий"""
+    query = update.callback_query
+    await query.answer()
+
+    building_type = query.data.replace("buildingtype_", "")
+    context.user_data["building_type"] = building_type
+
+    # Получаем категории для выбранных типа работ и здания
+    work_type = context.user_data.get("work_type", "")
+    categories = WORK_CATEGORIES[work_type]["types"][building_type]["categories"]
+
+    # Создаем кнопки категорий (2 в ряд)
+    keyboard = []
+    row = []
+    for category in categories:
+        row.append(InlineKeyboardButton(category, callback_data=f"cat_{category}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:  # Добавляем оставшуюся кнопку
+        keyboard.append(row)
+
+    # Добавляем кнопку завершения
+    keyboard.append([InlineKeyboardButton("✅ Завершить выбор", callback_data="cat_done")])
+
+    # Инициализируем список категорий
+    context.user_data["categories"] = []
+
+    city = context.user_data.get("city", "")
+    building_emoji = WORK_CATEGORIES[work_type]["types"][building_type]["emoji"]
+
+    await query.edit_message_text(
+        f"🏙 Город: {city}\n"
+        f"{WORK_CATEGORIES[work_type]['emoji']} {work_type}\n"
+        f"{building_emoji} {building_type}\n\n"
+        "🔧 <b>Выберите категории работ:</b>\n\n"
         "Нажимайте подходящие кнопки (можно несколько).\n"
-        "Если нужного варианта нет — выберите «Другое» и впишите свои.\n"
         "Когда закончите — нажмите «✅ Завершить выбор».",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return REGISTER_MASTER_CATEGORIES_SELECT
-
-
 
 
 # Функция register_master_regions удалена - районы больше не используются

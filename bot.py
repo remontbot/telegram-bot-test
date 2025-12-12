@@ -142,7 +142,19 @@ def main():
                     handlers.register_master_city_other,
                 )
             ],
-            # Районы больше не используются - переходим сразу к категориям
+            # Новые состояния для иерархического выбора категорий
+            handlers.REGISTER_MASTER_WORK_TYPE: [
+                CallbackQueryHandler(
+                    handlers.register_master_work_type,
+                    pattern="^worktype_",
+                )
+            ],
+            handlers.REGISTER_MASTER_BUILDING_TYPE: [
+                CallbackQueryHandler(
+                    handlers.register_master_building_type,
+                    pattern="^buildingtype_",
+                )
+            ],
             handlers.REGISTER_MASTER_CATEGORIES_SELECT: [
                 CallbackQueryHandler(
                     handlers.register_master_categories_select,
