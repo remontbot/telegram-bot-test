@@ -68,66 +68,80 @@ BELARUS_REGIONS = {
 # ===== WORK CATEGORIES HIERARCHY =====
 
 WORK_CATEGORIES = {
-    "Наружные работы": {
-        "emoji": "🏗",
-        "types": {
-            "Балкон/лоджия": {
-                "emoji": "🏢",
-                "categories": [
-                    "Остекление балконов",
-                    "Утепление балконов",
-                    "Отделка балконов",
-                    "Расширение балконов"
-                ]
-            },
-            "Частный дом": {
-                "emoji": "🏡",
-                "categories": [
-                    "Кровельные работы",
-                    "Фасадные работы",
-                    "Земляные работы",
-                    "Ландшафтные работы",
-                    "Заборы и ворота",
-                    "Тротуарная плитка",
-                    "Наружные коммуникации",
-                    "Бассейны и пруды"
-                ]
-            }
-        }
+    "🧱 Внутренние работы": {
+        "emoji": "🧱",
+        "subcategories": [
+            "Электрика",
+            "Сантехника",
+            "Отопление",
+            "Малярные работы",
+            "Штукатурные работы",
+            "Плиточные работы",
+            "Полы",
+            "Потолки",
+            "Стены и перегородки",
+            "Окна и двери (внутренняя установка)"
+        ]
     },
-    "Внутренние работы": {
+    "🏠 Наружные работы": {
         "emoji": "🏠",
-        "types": {
-            "Квартира": {
-                "emoji": "🏢",
-                "categories": [
-                    "Электрика",
-                    "Сантехника",
-                    "Отделка стен и потолков",
-                    "Напольные покрытия",
-                    "Окна и двери",
-                    "Встроенная мебель",
-                    "Бытовая техника",
-                    "Дизайн интерьера",
-                    "Мелкий ремонт"
-                ]
-            },
-            "Частный дом": {
-                "emoji": "🏡",
-                "categories": [
-                    "Электрика",
-                    "Сантехника и отопление",
-                    "Отделка стен и потолков",
-                    "Напольные покрытия",
-                    "Окна и двери",
-                    "Лестницы",
-                    "Камины и печи",
-                    "Вентиляция",
-                    "Встроенная мебель",
-                    "Дизайн интерьера"
-                ]
-            }
-        }
+        "subcategories": [
+            "Кровля",
+            "Фасад",
+            "Фундамент",
+            "Заборы и ворота",
+            "Тротуарная плитка",
+            "Бетонные работы",
+            "Сварочные работы",
+            "Деревянные конструкции"
+        ]
+    },
+    "🔧 Отделка и дизайн": {
+        "emoji": "🔧",
+        "subcategories": [
+            "Дизайн интерьера",
+            "Декор",
+            "Мебель на заказ",
+            "Установка бытовой техники",
+            "Уборка после ремонта"
+        ]
+    },
+    "🌳 Благоустройство и участок": {
+        "emoji": "🌳",
+        "subcategories": [
+            "Ландшафтные работы",
+            "Асфальтирование",
+            "Заборы, ворота",
+            "Септики, канализация, дренаж",
+            "Снегоуборка"
+        ]
+    },
+    "🧰 Специализированные и инженерные системы": {
+        "emoji": "🧰",
+        "subcategories": [
+            "Системы вентиляции",
+            "Кондиционирование",
+            "Слаботочные системы",
+            "Умный дом"
+        ]
+    },
+    "⚙️ Демонтаж и черновые работы": {
+        "emoji": "⚙️",
+        "subcategories": [
+            "Снос перегородок",
+            "Демонтаж плитки, полов, потолков",
+            "Вывоз строительного мусора",
+            "Черновая подготовка"
+        ]
+    },
+    "💡 Прочие услуги": {
+        "emoji": "💡",
+        "subcategories": [
+            "Курьерские, подсобные, грузчики",
+            "Сборка мебели",
+            "Мелкий бытовой ремонт",
+            "Услуги по дому (мелкие заявки)"
+        ]
     }
 }
 
@@ -278,10 +292,9 @@ def _get_bids_word(count):
     REGISTER_MASTER_CITY,
     REGISTER_MASTER_CITY_SELECT,
     REGISTER_MASTER_CITY_OTHER,
-    REGISTER_MASTER_WORK_TYPE,
-    REGISTER_MASTER_BUILDING_TYPE,
-    REGISTER_MASTER_CATEGORIES_SELECT,
-    REGISTER_MASTER_CATEGORIES_OTHER,
+    REGISTER_MASTER_MAIN_CATEGORY,
+    REGISTER_MASTER_SUBCATEGORY_SELECT,
+    REGISTER_MASTER_ASK_MORE_CATEGORIES,
     REGISTER_MASTER_EXPERIENCE,
     REGISTER_MASTER_DESCRIPTION,
     REGISTER_MASTER_PHOTOS,
@@ -298,10 +311,9 @@ def _get_bids_word(count):
     EDIT_PHONE,
     EDIT_REGION_SELECT,
     EDIT_CITY,
-    EDIT_WORK_TYPE,
-    EDIT_BUILDING_TYPE,
-    EDIT_CATEGORIES_SELECT,
-    EDIT_CATEGORIES_OTHER,
+    EDIT_MAIN_CATEGORY,
+    EDIT_SUBCATEGORY_SELECT,
+    EDIT_ASK_MORE_CATEGORIES,
     EDIT_EXPERIENCE,
     EDIT_DESCRIPTION,
     ADD_PHOTOS_MENU,
@@ -309,9 +321,8 @@ def _get_bids_word(count):
     # Состояния для создания заказа
     CREATE_ORDER_REGION_SELECT,
     CREATE_ORDER_CITY,
-    CREATE_ORDER_WORK_TYPE,
-    CREATE_ORDER_BUILDING_TYPE,
-    CREATE_ORDER_CATEGORIES_SELECT,
+    CREATE_ORDER_MAIN_CATEGORY,
+    CREATE_ORDER_SUBCATEGORY_SELECT,
     CREATE_ORDER_DESCRIPTION,
     CREATE_ORDER_PHOTOS,
     # Состояния для создания отклика
@@ -321,7 +332,7 @@ def _get_bids_word(count):
     # Состояния для оставления отзыва
     REVIEW_SELECT_RATING,
     REVIEW_ENTER_COMMENT,
-) = range(46)
+) = range(43)
 
 
 def is_valid_name(name: str) -> bool:
@@ -573,25 +584,25 @@ async def register_master_city_select(update: Update, context: ContextTypes.DEFA
         region = context.user_data.get("region", city)
         context.user_data["regions"] = region
 
-        # Переходим к выбору типа работ
-        keyboard = [
-            [InlineKeyboardButton(
-                f"{WORK_CATEGORIES['Наружные работы']['emoji']} Наружные работы",
-                callback_data="worktype_Наружные работы"
-            )],
-            [InlineKeyboardButton(
-                f"{WORK_CATEGORIES['Внутренние работы']['emoji']} Внутренние работы",
-                callback_data="worktype_Внутренние работы"
-            )],
-        ]
+        # Инициализируем список категорий если его нет
+        if "categories" not in context.user_data:
+            context.user_data["categories"] = []
+
+        # Переходим к выбору основной категории
+        keyboard = []
+        for category_name, category_data in WORK_CATEGORIES.items():
+            keyboard.append([InlineKeyboardButton(
+                category_name,
+                callback_data=f"maincat_{category_name}"
+            )])
 
         await query.edit_message_text(
             f"🏙 Город: {city}\n\n"
-            "🏗 <b>Выберите тип работ:</b>",
+            "🔧 <b>Шаг 4/7:</b> Выберите основную категорию работ:",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
-        return REGISTER_MASTER_WORK_TYPE
+        return REGISTER_MASTER_MAIN_CATEGORY
 
 
 async def register_master_city_other(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -601,73 +612,47 @@ async def register_master_city_other(update: Update, context: ContextTypes.DEFAU
     region = context.user_data.get("region", city)
     context.user_data["regions"] = region
 
-    # Переходим к выбору типа работ
-    keyboard = [
-        [InlineKeyboardButton(
-            f"{WORK_CATEGORIES['Наружные работы']['emoji']} Наружные работы",
-            callback_data="worktype_Наружные работы"
-        )],
-        [InlineKeyboardButton(
-            f"{WORK_CATEGORIES['Внутренние работы']['emoji']} Внутренние работы",
-            callback_data="worktype_Внутренние работы"
-        )],
-    ]
+    # Переходим к выбору основной категории
+    # Инициализируем список категорий если его нет
+    if "categories" not in context.user_data:
+        context.user_data["categories"] = []
+
+    keyboard = []
+    for category_name, category_data in WORK_CATEGORIES.items():
+        keyboard.append([InlineKeyboardButton(
+            category_name,
+            callback_data=f"maincat_{category_name}"
+        )])
 
     await update.message.reply_text(
         f"🏙 Город: {city}\n\n"
-        "🏗 <b>Выберите тип работ:</b>",
+        "🔧 <b>Шаг 4/7:</b> Выберите основную категорию работ:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
-    return REGISTER_MASTER_WORK_TYPE
+    return REGISTER_MASTER_MAIN_CATEGORY
 
 
-async def register_master_work_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора типа работ (Наружные/Внутренние)"""
+async def register_master_main_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора основной категории работ"""
     query = update.callback_query
     await query.answer()
 
-    work_type = query.data.replace("worktype_", "")
-    context.user_data["work_type"] = work_type
+    main_category = query.data.replace("maincat_", "")
+    context.user_data["current_main_category"] = main_category
 
-    # Получаем типы зданий для выбранного типа работ
-    building_types = WORK_CATEGORIES[work_type]["types"]
+    # Получаем подкатегории для выбранной категории
+    subcategories = WORK_CATEGORIES[main_category]["subcategories"]
 
-    keyboard = []
-    for building_type, building_data in building_types.items():
-        keyboard.append([InlineKeyboardButton(
-            f"{building_data['emoji']} {building_type}",
-            callback_data=f"buildingtype_{building_type}"
-        )])
-
-    city = context.user_data.get("city", "")
-    await query.edit_message_text(
-        f"🏙 Город: {city}\n"
-        f"{WORK_CATEGORIES[work_type]['emoji']} Тип работ: {work_type}\n\n"
-        "🏢 <b>Выберите тип объекта:</b>",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-    return REGISTER_MASTER_BUILDING_TYPE
-
-
-async def register_master_building_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора типа здания и показ категорий"""
-    query = update.callback_query
-    await query.answer()
-
-    building_type = query.data.replace("buildingtype_", "")
-    context.user_data["building_type"] = building_type
-
-    # Получаем категории для выбранных типа работ и здания
-    work_type = context.user_data.get("work_type", "")
-    categories = WORK_CATEGORIES[work_type]["types"][building_type]["categories"]
-
-    # Создаем кнопки категорий (2 в ряд)
+    # Создаем кнопки подкатегорий (2 в ряд) с галочками
     keyboard = []
     row = []
-    for category in categories:
-        row.append(InlineKeyboardButton(category, callback_data=f"cat_{category}"))
+    for subcat in subcategories:
+        # Проверяем выбрана ли уже эта подкатегория
+        is_selected = subcat in context.user_data.get("categories", [])
+        button_text = f"✅ {subcat}" if is_selected else subcat
+
+        row.append(InlineKeyboardButton(button_text, callback_data=f"subcat_{subcat}"))
         if len(row) == 2:
             keyboard.append(row)
             row = []
@@ -675,40 +660,129 @@ async def register_master_building_type(update: Update, context: ContextTypes.DE
         keyboard.append(row)
 
     # Добавляем кнопку завершения
-    keyboard.append([InlineKeyboardButton("✅ Завершить выбор", callback_data="cat_done")])
-
-    # Инициализируем список категорий
-    context.user_data["categories"] = []
+    keyboard.append([InlineKeyboardButton("✅ Завершить выбор категорий", callback_data="subcat_done")])
 
     city = context.user_data.get("city", "")
-    building_emoji = WORK_CATEGORIES[work_type]["types"][building_type]["emoji"]
+    emoji = WORK_CATEGORIES[main_category]["emoji"]
 
     await query.edit_message_text(
         f"🏙 Город: {city}\n"
-        f"{WORK_CATEGORIES[work_type]['emoji']} {work_type}\n"
-        f"{building_emoji} {building_type}\n\n"
-        "🔧 <b>Выберите категории работ:</b>\n\n"
+        f"{emoji} <b>Категория:</b> {main_category}\n\n"
+        "🔧 <b>Выберите подкатегории:</b>\n\n"
         "Нажимайте подходящие кнопки (можно несколько).\n"
-        "Когда закончите — нажмите «✅ Завершить выбор».",
+        "Когда закончите — нажмите «✅ Завершить выбор категорий».",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
-    return REGISTER_MASTER_CATEGORIES_SELECT
+    return REGISTER_MASTER_SUBCATEGORY_SELECT
 
 
-# Функция register_master_regions удалена - районы больше не используются
-
-async def register_master_categories_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def register_master_subcategory_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора подкатегорий с переключением галочек"""
     query = update.callback_query
     await query.answer()
     data = query.data
-    selected = data.split("_", 1)[1]
+    selected = data.replace("subcat_", "")
 
     if selected == "done":
-        if not context.user_data["categories"]:
-            await query.answer("Выберите хотя бы один вид работ!", show_alert=True)
-            return REGISTER_MASTER_CATEGORIES_SELECT
+        # Проверяем что выбрана хотя бы одна подкатегория
+        if not context.user_data.get("categories"):
+            await query.answer("Выберите хотя бы одну подкатегорию!", show_alert=True)
+            return REGISTER_MASTER_SUBCATEGORY_SELECT
 
+        # Спрашиваем хочет ли добавить еще категории
+        keyboard = [
+            [InlineKeyboardButton("✅ Да, добавить еще", callback_data="more_yes")],
+            [InlineKeyboardButton("➡️ Нет, продолжить дальше", callback_data="more_no")],
+        ]
+
+        categories_text = ", ".join(context.user_data["categories"])
+
+        await query.edit_message_text(
+            f"✅ <b>Выбранные категории:</b>\n{categories_text}\n\n"
+            "Хотите добавить еще категории из других разделов?",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return REGISTER_MASTER_ASK_MORE_CATEGORIES
+
+    else:
+        # Переключаем выбор подкатегории
+        if "categories" not in context.user_data:
+            context.user_data["categories"] = []
+
+        if selected not in context.user_data["categories"]:
+            context.user_data["categories"].append(selected)
+            await query.answer(f"✅ Добавлено: {selected}")
+        else:
+            context.user_data["categories"].remove(selected)
+            await query.answer(f"❌ Убрано: {selected}")
+
+        # Обновляем кнопки с галочками
+        main_category = context.user_data["current_main_category"]
+        subcategories = WORK_CATEGORIES[main_category]["subcategories"]
+
+        keyboard = []
+        row = []
+        for subcat in subcategories:
+            is_selected = subcat in context.user_data["categories"]
+            button_text = f"✅ {subcat}" if is_selected else subcat
+
+            row.append(InlineKeyboardButton(button_text, callback_data=f"subcat_{subcat}"))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+
+        keyboard.append([InlineKeyboardButton("✅ Завершить выбор категорий", callback_data="subcat_done")])
+
+        city = context.user_data.get("city", "")
+        emoji = WORK_CATEGORIES[main_category]["emoji"]
+
+        await query.edit_message_text(
+            f"🏙 Город: {city}\n"
+            f"{emoji} <b>Категория:</b> {main_category}\n\n"
+            "🔧 <b>Выберите подкатегории:</b>\n\n"
+            "Нажимайте подходящие кнопки (можно несколько).\n"
+            "Когда закончите — нажмите «✅ Завершить выбор категорий».",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+        return REGISTER_MASTER_SUBCATEGORY_SELECT
+
+
+async def register_master_ask_more_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Спрашиваем хочет ли мастер добавить еще категории"""
+    query = update.callback_query
+    await query.answer()
+
+    choice = query.data.replace("more_", "")
+
+    if choice == "yes":
+        # Возвращаемся к выбору основной категории
+        keyboard = []
+        for category_name, category_data in WORK_CATEGORIES.items():
+            keyboard.append([InlineKeyboardButton(
+                category_name,
+                callback_data=f"maincat_{category_name}"
+            )])
+
+        city = context.user_data.get("city", "")
+        categories_text = ", ".join(context.user_data["categories"])
+
+        await query.edit_message_text(
+            f"🏙 Город: {city}\n\n"
+            f"✅ <b>Уже выбрано:</b> {categories_text}\n\n"
+            "🔧 <b>Выберите основную категорию для добавления:</b>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return REGISTER_MASTER_MAIN_CATEGORY
+
+    else:
+        # Переходим к выбору уровня мастерства
         keyboard = [
             [InlineKeyboardButton("🌱 Начинающий мастер", callback_data="exp_Начинающий мастер")],
             [InlineKeyboardButton("⚡ Опытный мастер", callback_data="exp_Опытный мастер")],
@@ -718,8 +792,8 @@ async def register_master_categories_select(update: Update, context: ContextType
         categories_text = ", ".join(context.user_data["categories"])
 
         await query.edit_message_text(
-            f"Выбранные категории: {categories_text}\n\n"
-            "📊 <b>Укажите ваш уровень мастерства:</b>\n\n"
+            f"✅ <b>Выбранные категории:</b>\n{categories_text}\n\n"
+            "📊 <b>Шаг 5/7:</b> Укажите ваш уровень мастерства:\n\n"
             "🌱 <b>Начинающий мастер</b> — осваиваете профессию, выполняете простые работы\n"
             "⚡ <b>Опытный мастер</b> — уверенно работаете, есть портфолио выполненных проектов\n"
             "⭐ <b>Профессионал</b> — высокий уровень, сложные проекты, большой опыт",
@@ -727,46 +801,6 @@ async def register_master_categories_select(update: Update, context: ContextType
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
         return REGISTER_MASTER_EXPERIENCE
-
-    elif selected == "Другое":
-        await query.edit_message_text(
-            "Введите свои виды работ через запятую.\n"
-            "Например: «Покраска фасадов, декорирование, гипсокартонные конструкции»"
-        )
-        return REGISTER_MASTER_CATEGORIES_OTHER
-
-    else:
-        if selected not in context.user_data["categories"]:
-            context.user_data["categories"].append(selected)
-            await query.answer(f"Добавлено: {selected}")
-        else:
-            context.user_data["categories"].remove(selected)
-            await query.answer(f"Убрано: {selected}")
-
-        return REGISTER_MASTER_CATEGORIES_SELECT
-
-
-async def register_master_categories_other(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_cats = update.message.text.strip()
-    custom_list = [c.strip() for c in user_cats.split(",") if c.strip()]
-    context.user_data["categories"].extend(custom_list)
-
-    keyboard = [
-        [InlineKeyboardButton("🌱 Начинающий мастер", callback_data="exp_Начинающий мастер")],
-        [InlineKeyboardButton("⚡ Опытный мастер", callback_data="exp_Опытный мастер")],
-        [InlineKeyboardButton("⭐ Профессионал", callback_data="exp_Профессионал")],
-    ]
-
-    await update.message.reply_text(
-        "Отлично 👍\n\n"
-        "📊 <b>Укажите ваш уровень мастерства:</b>\n\n"
-        "🌱 <b>Начинающий мастер</b> — осваиваете профессию, выполняете простые работы\n"
-        "⚡ <b>Опытный мастер</b> — уверенно работаете, есть портфолио выполненных проектов\n"
-        "⭐ <b>Профессионал</b> — высокий уровень, сложные проекты, большой опыт",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-    return REGISTER_MASTER_EXPERIENCE
 
 
 async def register_master_experience(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5789,73 +5823,39 @@ async def create_order_city_select(update: Update, context: ContextTypes.DEFAULT
     else:
         context.user_data["order_city"] = city
 
-        # Переходим к выбору типа работ
-        keyboard = [
-            [InlineKeyboardButton(
-                f"{WORK_CATEGORIES['Наружные работы']['emoji']} Наружные работы",
-                callback_data="order_worktype_Наружные работы"
-            )],
-            [InlineKeyboardButton(
-                f"{WORK_CATEGORIES['Внутренние работы']['emoji']} Внутренние работы",
-                callback_data="order_worktype_Внутренние работы"
-            )],
-        ]
+        # Переходим к выбору основной категории
+        keyboard = []
+        for category_name, category_data in WORK_CATEGORIES.items():
+            keyboard.append([InlineKeyboardButton(
+                category_name,
+                callback_data=f"order_maincat_{category_name}"
+            )])
 
         await query.edit_message_text(
             f"🏙 Город: <b>{city}</b>\n\n"
-            "🔧 <b>Шаг 2:</b> Выберите тип работ:",
+            "🔧 <b>Шаг 2:</b> Выберите основную категорию работ:",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
-        return CREATE_ORDER_WORK_TYPE
+        return CREATE_ORDER_MAIN_CATEGORY
 
 
-async def create_order_work_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора типа работ для заказа"""
+async def create_order_main_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора основной категории для заказа"""
     query = update.callback_query
     await query.answer()
 
-    work_type = query.data.replace("order_worktype_", "")
-    context.user_data["order_work_type"] = work_type
+    main_category = query.data.replace("order_maincat_", "")
+    context.user_data["order_main_category"] = main_category
 
-    # Получаем типы зданий для выбранного типа работ
-    building_types = WORK_CATEGORIES[work_type]["types"]
+    # Получаем подкатегории для выбранной категории
+    subcategories = WORK_CATEGORIES[main_category]["subcategories"]
 
-    keyboard = []
-    for building_type, building_data in building_types.items():
-        keyboard.append([InlineKeyboardButton(
-            f"{building_data['emoji']} {building_type}",
-            callback_data=f"order_buildingtype_{building_type}"
-        )])
-
-    city = context.user_data.get("order_city", "")
-    await query.edit_message_text(
-        f"🏙 Город: {city}\n"
-        f"{WORK_CATEGORIES[work_type]['emoji']} Тип работ: {work_type}\n\n"
-        "🏢 <b>Выберите тип объекта:</b>",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-    return CREATE_ORDER_BUILDING_TYPE
-
-
-async def create_order_building_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора типа здания для заказа"""
-    query = update.callback_query
-    await query.answer()
-
-    building_type = query.data.replace("order_buildingtype_", "")
-    context.user_data["order_building_type"] = building_type
-
-    # Получаем категории для выбранных типа работ и здания
-    work_type = context.user_data.get("order_work_type", "")
-    categories = WORK_CATEGORIES[work_type]["types"][building_type]["categories"]
-
-    # Создаем кнопки категорий (2 в ряд)
+    # Создаем кнопки подкатегорий (2 в ряд)
     keyboard = []
     row = []
-    for category in categories:
-        row.append(InlineKeyboardButton(category, callback_data=f"order_category_{category}"))
+    for subcat in subcategories:
+        row.append(InlineKeyboardButton(subcat, callback_data=f"order_subcat_{subcat}"))
         if len(row) == 2:
             keyboard.append(row)
             row = []
@@ -5863,33 +5863,33 @@ async def create_order_building_type(update: Update, context: ContextTypes.DEFAU
         keyboard.append(row)
 
     city = context.user_data.get("order_city", "")
-    building_emoji = WORK_CATEGORIES[work_type]["types"][building_type]["emoji"]
+    emoji = WORK_CATEGORIES[main_category]["emoji"]
 
     await query.edit_message_text(
         f"🏙 Город: {city}\n"
-        f"{WORK_CATEGORIES[work_type]['emoji']} {work_type}\n"
-        f"{building_emoji} {building_type}\n\n"
-        "🔧 <b>Выберите категорию работ:</b>\n\n"
-        "Выберите одну категорию, которая наиболее точно описывает ваш заказ.",
+        f"{emoji} Категория: {main_category}\n\n"
+        "🔧 <b>Шаг 3:</b> Выберите подкатегорию работ:\n\n"
+        "Выберите одну подкатегорию, которая наиболее точно описывает ваш заказ.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
-    return CREATE_ORDER_CATEGORIES_SELECT
+    return CREATE_ORDER_SUBCATEGORY_SELECT
 
 
-async def create_order_category_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора категории для заказа (одна категория)"""
+async def create_order_subcategory_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора подкатегории для заказа"""
     query = update.callback_query
     await query.answer()
 
-    category = query.data.replace("order_category_", "")
-    context.user_data["order_category"] = category
+    subcategory = query.data.replace("order_subcat_", "")
+    context.user_data["order_category"] = subcategory
 
     # Переходим к описанию
+    main_category = context.user_data.get("order_main_category", "")
     await query.edit_message_text(
         f"Город: <b>{context.user_data['order_city']}</b>\n"
-        f"Категория: <b>{category}</b>\n\n"
-        "📝 <b>Шаг 3:</b> Опишите что нужно сделать\n\n"
+        f"Категория: <b>{main_category} → {subcategory}</b>\n\n"
+        "📝 <b>Шаг 4:</b> Опишите что нужно сделать\n\n"
         "💡 <b>Важно!</b> Мастера будут предлагать свою цену за услуги, поэтому укажите:\n"
         "✓ Объём работ (сколько розеток, метраж, количество)\n"
         "✓ Размеры и особенности (толщина стен, высота потолков)\n"

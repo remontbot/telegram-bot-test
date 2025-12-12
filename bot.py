@@ -143,29 +143,23 @@ def main():
                     handlers.register_master_city_other,
                 )
             ],
-            # Новые состояния для иерархического выбора категорий
-            handlers.REGISTER_MASTER_WORK_TYPE: [
+            # Новые состояния для выбора категорий (7 основных категорий)
+            handlers.REGISTER_MASTER_MAIN_CATEGORY: [
                 CallbackQueryHandler(
-                    handlers.register_master_work_type,
-                    pattern="^worktype_",
+                    handlers.register_master_main_category,
+                    pattern="^maincat_",
                 )
             ],
-            handlers.REGISTER_MASTER_BUILDING_TYPE: [
+            handlers.REGISTER_MASTER_SUBCATEGORY_SELECT: [
                 CallbackQueryHandler(
-                    handlers.register_master_building_type,
-                    pattern="^buildingtype_",
+                    handlers.register_master_subcategory_select,
+                    pattern="^subcat_",
                 )
             ],
-            handlers.REGISTER_MASTER_CATEGORIES_SELECT: [
+            handlers.REGISTER_MASTER_ASK_MORE_CATEGORIES: [
                 CallbackQueryHandler(
-                    handlers.register_master_categories_select,
-                    pattern="^cat_",
-                )
-            ],
-            handlers.REGISTER_MASTER_CATEGORIES_OTHER: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    handlers.register_master_categories_other,
+                    handlers.register_master_ask_more_categories,
+                    pattern="^more_",
                 )
             ],
             # ОБНОВЛЕНО: Теперь опыт выбирается кнопками
@@ -256,14 +250,11 @@ def main():
                 CallbackQueryHandler(handlers.create_order_city_select, pattern="^ordercity_"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.create_order_city_select),
             ],
-            handlers.CREATE_ORDER_WORK_TYPE: [
-                CallbackQueryHandler(handlers.create_order_work_type, pattern="^order_worktype_"),
+            handlers.CREATE_ORDER_MAIN_CATEGORY: [
+                CallbackQueryHandler(handlers.create_order_main_category, pattern="^order_maincat_"),
             ],
-            handlers.CREATE_ORDER_BUILDING_TYPE: [
-                CallbackQueryHandler(handlers.create_order_building_type, pattern="^order_buildingtype_"),
-            ],
-            handlers.CREATE_ORDER_CATEGORIES_SELECT: [
-                CallbackQueryHandler(handlers.create_order_category_select, pattern="^order_category_"),
+            handlers.CREATE_ORDER_SUBCATEGORY_SELECT: [
+                CallbackQueryHandler(handlers.create_order_subcategory_select, pattern="^order_subcat_"),
             ],
             handlers.CREATE_ORDER_DESCRIPTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.create_order_description),
