@@ -269,6 +269,8 @@ def main():
             ],
             handlers.CREATE_ORDER_PHOTOS: [
                 MessageHandler(filters.PHOTO, handlers.create_order_photo_upload),
+                MessageHandler(filters.VIDEO, handlers.create_order_photo_upload),
+                CommandHandler("done", handlers.create_order_done_uploading),
                 CallbackQueryHandler(handlers.create_order_skip_photos, pattern="^order_skip_photos$"),
                 CallbackQueryHandler(handlers.create_order_publish, pattern="^order_publish$"),
             ],

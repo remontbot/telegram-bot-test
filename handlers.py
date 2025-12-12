@@ -5918,72 +5918,140 @@ async def create_order_description(update: Update, context: ContextTypes.DEFAULT
         return CREATE_ORDER_DESCRIPTION
     
     context.user_data["order_description"] = description
-    
-    # Предлагаем загрузить фото
-    keyboard = [[InlineKeyboardButton("⏭ Пропустить фото", callback_data="order_skip_photos")]]
-    
+
+    # Предлагаем загрузить фото и видео
+    keyboard = [[InlineKeyboardButton("⏭ Пропустить", callback_data="order_skip_photos")]]
+
     await update.message.reply_text(
-        "📸 <b>Шаг 4:</b> Загрузите фото объекта (до 5 штук)\n\n"
-        "Фото помогут мастеру точнее оценить работу.\n"
-        "Можете пропустить этот шаг.",
+        "📸 <b>Шаг 4:</b> Загрузите фото или видео объекта\n\n"
+        "📷 Фото: до 10 штук\n"
+        "🎥 Видео: до 3 штук (макс. 50 МБ каждое)\n\n"
+        "Фото и видео помогут мастеру точнее оценить работу и сделать правильное предложение.\n\n"
+        "Когда закончите загрузку, отправьте команду /done или нажмите кнопку ниже.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    
+
     context.user_data["order_photos"] = []
+    context.user_data["order_videos"] = []
     return CREATE_ORDER_PHOTOS
 
 
 async def create_order_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка загрузки фото для заказа"""
+    """Обработка загрузки фото и видео для заказа"""
 
     if "order_photos" not in context.user_data:
         context.user_data["order_photos"] = []
+    if "order_videos" not in context.user_data:
+        context.user_data["order_videos"] = []
 
     photos = context.user_data["order_photos"]
+    videos = context.user_data["order_videos"]
 
-    if len(photos) >= 5:
-        await update.message.reply_text(
-            "⚠️ Максимум 5 фото. Нажмите кнопку для завершения."
-        )
-        return CREATE_ORDER_PHOTOS
+    # Обработка фото
+    if update.message.photo:
+        if len(photos) >= 10:
+            await update.message.reply_text(
+                "⚠️ Максимум 10 фото.\n\nМожете добавить видео или завершить командой /done"
+            )
+            return CREATE_ORDER_PHOTOS
 
-    # Получаем file_id
-    file_id = update.message.photo[-1].file_id
+        # Получаем file_id
+        file_id = update.message.photo[-1].file_id
 
-    # КРИТИЧНО: Валидация file_id
-    if not validate_file_id(file_id):
-        logger.error(f"❌ Невалидный file_id при загрузке фото заказа: {file_id}")
+        # КРИТИЧНО: Валидация file_id
+        if not validate_file_id(file_id):
+            logger.error(f"❌ Невалидный file_id при загрузке фото заказа: {file_id}")
+            keyboard = [[InlineKeyboardButton("✅ Завершить и опубликовать", callback_data="order_publish")]]
+            await update.message.reply_text(
+                "❌ Ошибка при обработке фото.\n\n"
+                "Попробуйте отправить фото еще раз или используйте другое изображение.\n\n"
+                "Или завершите создание заказа без этого фото.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return CREATE_ORDER_PHOTOS
+
+        # Сохраняем file_id
+        photos.append(file_id)
+
         keyboard = [[InlineKeyboardButton("✅ Завершить и опубликовать", callback_data="order_publish")]]
+
         await update.message.reply_text(
-            "❌ Ошибка при обработке фото.\n\n"
-            "Попробуйте отправить фото еще раз или используйте другое изображение.\n\n"
-            "Или завершите создание заказа без этого фото.",
+            f"✅ Фото {len(photos)}/10 добавлено!\n\n"
+            f"📷 Фото: {len(photos)}/10\n"
+            f"🎥 Видео: {len(videos)}/3\n\n"
+            f"Можете добавить ещё или завершить командой /done",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+
         return CREATE_ORDER_PHOTOS
 
-    # Сохраняем file_id
-    photos.append(file_id)
-    
-    keyboard = [[InlineKeyboardButton("✅ Завершить и опубликовать", callback_data="order_publish")]]
-    
-    await update.message.reply_text(
-        f"✅ Фото {len(photos)}/5 добавлено!\n\n"
-        f"Можете добавить ещё или завершить.",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    
+    # Обработка видео
+    elif update.message.video:
+        if len(videos) >= 3:
+            await update.message.reply_text(
+                "⚠️ Максимум 3 видео.\n\nМожете добавить фото или завершить командой /done"
+            )
+            return CREATE_ORDER_PHOTOS
+
+        # Проверка размера видео (50 МБ = 50 * 1024 * 1024 байт)
+        video_size = update.message.video.file_size
+        max_size = 50 * 1024 * 1024
+
+        if video_size > max_size:
+            await update.message.reply_text(
+                f"⚠️ Видео слишком большое ({video_size / 1024 / 1024:.1f} МБ).\n"
+                f"Максимальный размер: 50 МБ.\n\n"
+                f"Попробуйте сжать видео или отправьте другое."
+            )
+            return CREATE_ORDER_PHOTOS
+
+        # Получаем file_id
+        file_id = update.message.video.file_id
+
+        # КРИТИЧНО: Валидация file_id
+        if not validate_file_id(file_id):
+            logger.error(f"❌ Невалидный file_id при загрузке видео заказа: {file_id}")
+            keyboard = [[InlineKeyboardButton("✅ Завершить и опубликовать", callback_data="order_publish")]]
+            await update.message.reply_text(
+                "❌ Ошибка при обработке видео.\n\n"
+                "Попробуйте отправить видео еще раз или используйте другой файл.\n\n"
+                "Или завершите создание заказа без этого видео.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return CREATE_ORDER_PHOTOS
+
+        # Сохраняем file_id
+        videos.append(file_id)
+
+        keyboard = [[InlineKeyboardButton("✅ Завершить и опубликовать", callback_data="order_publish")]]
+
+        await update.message.reply_text(
+            f"✅ Видео {len(videos)}/3 добавлено!\n\n"
+            f"📷 Фото: {len(photos)}/10\n"
+            f"🎥 Видео: {len(videos)}/3\n\n"
+            f"Можете добавить ещё или завершить командой /done",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+        return CREATE_ORDER_PHOTOS
+
     return CREATE_ORDER_PHOTOS
 
 
+async def create_order_done_uploading(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Завершение загрузки фото и видео по команде /done"""
+    return await create_order_publish(update, context)
+
+
 async def create_order_skip_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Пропуск загрузки фото"""
+    """Пропуск загрузки фото и видео"""
     query = update.callback_query
     await query.answer()
-    
+
     context.user_data["order_photos"] = []
-    
+    context.user_data["order_videos"] = []
+
     return await create_order_publish(update, context)
 
 
@@ -6022,6 +6090,7 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.info(f"category: {context.user_data.get('order_category')}")
         logger.info(f"description: {context.user_data.get('order_description')}")
         logger.info(f"photos: {len(context.user_data.get('order_photos', []))}")
+        logger.info(f"videos: {len(context.user_data.get('order_videos', []))}")
 
         # КРИТИЧНО: Валидация file_id перед сохранением заказа
         order_photos = context.user_data.get("order_photos", [])
@@ -6030,6 +6099,13 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
             removed_count = len(order_photos) - len(valid_order_photos)
             logger.warning(f"⚠️ Удалено {removed_count} невалидных file_id из фото заказа")
 
+        # Валидация file_id для видео
+        order_videos = context.user_data.get("order_videos", [])
+        valid_order_videos = [fid for fid in order_videos if validate_file_id(fid)]
+        if len(valid_order_videos) < len(order_videos):
+            removed_count = len(order_videos) - len(valid_order_videos)
+            logger.warning(f"⚠️ Удалено {removed_count} невалидных file_id из видео заказа")
+
         # Создаём заказ в БД (может вызвать ValueError при rate limiting)
         try:
             order_id = db.create_order(
@@ -6037,7 +6113,8 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
                 city=context.user_data["order_city"],
                 categories=context.user_data["order_category"],
                 description=context.user_data["order_description"],
-                photos=valid_order_photos
+                photos=valid_order_photos,
+                videos=valid_order_videos
             )
         except ValueError as e:
             # Rate limiting error
@@ -6077,17 +6154,24 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
 
         categories_text = context.user_data["order_category"]
         photos_count = len(context.user_data.get("order_photos", []))
+        videos_count = len(context.user_data.get("order_videos", []))
 
         keyboard = [
             [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
             [InlineKeyboardButton("⬅️ В меню", callback_data="show_client_menu")],
         ]
 
+        media_info = ""
+        if photos_count > 0:
+            media_info += f"📸 Фото: {photos_count}\n"
+        if videos_count > 0:
+            media_info += f"🎥 Видео: {videos_count}\n"
+
         await message.reply_text(
             "🎉 <b>Заказ опубликован!</b>\n\n"
             f"📍 Город: {context.user_data['order_city']}\n"
             f"🔧 Категории: {categories_text}\n"
-            f"📸 Фото: {photos_count}\n"
+            f"{media_info}"
             f"📝 Описание: {context.user_data['order_description'][:50]}...\n\n"
             "Мастера получили уведомления о вашем заказе и скоро начнут откликаться!\n"
             "Вы сможете выбрать лучшего!",

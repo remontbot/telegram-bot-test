@@ -506,6 +506,7 @@ def init_db():
                 budget_value REAL,
                 deadline TEXT,
                 photos TEXT DEFAULT '',
+                videos TEXT DEFAULT '',
                 status TEXT NOT NULL, -- 'open', 'pending_choice', 'master_selected', 'contact_shared', 'done', 'canceled', 'cancelled', 'expired'
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (client_id) REFERENCES clients(id)
@@ -2427,6 +2428,42 @@ def migrate_add_regions_to_clients():
             traceback.print_exc()
 
 
+def migrate_add_videos_to_orders():
+    """
+    Добавляет поле videos в таблицу orders для хранения видео заказа.
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            if USE_POSTGRES:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'orders' AND column_name = 'videos'
+                        ) THEN
+                            ALTER TABLE orders ADD COLUMN videos TEXT DEFAULT '';
+                        END IF;
+                    END $$;
+                """)
+            else:
+                cursor.execute("PRAGMA table_info(orders)")
+                columns = [column[1] for column in cursor.fetchall()]
+
+                if 'videos' not in columns:
+                    cursor.execute("ALTER TABLE orders ADD COLUMN videos TEXT DEFAULT ''")
+
+            conn.commit()
+            print("✅ Videos field migration for orders completed successfully!")
+
+        except Exception as e:
+            print(f"⚠️  Ошибка при добавлении поля videos в orders: {e}")
+            import traceback
+            traceback.print_exc()
+
+
 # === CHAT SYSTEM HELPERS ===
 
 def create_chat(order_id, client_user_id, worker_user_id, bid_id):
@@ -2913,10 +2950,11 @@ def create_indexes():
         except Exception as e:
             print(f"⚠️  Предупреждение при создании индексов: {e}")
 
-def create_order(client_id, city, categories, description, photos, budget_type="none", budget_value=0):
+def create_order(client_id, city, categories, description, photos, videos=None, budget_type="none", budget_value=0):
     """
     Создаёт новый заказ.
     ИСПРАВЛЕНО: Валидация file_id для фотографий.
+    ОБНОВЛЕНО: Добавлена поддержка видео.
     """
     # Rate limiting: проверяем лимит заказов
     allowed, remaining_seconds = _rate_limiter.is_allowed(client_id, "create_order", RATE_LIMIT_ORDERS_PER_HOUR)
@@ -2933,6 +2971,11 @@ def create_order(client_id, city, categories, description, photos, budget_type="
         validated_photos = validate_photo_list(photos, "order_photos")
         photos = validated_photos  # Сохраняем как список для последующего преобразования
 
+    # Валидация file_id для видео
+    if videos:
+        validated_videos = validate_photo_list(videos, "order_videos")
+        videos = validated_videos
+
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
@@ -2945,17 +2988,20 @@ def create_order(client_id, city, categories, description, photos, budget_type="
         # Преобразуем список фото в строку
         photos_str = ",".join(photos) if isinstance(photos, list) else photos
 
+        # Преобразуем список видео в строку
+        videos_str = ",".join(videos) if videos and isinstance(videos, list) else (videos if videos else "")
+
         cursor.execute("""
             INSERT INTO orders (
-                client_id, city, category, description, photos,
+                client_id, city, category, description, photos, videos,
                 budget_type, budget_value, status, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)
-        """, (client_id, city, categories_str, description, photos_str, budget_type, budget_value, now))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+        """, (client_id, city, categories_str, description, photos_str, videos_str, budget_type, budget_value, now))
 
         order_id = cursor.lastrowid
         conn.commit()  # КРИТИЧНО: Фиксируем транзакцию создания заказа
-        logger.info(f"✅ Создан заказ: ID={order_id}, Клиент={client_id}, Город={city}, Категории={categories_str}")
+        logger.info(f"✅ Создан заказ: ID={order_id}, Клиент={client_id}, Город={city}, Категории={categories_str}, Фото={len(photos) if photos else 0}, Видео={len(videos) if videos else 0}")
 
     # ИСПРАВЛЕНИЕ: Добавляем категории в нормализованную таблицу
     if categories:
