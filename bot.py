@@ -77,6 +77,7 @@ def main():
     db.migrate_add_premium_features()  # Добавляем поля для premium функций (выключены по умолчанию)
     db.migrate_add_moderation()  # Добавляем поля для модерации и банов
     db.migrate_add_regions_to_clients()  # Добавляем поле regions в таблицу clients
+    db.migrate_add_videos_to_orders()  # Добавляем поле videos в таблицу orders
     db.migrate_add_chat_system()  # Создаём таблицы для чата между клиентом и мастером
     db.migrate_add_transactions()  # Создаём таблицу для истории транзакций
     db.migrate_add_notification_settings()  # Добавляем настройки уведомлений для мастеров
