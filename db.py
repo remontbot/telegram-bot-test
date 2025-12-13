@@ -3860,3 +3860,135 @@ def add_test_workers(telegram_id):
         message = f"✅ Успешно добавлено:\n• {workers_created} тестовых мастеров\n• {bids_created} откликов на заказы"
         return (True, message, workers_created)
 
+
+
+def migrate_add_ready_in_days_and_notifications():
+    """
+    Добавляет:
+    1. Поле ready_in_days в таблицу bids (срок готовности мастера)
+    2. Таблицу worker_notifications (для обновляемых уведомлений)
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            # 1. Добавляем поле ready_in_days в bids
+            if USE_POSTGRES:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'bids' AND column_name = 'ready_in_days'
+                        ) THEN
+                            ALTER TABLE bids ADD COLUMN ready_in_days INTEGER DEFAULT 7;
+                        END IF;
+                    END $$;
+                """)
+            else:
+                cursor.execute("PRAGMA table_info(bids)")
+                columns = [column[1] for column in cursor.fetchall()]
+
+                if 'ready_in_days' not in columns:
+                    cursor.execute("ALTER TABLE bids ADD COLUMN ready_in_days INTEGER DEFAULT 7")
+
+            # 2. Создаем таблицу worker_notifications
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS worker_notifications (
+                    user_id INTEGER PRIMARY KEY,
+                    notification_message_id INTEGER,
+                    notification_chat_id INTEGER,
+                    last_update_timestamp INTEGER,
+                    available_orders_count INTEGER DEFAULT 0,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """)
+
+            conn.commit()
+            print("✅ Migration completed: added ready_in_days and worker_notifications!")
+
+        except Exception as e:
+            print(f"⚠️  Error in migrate_add_ready_in_days_and_notifications: {e}")
+            import traceback
+            traceback.print_exc()
+
+
+# === WORKER NOTIFICATIONS HELPERS ===
+
+def save_worker_notification(worker_user_id, message_id, chat_id, orders_count=0):
+    """Сохраняет или обновляет ID сообщения с уведомлением для мастера"""
+    from datetime import datetime
+    
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        timestamp = int(datetime.now().timestamp())
+        
+        cursor.execute("""
+            INSERT OR REPLACE INTO worker_notifications 
+            (user_id, notification_message_id, notification_chat_id, last_update_timestamp, available_orders_count)
+            VALUES (?, ?, ?, ?, ?)
+        """, (worker_user_id, message_id, chat_id, timestamp, orders_count))
+        conn.commit()
+
+
+def get_worker_notification(worker_user_id):
+    """Получает сохраненное уведомление мастера"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT * FROM worker_notifications WHERE user_id = ?
+        """, (worker_user_id,))
+        return cursor.fetchone()
+
+
+def delete_worker_notification(worker_user_id):
+    """Удаляет сохраненное уведомление (когда мастер просмотрел все заказы)"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("DELETE FROM worker_notifications WHERE user_id = ?", (worker_user_id,))
+        conn.commit()
+
+
+def count_available_orders_for_worker(worker_user_id):
+    """
+    Подсчитывает количество доступных заказов для мастера
+    (в его городе и его категориях, на которые он еще не откликнулся)
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        
+        # Получаем worker_id по user_id
+        cursor.execute("SELECT id, city, categories FROM workers WHERE user_id = ?", (worker_user_id,))
+        worker = cursor.fetchone()
+        
+        if not worker:
+            return 0
+        
+        worker_dict = dict(worker) if hasattr(worker, 'keys') else {'id': worker[0], 'city': worker[1], 'categories': worker[2]}
+        worker_id = worker_dict['id']
+        city = worker_dict['city']
+        categories = worker_dict['categories']
+        
+        if not categories:
+            return 0
+        
+        # Разбиваем категории мастера
+        worker_categories = [cat.strip() for cat in categories.split(',')]
+        
+        # Считаем заказы
+        count = 0
+        for category in worker_categories:
+            # Ищем заказы в городе мастера и его категории, на которые он еще не откликнулся
+            cursor.execute("""
+                SELECT COUNT(*) FROM orders
+                WHERE status = 'open'
+                AND city = ?
+                AND category LIKE ?
+                AND id NOT IN (
+                    SELECT order_id FROM bids WHERE worker_id = ?
+                )
+            """, (city, f"%{category}%", worker_id))
+            result = cursor.fetchone()
+            count += result[0] if result else 0
+        
+        return count
