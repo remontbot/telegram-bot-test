@@ -2844,129 +2844,202 @@ async def edit_categories_start(update: Update, context: ContextTypes.DEFAULT_TY
     """Начало редактирования категорий"""
     query = update.callback_query
     await query.answer()
-    
+
     telegram_id = query.from_user.id
     user = db.get_user(telegram_id)
     user_dict = dict(user)
     user_id = user_dict.get("id")
-    
+
     worker_profile = db.get_worker_profile(user_id)
     profile_dict = dict(worker_profile)
     current_categories = profile_dict.get("categories") or "—"
-    
+
     context.user_data["edit_categories"] = []
-    
-    keyboard = [
-        [
-            InlineKeyboardButton("Электрика", callback_data="editcat_Электрика"),
-            InlineKeyboardButton("Сантехника", callback_data="editcat_Сантехника"),
-        ],
-        [
-            InlineKeyboardButton("Отделка", callback_data="editcat_Отделка"),
-            InlineKeyboardButton("Сборка мебели", callback_data="editcat_Сборка мебели"),
-        ],
-        [
-            InlineKeyboardButton("Окна/двери", callback_data="editcat_Окна/двери"),
-            InlineKeyboardButton("Бытовая техника", callback_data="editcat_Бытовая техника"),
-        ],
-        [
-            InlineKeyboardButton("Напольные покрытия", callback_data="editcat_Напольные покрытия"),
-            InlineKeyboardButton("Мелкий ремонт", callback_data="editcat_Мелкий ремонт"),
-        ],
-        [
-            InlineKeyboardButton("Дизайн", callback_data="editcat_Дизайн"),
-            InlineKeyboardButton("Другое", callback_data="editcat_Другое"),
-        ],
-        [InlineKeyboardButton("✅ Сохранить выбор", callback_data="editcat_done")],
-        [InlineKeyboardButton("❌ Отмена", callback_data="worker_profile")],
-    ]
-    
+
+    # Показываем 7 основных категорий
+    keyboard = []
+    for category_name, category_data in WORK_CATEGORIES.items():
+        keyboard.append([InlineKeyboardButton(
+            category_name,
+            callback_data=f"editmaincat_{category_name}"
+        )])
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="worker_profile")])
+
     await query.edit_message_text(
         f"🔧 <b>Изменение видов работ</b>\n\n"
         f"Текущие категории:\n<b>{current_categories}</b>\n\n"
-        f"Выберите новые категории (можно несколько):\n"
-        f"Нажимайте на кнопки для добавления/удаления.\n"
-        f"Когда закончите — нажмите «✅ Сохранить выбор»",
+        f"Выберите основную категорию работ:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
-    return EDIT_CATEGORIES_SELECT
+    return EDIT_MAIN_CATEGORY
 
 
-async def edit_categories_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора категорий"""
+async def edit_main_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора основной категории при редактировании"""
+    query = update.callback_query
+    await query.answer()
+
+    main_category = query.data.replace("editmaincat_", "")
+    context.user_data["edit_current_main_category"] = main_category
+
+    # Получаем подкатегории для выбранной категории
+    subcategories = WORK_CATEGORIES[main_category]["subcategories"]
+
+    # Создаем кнопки подкатегорий (2 в ряд) с галочками
+    keyboard = []
+    row = []
+    for subcat in subcategories:
+        # Проверяем выбрана ли уже эта подкатегория
+        is_selected = subcat in context.user_data.get("edit_categories", [])
+        button_text = f"✅ {subcat}" if is_selected else subcat
+
+        row.append(InlineKeyboardButton(button_text, callback_data=f"editsubcat_{subcat}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    # Добавляем кнопку завершения
+    keyboard.append([InlineKeyboardButton("✅ Завершить выбор категорий", callback_data="editsubcat_done")])
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="worker_profile")])
+
+    emoji = WORK_CATEGORIES[main_category]["emoji"]
+
+    await query.edit_message_text(
+        f"{emoji} <b>Категория:</b> {main_category}\n\n"
+        "🔧 <b>Выберите подкатегории:</b>\n\n"
+        "Нажимайте подходящие кнопки (можно несколько).\n"
+        "Когда закончите — нажмите «✅ Завершить выбор категорий».",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return EDIT_SUBCATEGORY_SELECT
+
+
+async def edit_subcategory_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора подкатегорий при редактировании"""
     query = update.callback_query
     await query.answer()
     data = query.data
-    selected = data.split("_", 1)[1]
-    
+    selected = data.replace("editsubcat_", "")
+
     if selected == "done":
-        if not context.user_data["edit_categories"]:
-            await query.answer("❌ Выберите хотя бы одну категорию!", show_alert=True)
-            return EDIT_CATEGORIES_SELECT
-        
-        telegram_id = query.from_user.id
-        user = db.get_user(telegram_id)
-        user_dict = dict(user)
-        user_id = user_dict.get("id")
-        
-        new_categories = ", ".join(context.user_data["edit_categories"])
-        db.update_worker_field(user_id, "categories", new_categories)
-        
-        context.user_data.clear()
-        
-        keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
-        
+        # Проверяем что выбрана хотя бы одна подкатегория
+        if not context.user_data.get("edit_categories"):
+            await query.answer("Выберите хотя бы одну подкатегорию!", show_alert=True)
+            return EDIT_SUBCATEGORY_SELECT
+
+        # Спрашиваем хочет ли добавить еще категории
+        keyboard = [
+            [InlineKeyboardButton("✅ Да, добавить еще", callback_data="editmore_yes")],
+            [InlineKeyboardButton("💾 Нет, сохранить изменения", callback_data="editmore_no")],
+        ]
+
+        categories_text = ", ".join(context.user_data["edit_categories"])
+
         await query.edit_message_text(
-            f"✅ Виды работ успешно изменены на:\n<b>{new_categories}</b>",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            f"✅ <b>Выбранные категории:</b>\n{categories_text}\n\n"
+            "Хотите добавить еще категории из других разделов?",
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
-        return ConversationHandler.END
-    
-    elif selected == "Другое":
-        await query.edit_message_text(
-            "Введите свои виды работ через запятую.\n"
-            "Например: «Покраска фасадов, декорирование»\n\n"
-            "Или /cancel для отмены"
-        )
-        return EDIT_CATEGORIES_OTHER
-    
+        return EDIT_ASK_MORE_CATEGORIES
+
     else:
+        # Переключаем выбор подкатегории
+        if "edit_categories" not in context.user_data:
+            context.user_data["edit_categories"] = []
+
         if selected not in context.user_data["edit_categories"]:
             context.user_data["edit_categories"].append(selected)
             await query.answer(f"✅ Добавлено: {selected}")
         else:
             context.user_data["edit_categories"].remove(selected)
             await query.answer(f"❌ Убрано: {selected}")
-        
-        return EDIT_CATEGORIES_SELECT
+
+        # Обновляем кнопки с галочками
+        main_category = context.user_data["edit_current_main_category"]
+        subcategories = WORK_CATEGORIES[main_category]["subcategories"]
+
+        keyboard = []
+        row = []
+        for subcat in subcategories:
+            is_selected = subcat in context.user_data["edit_categories"]
+            button_text = f"✅ {subcat}" if is_selected else subcat
+
+            row.append(InlineKeyboardButton(button_text, callback_data=f"editsubcat_{subcat}"))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+
+        keyboard.append([InlineKeyboardButton("✅ Завершить выбор категорий", callback_data="editsubcat_done")])
+        keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="worker_profile")])
+
+        emoji = WORK_CATEGORIES[main_category]["emoji"]
+
+        await query.edit_message_text(
+            f"{emoji} <b>Категория:</b> {main_category}\n\n"
+            "🔧 <b>Выберите подкатегории:</b>\n\n"
+            "Нажимайте подходящие кнопки (можно несколько).\n"
+            "Когда закончите — нажмите «✅ Завершить выбор категорий».",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+        return EDIT_SUBCATEGORY_SELECT
 
 
-async def edit_categories_other(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка кастомных категорий"""
-    user_cats = update.message.text.strip()
-    custom_list = [c.strip() for c in user_cats.split(",") if c.strip()]
-    context.user_data["edit_categories"].extend(custom_list)
-    
-    telegram_id = update.effective_user.id
-    user = db.get_user(telegram_id)
-    user_dict = dict(user)
-    user_id = user_dict.get("id")
-    
-    new_categories = ", ".join(context.user_data["edit_categories"])
-    db.update_worker_field(user_id, "categories", new_categories)
-    
-    context.user_data.clear()
-    
-    keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
-    
-    await update.message.reply_text(
-        f"✅ Виды работ успешно изменены на:\n<b>{new_categories}</b>",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML",
-    )
-    return ConversationHandler.END
+async def edit_ask_more_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Спрашиваем хочет ли добавить еще категории при редактировании"""
+    query = update.callback_query
+    await query.answer()
+
+    choice = query.data.replace("editmore_", "")
+
+    if choice == "yes":
+        # Возвращаемся к выбору основной категории
+        keyboard = []
+        for category_name, category_data in WORK_CATEGORIES.items():
+            keyboard.append([InlineKeyboardButton(
+                category_name,
+                callback_data=f"editmaincat_{category_name}"
+            )])
+        keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="worker_profile")])
+
+        categories_text = ", ".join(context.user_data["edit_categories"])
+
+        await query.edit_message_text(
+            f"✅ <b>Уже выбрано:</b> {categories_text}\n\n"
+            "🔧 <b>Выберите основную категорию для добавления:</b>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return EDIT_MAIN_CATEGORY
+
+    else:
+        # Сохраняем изменения
+        telegram_id = query.from_user.id
+        user = db.get_user(telegram_id)
+        user_dict = dict(user)
+        user_id = user_dict.get("id")
+
+        new_categories = ", ".join(context.user_data["edit_categories"])
+        db.update_worker_field(user_id, "categories", new_categories)
+
+        context.user_data.clear()
+
+        keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
+
+        await query.edit_message_text(
+            f"✅ Виды работ успешно изменены на:\n<b>{new_categories}</b>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
 
 
 async def edit_experience_start(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -301,11 +301,14 @@ def main():
             handlers.EDIT_CITY: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.edit_city_save),
             ],
-            handlers.EDIT_CATEGORIES_SELECT: [
-                CallbackQueryHandler(handlers.edit_categories_select, pattern="^editcat_"),
+            handlers.EDIT_MAIN_CATEGORY: [
+                CallbackQueryHandler(handlers.edit_main_category, pattern="^editmaincat_"),
             ],
-            handlers.EDIT_CATEGORIES_OTHER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.edit_categories_other),
+            handlers.EDIT_SUBCATEGORY_SELECT: [
+                CallbackQueryHandler(handlers.edit_subcategory_select, pattern="^editsubcat_"),
+            ],
+            handlers.EDIT_ASK_MORE_CATEGORIES: [
+                CallbackQueryHandler(handlers.edit_ask_more_categories, pattern="^editmore_"),
             ],
             handlers.EDIT_EXPERIENCE: [
                 CallbackQueryHandler(handlers.edit_experience_save, pattern="^editexp_"),
