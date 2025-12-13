@@ -306,7 +306,11 @@ def main():
             handlers.EDIT_PHONE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.edit_phone_save),
             ],
+            handlers.EDIT_REGION_SELECT: [
+                CallbackQueryHandler(handlers.edit_region_select, pattern="^editregion_"),
+            ],
             handlers.EDIT_CITY: [
+                CallbackQueryHandler(handlers.edit_city_select, pattern="^editcity_"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.edit_city_save),
             ],
             handlers.EDIT_MAIN_CATEGORY: [

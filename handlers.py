@@ -2822,28 +2822,135 @@ async def edit_phone_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def edit_city_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало редактирования города"""
+    """Начало редактирования города - выбор региона"""
     query = update.callback_query
     await query.answer()
-    
+
     telegram_id = query.from_user.id
     user = db.get_user(telegram_id)
     user_dict = dict(user)
     user_id = user_dict.get("id")
-    
+
     worker_profile = db.get_worker_profile(user_id)
     profile_dict = dict(worker_profile)
     current_city = profile_dict.get("city") or "—"
-    
+
+    # Показываем регионы Беларуси
+    keyboard = []
+    for region_name, region_data in BELARUS_REGIONS.items():
+        keyboard.append([InlineKeyboardButton(
+            region_data["display"],
+            callback_data=f"editregion_{region_name}"
+        )])
+
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="worker_profile")])
+
     await query.edit_message_text(
         f"🏙 <b>Изменение города</b>\n\n"
         f"Текущий город: <b>{current_city}</b>\n\n"
-        f"Введите новый город:\n"
-        f"Например: Минск, Гомель, Брест\n\n"
-        f"Или отправьте /cancel для отмены",
+        f"Выберите регион или город:",
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
-    return EDIT_CITY
+    return EDIT_REGION_SELECT
+
+
+
+
+async def edit_region_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора региона при редактировании города"""
+    query = update.callback_query
+    await query.answer()
+
+    region = query.data.replace("editregion_", "")
+    region_data = BELARUS_REGIONS.get(region)
+
+    if not region_data:
+        await query.edit_message_text("❌ Ошибка выбора региона. Попробуйте снова.")
+        return EDIT_REGION_SELECT
+
+    context.user_data["edit_region"] = region
+
+    # Если выбран Минск или "Вся Беларусь" - сразу сохраняем
+    if region_data["type"] in ["city", "country"]:
+        telegram_id = query.from_user.id
+        user = db.get_user(telegram_id)
+        user_dict = dict(user)
+        user_id = user_dict.get("id")
+
+        db.update_worker_field(user_id, "city", region)
+        db.update_worker_field(user_id, "regions", region)
+
+        keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
+
+        await query.edit_message_text(
+            f"✅ Город успешно изменён на: <b>{region_data['display']}</b>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
+
+    # Если выбрана область - показываем города
+    else:
+        cities = region_data.get("cities", [])
+        keyboard = []
+        row = []
+        for city in cities:
+            row.append(InlineKeyboardButton(city, callback_data=f"editcity_{city}"))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+
+        # Добавляем кнопку "Другой город в области"
+        keyboard.append([InlineKeyboardButton(
+            f"📍 Другой город в области",
+            callback_data="editcity_other"
+        )])
+        keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="worker_profile")])
+
+        await query.edit_message_text(
+            f"📍 Область: {region_data['display']}\n\n"
+            "🏙 Выберите город:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return EDIT_CITY
+
+
+async def edit_city_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора города из списка при редактировании"""
+    query = update.callback_query
+    await query.answer()
+
+    city = query.data.replace("editcity_", "")
+
+    if city == "other":
+        await query.edit_message_text(
+            "🏙 Напишите название города:"
+        )
+        return EDIT_CITY
+    else:
+        # Сохраняем город
+        telegram_id = query.from_user.id
+        user = db.get_user(telegram_id)
+        user_dict = dict(user)
+        user_id = user_dict.get("id")
+
+        region = context.user_data.get("edit_region", city)
+        db.update_worker_field(user_id, "city", city)
+        db.update_worker_field(user_id, "regions", region)
+
+        keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
+
+        await query.edit_message_text(
+            f"✅ Город успешно изменён на: <b>{city}</b>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
+
 
 
 async def edit_city_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
