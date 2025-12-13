@@ -335,11 +335,12 @@ def _get_bids_word(count):
     # Состояния для создания отклика
     BID_ENTER_PRICE,
     BID_SELECT_CURRENCY,
+    BID_SELECT_READY_DAYS,
     BID_ENTER_COMMENT,
     # Состояния для оставления отзыва
     REVIEW_SELECT_RATING,
     REVIEW_ENTER_COMMENT,
-) = range(43)
+) = range(44)
 
 
 def is_valid_name(name: str) -> bool:
@@ -4238,10 +4239,23 @@ async def view_order_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        # Применяем сортировку, если выбрана
+        sort_order = context.user_data.get('bids_sort_order', 'default')
+        bids_list = [dict(bid) for bid in bids]
+
+        if sort_order == 'price_low':
+            bids_list.sort(key=lambda x: x.get('proposed_price', 0))
+        elif sort_order == 'price_high':
+            bids_list.sort(key=lambda x: x.get('proposed_price', 0), reverse=True)
+        elif sort_order == 'rating':
+            bids_list.sort(key=lambda x: x.get('worker_rating', 0), reverse=True)
+        elif sort_order == 'timeline':
+            bids_list.sort(key=lambda x: x.get('ready_in_days', 999))
+
         # Сохраняем отклики в контексте для навигации
         context.user_data['viewing_bids'] = {
             'order_id': order_id,
-            'bids': [dict(bid) for bid in bids],
+            'bids': bids_list,
             'current_index': 0
         }
 
@@ -4256,6 +4270,31 @@ async def view_order_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+
+
+async def sort_bids_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик сортировки откликов"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # Извлекаем order_id и тип сортировки из callback_data
+        # Формат: sort_bids_{order_id}_{sort_type}
+        parts = query.data.replace("sort_bids_", "").split("_")
+        order_id = int(parts[0])
+        sort_type = "_".join(parts[1:])  # price_low, price_high, rating, timeline
+
+        # Сохраняем выбранную сортировку
+        context.user_data['bids_sort_order'] = sort_type
+
+        # Перезагружаем отклики с новой сортировкой
+        # Используем фейковый callback_data для повторного вызова view_order_bids
+        query.data = f"view_bids_{order_id}"
+        await view_order_bids(update, context)
+
+    except Exception as e:
+        logger.error(f"Ошибка в sort_bids_handler: {e}", exc_info=True)
+        await query.answer("❌ Ошибка при сортировке откликов", show_alert=True)
 
 
 async def show_bid_card(update: Update, context: ContextTypes.DEFAULT_TYPE, query=None):
@@ -4314,9 +4353,30 @@ async def show_bid_card(update: Update, context: ContextTypes.DEFAULT_TYPE, quer
         text += "\n"
 
         # Предложенная цена
-        price = bid.get('price', 0)
+        price = bid.get('proposed_price', 0)
         currency = bid.get('currency', 'BYN')
-        text += f"💰 <b>Предложенная цена: {price} {currency}</b>\n\n"
+        text += f"💰 <b>Предложенная цена: {price} {currency}</b>\n"
+
+        # Срок готовности
+        ready_in_days = bid.get('ready_in_days', None)
+        if ready_in_days is not None:
+            if ready_in_days == 0:
+                ready_text = "Сегодня"
+            elif ready_in_days == 1:
+                ready_text = "Завтра"
+            elif ready_in_days == 3:
+                ready_text = "Через 3 дня"
+            elif ready_in_days == 7:
+                ready_text = "Через неделю"
+            elif ready_in_days == 14:
+                ready_text = "Через 2 недели"
+            elif ready_in_days == 30:
+                ready_text = "Через месяц"
+            else:
+                ready_text = f"Через {ready_in_days} дн."
+            text += f"⏱ <b>Готов приступить:</b> {ready_text}\n"
+
+        text += "\n"
 
         # Комментарий к отклику
         comment = bid.get('comment', '')
@@ -4334,6 +4394,33 @@ async def show_bid_card(update: Update, context: ContextTypes.DEFAULT_TYPE, quer
 
         # Кнопки навигации и действий
         keyboard = []
+
+        # Сортировка (если откликов больше 1)
+        if len(bids) > 1:
+            current_sort = context.user_data.get('bids_sort_order', 'default')
+            sort_buttons = [
+                InlineKeyboardButton(
+                    "💰⬆️" if current_sort == "price_low" else "💰⬆️",
+                    callback_data=f"sort_bids_{bid_data['order_id']}_price_low"
+                ),
+                InlineKeyboardButton(
+                    "💰⬇️" if current_sort == "price_high" else "💰⬇️",
+                    callback_data=f"sort_bids_{bid_data['order_id']}_price_high"
+                ),
+            ]
+            keyboard.append(sort_buttons)
+
+            sort_buttons2 = [
+                InlineKeyboardButton(
+                    "⭐" if current_sort == "rating" else "⭐",
+                    callback_data=f"sort_bids_{bid_data['order_id']}_rating"
+                ),
+                InlineKeyboardButton(
+                    "⏱" if current_sort == "timeline" else "⏱",
+                    callback_data=f"sort_bids_{bid_data['order_id']}_timeline"
+                ),
+            ]
+            keyboard.append(sort_buttons2)
 
         # Навигация (если откликов больше 1)
         if len(bids) > 1:
@@ -5697,28 +5784,32 @@ async def worker_bid_enter_price(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data['bid_price'] = price
     currency = context.user_data.get('bid_currency', 'BYN')
 
-    # Спрашиваем комментарий
+    # Спрашиваем срок готовности
+    keyboard = [
+        [
+            InlineKeyboardButton("Сегодня", callback_data="ready_days_0"),
+            InlineKeyboardButton("Завтра", callback_data="ready_days_1"),
+        ],
+        [
+            InlineKeyboardButton("Через 3 дня", callback_data="ready_days_3"),
+            InlineKeyboardButton("Через неделю", callback_data="ready_days_7"),
+        ],
+        [
+            InlineKeyboardButton("Через 2 недели", callback_data="ready_days_14"),
+            InlineKeyboardButton("Через месяц", callback_data="ready_days_30"),
+        ],
+        [InlineKeyboardButton("❌ Отмена", callback_data="cancel_bid")],
+    ]
+
     await update.message.reply_text(
         f"💰 Ваша цена: <b>{price} {currency}</b>\n\n"
-        "📝 Хотите добавить комментарий к отклику?\n\n"
-        "💡 <b>Это ваш шанс выделиться!</b> Расскажите:\n"
-        "✓ Почему именно такая цена (материалы, сложность работ)\n"
-        "✓ Что входит в стоимость, а что оплачивается отдельно\n"
-        "✓ Когда можете приступить к работе\n"
-        "✓ Ваш опыт в подобных проектах\n\n"
-        "<b>Примеры:</b>\n"
-        "• «Цена с моими материалами. Могу начать завтра. Делал 20+ таких объектов»\n"
-        "• «В стоимость входит работа и расходники. Выезд бесплатный. Опыт 8 лет»\n"
-        "• «Цена за работу, материалы оплачиваете отдельно. Гарантия 2 года»\n\n"
-        "Напишите комментарий или нажмите «Пропустить»:",
+        "⏱ <b>Когда сможете приступить к работе?</b>\n\n"
+        "Выберите срок готовности:",
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("⏭ Пропустить", callback_data="bid_skip_comment"),
-            InlineKeyboardButton("❌ Отмена", callback_data="cancel_bid")
-        ]])
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-    return BID_ENTER_COMMENT
+    return BID_SELECT_READY_DAYS
 
 
 async def worker_bid_select_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5753,11 +5844,63 @@ async def worker_bid_select_currency(update: Update, context: ContextTypes.DEFAU
     return BID_ENTER_PRICE
 
 
+async def worker_bid_select_ready_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора срока готовности - переход к комментарию"""
+    query = update.callback_query
+    await query.answer()
+
+    # Извлекаем количество дней из callback_data
+    ready_days = int(query.data.replace("ready_days_", ""))
+    context.user_data['bid_ready_days'] = ready_days
+
+    # Формируем текст для отображения срока
+    if ready_days == 0:
+        ready_text = "Сегодня"
+    elif ready_days == 1:
+        ready_text = "Завтра"
+    elif ready_days == 3:
+        ready_text = "Через 3 дня"
+    elif ready_days == 7:
+        ready_text = "Через неделю"
+    elif ready_days == 14:
+        ready_text = "Через 2 недели"
+    elif ready_days == 30:
+        ready_text = "Через месяц"
+    else:
+        ready_text = f"Через {ready_days} дн."
+
+    price = context.user_data['bid_price']
+    currency = context.user_data['bid_currency']
+
+    # Спрашиваем комментарий
+    await query.edit_message_text(
+        f"💰 Ваша цена: <b>{price} {currency}</b>\n"
+        f"⏱ Срок: <b>{ready_text}</b>\n\n"
+        "📝 Хотите добавить комментарий к отклику?\n\n"
+        "💡 <b>Это ваш шанс выделиться!</b> Расскажите:\n"
+        "✓ Почему именно такая цена (материалы, сложность работ)\n"
+        "✓ Что входит в стоимость, а что оплачивается отдельно\n"
+        "✓ Ваш опыт в подобных проектах\n\n"
+        "<b>Примеры:</b>\n"
+        "• «Цена с моими материалами. Делал 20+ таких объектов»\n"
+        "• «В стоимость входит работа и расходники. Выезд бесплатный. Опыт 8 лет»\n"
+        "• «Цена за работу, материалы оплачиваете отдельно. Гарантия 2 года»\n\n"
+        "Напишите комментарий или нажмите «Пропустить»:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("⏭ Пропустить", callback_data="bid_skip_comment"),
+            InlineKeyboardButton("❌ Отмена", callback_data="cancel_bid")
+        ]])
+    )
+
+    return BID_ENTER_COMMENT
+
+
 async def worker_bid_enter_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка ввода комментария"""
     comment = update.message.text.strip()
     context.user_data['bid_comment'] = comment
-    
+
     return await worker_bid_publish(update, context)
 
 
@@ -5779,7 +5922,8 @@ async def worker_bid_publish(update: Update, context: ContextTypes.DEFAULT_TYPE)
         price = context.user_data['bid_price']
         currency = context.user_data['bid_currency']
         comment = context.user_data.get('bid_comment', '')
-        
+        ready_in_days = context.user_data.get('bid_ready_days', 7)
+
         # Получаем worker_id
         if update.callback_query:
             telegram_id = update.callback_query.from_user.id
@@ -5787,7 +5931,7 @@ async def worker_bid_publish(update: Update, context: ContextTypes.DEFAULT_TYPE)
         else:
             telegram_id = update.effective_user.id
             message = update.message
-        
+
         user = db.get_user(telegram_id)
         user_dict = dict(user)
         worker_profile = db.get_worker_profile(user_dict["id"])
@@ -5800,7 +5944,8 @@ async def worker_bid_publish(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 worker_id=worker_profile_dict["id"],
                 proposed_price=price,
                 currency=currency,
-                comment=comment
+                comment=comment,
+                ready_in_days=ready_in_days
             )
         except ValueError as e:
             # Rate limiting error
@@ -6568,6 +6713,7 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
                         await notify_worker_new_order(
                             context,
                             worker_user['telegram_id'],
+                            worker_dict['user_id'],  # Добавляем worker_user_id для системы обновляемых уведомлений
                             order_dict
                         )
 
@@ -7037,22 +7183,72 @@ async def show_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===== NOTIFICATION HELPERS =====
 
-async def notify_worker_new_order(context, worker_telegram_id, order_dict):
-    """Уведомление мастеру о новом заказе в его категории"""
+def declension_orders(count):
+    """Склонение слова 'заказ' в зависимости от числа"""
+    if count % 10 == 1 and count % 100 != 11:
+        return "доступный заказ"
+    elif count % 10 in [2, 3, 4] and count % 100 not in [12, 13, 14]:
+        return "доступных заказа"
+    else:
+        return "доступных заказов"
+
+
+async def notify_worker_new_order(context, worker_telegram_id, worker_user_id, order_dict):
+    """
+    Уведомление мастеру о новом заказе - ОБНОВЛЯЕТ существующее сообщение.
+    Вместо спама отдельными сообщениями показывает одно обновляемое сообщение с количеством.
+    """
     try:
+        # Подсчитываем все доступные заказы для этого мастера
+        available_orders_count = db.count_available_orders_for_worker(worker_user_id)
+
         text = (
-            f"🔔 <b>Новый заказ!</b>\n\n"
-            f"📍 Город: {order_dict.get('city', 'Не указан')}\n"
-            f"🔧 Категория: {order_dict.get('category', 'Не указана')}\n\n"
-            f"📝 <b>Описание:</b>\n{order_dict.get('description', 'Без описания')}\n\n"
-            f"💡 Перейдите в раздел «Доступные заказы», чтобы откликнуться!"
+            f"🔔 <b>У вас {available_orders_count} {declension_orders(available_orders_count)}!</b>\n\n"
+            f"📍 Последний: {order_dict.get('city', 'Не указан')} · {order_dict.get('category', 'Не указана')}\n\n"
+            f"👇 Нажмите кнопку чтобы посмотреть все доступные заказы"
         )
 
-        await context.bot.send_message(
-            chat_id=worker_telegram_id,
-            text=text,
-            parse_mode="HTML"
-        )
+        keyboard = [[InlineKeyboardButton("📋 Посмотреть заказы", callback_data="worker_available_orders")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Пытаемся получить существующее уведомление
+        notification = db.get_worker_notification(worker_user_id)
+
+        try:
+            if notification and notification['notification_message_id']:
+                # Пытаемся РЕДАКТИРОВАТЬ существующее сообщение
+                await context.bot.edit_message_text(
+                    chat_id=notification['notification_chat_id'],
+                    message_id=notification['notification_message_id'],
+                    text=text,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML"
+                )
+                # Обновляем счетчик
+                db.save_worker_notification(
+                    worker_user_id,
+                    notification['notification_message_id'],
+                    notification['notification_chat_id'],
+                    available_orders_count
+                )
+                logger.info(f"✅ Обновлено уведомление для мастера {worker_user_id}: {available_orders_count} заказов")
+            else:
+                # Сообщения нет - отправляем НОВОЕ
+                raise Exception("No existing notification")
+
+        except Exception as edit_error:
+            # Не удалось отредактировать (сообщение удалено или не существует) - отправляем новое
+            logger.info(f"Отправка нового уведомления для мастера {worker_user_id}: {edit_error}")
+            msg = await context.bot.send_message(
+                chat_id=worker_telegram_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode="HTML"
+            )
+            # Сохраняем message_id для будущих обновлений
+            db.save_worker_notification(worker_user_id, msg.message_id, worker_telegram_id, available_orders_count)
+            logger.info(f"✅ Отправлено новое уведомление мастеру {worker_user_id}")
+
         return True
     except Exception as e:
         logger.error(f"Ошибка при отправке уведомления мастеру {worker_telegram_id}: {e}")

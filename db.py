@@ -3356,7 +3356,7 @@ def check_expired_orders():
         return result
 
 
-def create_bid(order_id, worker_id, proposed_price, currency, comment=""):
+def create_bid(order_id, worker_id, proposed_price, currency, comment="", ready_in_days=7):
     """Создаёт отклик мастера на заказ"""
     # Rate limiting: проверяем лимит откликов
     allowed, remaining_seconds = _rate_limiter.is_allowed(worker_id, "create_bid", RATE_LIMIT_BIDS_PER_HOUR)
@@ -3375,14 +3375,14 @@ def create_bid(order_id, worker_id, proposed_price, currency, comment=""):
         cursor.execute("""
             INSERT INTO bids (
                 order_id, worker_id, proposed_price, currency,
-                comment, created_at, status
+                comment, ready_in_days, created_at, status
             )
-            VALUES (?, ?, ?, ?, ?, ?, 'active')
-        """, (order_id, worker_id, proposed_price, currency, comment, now))
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'active')
+        """, (order_id, worker_id, proposed_price, currency, comment, ready_in_days, now))
 
         conn.commit()
         bid_id = cursor.lastrowid
-        logger.info(f"✅ Создан отклик: ID={bid_id}, Заказ={order_id}, Мастер={worker_id}, Цена={proposed_price} {currency}")
+        logger.info(f"✅ Создан отклик: ID={bid_id}, Заказ={order_id}, Мастер={worker_id}, Цена={proposed_price} {currency}, Срок={ready_in_days} дн.")
         return bid_id
 
 

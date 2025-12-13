@@ -83,6 +83,7 @@ def main():
     db.migrate_add_notification_settings()  # Добавляем настройки уведомлений для мастеров
     db.migrate_normalize_categories()  # ИСПРАВЛЕНИЕ: Нормализация категорий мастеров (точный поиск вместо LIKE)
     db.migrate_normalize_order_categories()  # ИСПРАВЛЕНИЕ: Нормализация категорий заказов (точный поиск вместо LIKE)
+    db.migrate_add_ready_in_days_and_notifications()  # Добавляем ready_in_days в bids и worker_notifications
     db.create_indexes()  # Создаем индексы для оптимизации производительности
 
     token = get_bot_token()
@@ -352,6 +353,9 @@ def main():
             ],
             handlers.BID_ENTER_PRICE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.worker_bid_enter_price),
+            ],
+            handlers.BID_SELECT_READY_DAYS: [
+                CallbackQueryHandler(handlers.worker_bid_select_ready_days, pattern="^ready_days_"),
             ],
             handlers.BID_ENTER_COMMENT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.worker_bid_enter_comment),
@@ -655,6 +659,13 @@ def main():
         CallbackQueryHandler(
             handlers.view_order_bids,
             pattern="^view_bids_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.sort_bids_handler,
+            pattern="^sort_bids_"
         )
     )
 
