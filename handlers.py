@@ -68,7 +68,8 @@ BELARUS_REGIONS = {
 # ===== WORK CATEGORIES HIERARCHY =====
 
 WORK_CATEGORIES = {
-    "🧱 Внутренние работы": {
+    "inner": {
+        "name": "🧱 Внутренние работы",
         "emoji": "🧱",
         "subcategories": [
             "Электрика",
@@ -83,7 +84,8 @@ WORK_CATEGORIES = {
             "Окна и двери (внутренняя установка)"
         ]
     },
-    "🏠 Наружные работы": {
+    "outer": {
+        "name": "🏠 Наружные работы",
         "emoji": "🏠",
         "subcategories": [
             "Кровля",
@@ -96,7 +98,8 @@ WORK_CATEGORIES = {
             "Деревянные конструкции"
         ]
     },
-    "🔧 Отделка и дизайн": {
+    "design": {
+        "name": "🔧 Отделка и дизайн",
         "emoji": "🔧",
         "subcategories": [
             "Дизайн интерьера",
@@ -106,7 +109,8 @@ WORK_CATEGORIES = {
             "Уборка после ремонта"
         ]
     },
-    "🌳 Благоустройство и участок": {
+    "landscape": {
+        "name": "🌳 Благоустройство и участок",
         "emoji": "🌳",
         "subcategories": [
             "Ландшафтные работы",
@@ -116,7 +120,8 @@ WORK_CATEGORIES = {
             "Снегоуборка"
         ]
     },
-    "🧰 Специализированные и инженерные системы": {
+    "engineering": {
+        "name": "🧰 Специализированные и инженерные системы",
         "emoji": "🧰",
         "subcategories": [
             "Системы вентиляции",
@@ -125,7 +130,8 @@ WORK_CATEGORIES = {
             "Умный дом"
         ]
     },
-    "⚙️ Демонтаж и черновые работы": {
+    "demolition": {
+        "name": "⚙️ Демонтаж и черновые работы",
         "emoji": "⚙️",
         "subcategories": [
             "Снос перегородок",
@@ -134,7 +140,8 @@ WORK_CATEGORIES = {
             "Черновая подготовка"
         ]
     },
-    "💡 Прочие услуги": {
+    "other": {
+        "name": "💡 Прочие услуги",
         "emoji": "💡",
         "subcategories": [
             "Курьерские, подсобные, грузчики",
@@ -590,10 +597,10 @@ async def register_master_city_select(update: Update, context: ContextTypes.DEFA
 
         # Переходим к выбору основной категории
         keyboard = []
-        for category_name, category_data in WORK_CATEGORIES.items():
+        for cat_id, category_data in WORK_CATEGORIES.items():
             keyboard.append([InlineKeyboardButton(
-                category_name,
-                callback_data=f"maincat_{category_name}"
+                category_data["name"],
+                callback_data=f"maincat_{cat_id}"
             )])
 
         await query.edit_message_text(
@@ -618,11 +625,11 @@ async def register_master_city_other(update: Update, context: ContextTypes.DEFAU
         context.user_data["categories"] = []
 
     keyboard = []
-    for category_name, category_data in WORK_CATEGORIES.items():
-        keyboard.append([InlineKeyboardButton(
-            category_name,
-            callback_data=f"maincat_{category_name}"
-        )])
+    for cat_id, category_data in WORK_CATEGORIES.items():
+            keyboard.append([InlineKeyboardButton(
+                category_data["name"],
+                callback_data=f"maincat_{cat_id}"
+            )])
 
     await update.message.reply_text(
         f"🏙 Город: {city}\n\n"
@@ -638,21 +645,22 @@ async def register_master_main_category(update: Update, context: ContextTypes.DE
     query = update.callback_query
     await query.answer()
 
-    main_category = query.data.replace("maincat_", "")
-    context.user_data["current_main_category"] = main_category
+    cat_id = query.data.replace("maincat_", "")
+    category_name = WORK_CATEGORIES[cat_id]["name"]
+    context.user_data["current_main_category"] = cat_id
 
     # Получаем подкатегории для выбранной категории
-    subcategories = WORK_CATEGORIES[main_category]["subcategories"]
+    subcategories = WORK_CATEGORIES[cat_id]["subcategories"]
 
     # Создаем кнопки подкатегорий (2 в ряд) с галочками
     keyboard = []
     row = []
-    for subcat in subcategories:
+    for idx, subcat in enumerate(subcategories):
         # Проверяем выбрана ли уже эта подкатегория
         is_selected = subcat in context.user_data.get("categories", [])
         button_text = f"✅ {subcat}" if is_selected else subcat
 
-        row.append(InlineKeyboardButton(button_text, callback_data=f"subcat_{subcat}"))
+        row.append(InlineKeyboardButton(button_text, callback_data=f"subcat_{cat_id}:{idx}"))
         if len(row) == 2:
             keyboard.append(row)
             row = []
@@ -663,11 +671,11 @@ async def register_master_main_category(update: Update, context: ContextTypes.DE
     keyboard.append([InlineKeyboardButton("✅ Завершить выбор категорий", callback_data="subcat_done")])
 
     city = context.user_data.get("city", "")
-    emoji = WORK_CATEGORIES[main_category]["emoji"]
+    emoji = WORK_CATEGORIES[cat_id]["emoji"]
 
     await query.edit_message_text(
         f"🏙 Город: {city}\n"
-        f"{emoji} <b>Категория:</b> {main_category}\n\n"
+        f"{emoji} <b>Категория:</b> {category_name}\n\n"
         "🔧 <b>Выберите подкатегории:</b>\n\n"
         "Нажимайте подходящие кнопки (можно несколько).\n"
         "Когда закончите — нажмите «✅ Завершить выбор категорий».",
@@ -707,28 +715,34 @@ async def register_master_subcategory_select(update: Update, context: ContextTyp
         return REGISTER_MASTER_ASK_MORE_CATEGORIES
 
     else:
+        # Парсим cat_id:index из callback_data
+        cat_id, idx_str = selected.split(":")
+        idx = int(idx_str)
+        subcat_name = WORK_CATEGORIES[cat_id]["subcategories"][idx]
+
         # Переключаем выбор подкатегории
         if "categories" not in context.user_data:
             context.user_data["categories"] = []
 
-        if selected not in context.user_data["categories"]:
-            context.user_data["categories"].append(selected)
-            await query.answer(f"✅ Добавлено: {selected}")
+        if subcat_name not in context.user_data["categories"]:
+            context.user_data["categories"].append(subcat_name)
+            await query.answer(f"✅ Добавлено: {subcat_name}")
         else:
-            context.user_data["categories"].remove(selected)
-            await query.answer(f"❌ Убрано: {selected}")
+            context.user_data["categories"].remove(subcat_name)
+            await query.answer(f"❌ Убрано: {subcat_name}")
 
         # Обновляем кнопки с галочками
         main_category = context.user_data["current_main_category"]
-        subcategories = WORK_CATEGORIES[main_category]["subcategories"]
+        subcategories = WORK_CATEGORIES[cat_id]["subcategories"]
+        category_name = WORK_CATEGORIES[cat_id]["name"]
 
         keyboard = []
         row = []
-        for subcat in subcategories:
+        for idx2, subcat in enumerate(subcategories):
             is_selected = subcat in context.user_data["categories"]
             button_text = f"✅ {subcat}" if is_selected else subcat
 
-            row.append(InlineKeyboardButton(button_text, callback_data=f"subcat_{subcat}"))
+            row.append(InlineKeyboardButton(button_text, callback_data=f"subcat_{cat_id}:{idx2}"))
             if len(row) == 2:
                 keyboard.append(row)
                 row = []
@@ -738,11 +752,11 @@ async def register_master_subcategory_select(update: Update, context: ContextTyp
         keyboard.append([InlineKeyboardButton("✅ Завершить выбор категорий", callback_data="subcat_done")])
 
         city = context.user_data.get("city", "")
-        emoji = WORK_CATEGORIES[main_category]["emoji"]
+        emoji = WORK_CATEGORIES[cat_id]["emoji"]
 
         await query.edit_message_text(
             f"🏙 Город: {city}\n"
-            f"{emoji} <b>Категория:</b> {main_category}\n\n"
+            f"{emoji} <b>Категория:</b> {category_name}\n\n"
             "🔧 <b>Выберите подкатегории:</b>\n\n"
             "Нажимайте подходящие кнопки (можно несколько).\n"
             "Когда закончите — нажмите «✅ Завершить выбор категорий».",
@@ -763,10 +777,10 @@ async def register_master_ask_more_categories(update: Update, context: ContextTy
     if choice == "yes":
         # Возвращаемся к выбору основной категории
         keyboard = []
-        for category_name, category_data in WORK_CATEGORIES.items():
+        for cat_id, category_data in WORK_CATEGORIES.items():
             keyboard.append([InlineKeyboardButton(
-                category_name,
-                callback_data=f"maincat_{category_name}"
+                category_data["name"],
+                callback_data=f"maincat_{cat_id}"
             )])
 
         city = context.user_data.get("city", "")
@@ -2858,11 +2872,11 @@ async def edit_categories_start(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Показываем 7 основных категорий
     keyboard = []
-    for category_name, category_data in WORK_CATEGORIES.items():
-        keyboard.append([InlineKeyboardButton(
-            category_name,
-            callback_data=f"editmaincat_{category_name}"
-        )])
+    for cat_id, category_data in WORK_CATEGORIES.items():
+            keyboard.append([InlineKeyboardButton(
+                category_data["name"],
+                callback_data=f"editmaincat_{cat_id}"
+            )])
     keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="worker_profile")])
 
     await query.edit_message_text(
@@ -2880,21 +2894,22 @@ async def edit_main_category(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer()
 
-    main_category = query.data.replace("editmaincat_", "")
-    context.user_data["edit_current_main_category"] = main_category
+    cat_id = query.data.replace("editmaincat_", "")
+    category_name = WORK_CATEGORIES[cat_id]["name"]
+    context.user_data["edit_current_main_category"] = cat_id
 
     # Получаем подкатегории для выбранной категории
-    subcategories = WORK_CATEGORIES[main_category]["subcategories"]
+    subcategories = WORK_CATEGORIES[cat_id]["subcategories"]
 
     # Создаем кнопки подкатегорий (2 в ряд) с галочками
     keyboard = []
     row = []
-    for subcat in subcategories:
+    for idx, subcat in enumerate(subcategories):
         # Проверяем выбрана ли уже эта подкатегория
         is_selected = subcat in context.user_data.get("edit_categories", [])
         button_text = f"✅ {subcat}" if is_selected else subcat
 
-        row.append(InlineKeyboardButton(button_text, callback_data=f"editsubcat_{subcat}"))
+        row.append(InlineKeyboardButton(button_text, callback_data=f"editsubcat_{cat_id}:{idx}"))
         if len(row) == 2:
             keyboard.append(row)
             row = []
@@ -2905,10 +2920,10 @@ async def edit_main_category(update: Update, context: ContextTypes.DEFAULT_TYPE)
     keyboard.append([InlineKeyboardButton("✅ Завершить выбор категорий", callback_data="editsubcat_done")])
     keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="worker_profile")])
 
-    emoji = WORK_CATEGORIES[main_category]["emoji"]
+    emoji = WORK_CATEGORIES[cat_id]["emoji"]
 
     await query.edit_message_text(
-        f"{emoji} <b>Категория:</b> {main_category}\n\n"
+        f"{emoji} <b>Категория:</b> {category_name}\n\n"
         "🔧 <b>Выберите подкатегории:</b>\n\n"
         "Нажимайте подходящие кнопки (можно несколько).\n"
         "Когда закончите — нажмите «✅ Завершить выбор категорий».",
@@ -2948,28 +2963,34 @@ async def edit_subcategory_select(update: Update, context: ContextTypes.DEFAULT_
         return EDIT_ASK_MORE_CATEGORIES
 
     else:
+        # Парсим cat_id:index из callback_data
+        cat_id, idx_str = selected.split(":")
+        idx = int(idx_str)
+        subcat_name = WORK_CATEGORIES[cat_id]["subcategories"][idx]
+
         # Переключаем выбор подкатегории
         if "edit_categories" not in context.user_data:
             context.user_data["edit_categories"] = []
 
-        if selected not in context.user_data["edit_categories"]:
-            context.user_data["edit_categories"].append(selected)
-            await query.answer(f"✅ Добавлено: {selected}")
+        if subcat_name not in context.user_data["edit_categories"]:
+            context.user_data["edit_categories"].append(subcat_name)
+            await query.answer(f"✅ Добавлено: {subcat_name}")
         else:
-            context.user_data["edit_categories"].remove(selected)
-            await query.answer(f"❌ Убрано: {selected}")
+            context.user_data["edit_categories"].remove(subcat_name)
+            await query.answer(f"❌ Убрано: {subcat_name}")
 
         # Обновляем кнопки с галочками
         main_category = context.user_data["edit_current_main_category"]
-        subcategories = WORK_CATEGORIES[main_category]["subcategories"]
+        subcategories = WORK_CATEGORIES[cat_id]["subcategories"]
+        category_name = WORK_CATEGORIES[cat_id]["name"]
 
         keyboard = []
         row = []
-        for subcat in subcategories:
+        for idx2, subcat in enumerate(subcategories):
             is_selected = subcat in context.user_data["edit_categories"]
             button_text = f"✅ {subcat}" if is_selected else subcat
 
-            row.append(InlineKeyboardButton(button_text, callback_data=f"editsubcat_{subcat}"))
+            row.append(InlineKeyboardButton(button_text, callback_data=f"editsubcat_{cat_id}:{idx2}"))
             if len(row) == 2:
                 keyboard.append(row)
                 row = []
@@ -2979,10 +3000,10 @@ async def edit_subcategory_select(update: Update, context: ContextTypes.DEFAULT_
         keyboard.append([InlineKeyboardButton("✅ Завершить выбор категорий", callback_data="editsubcat_done")])
         keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="worker_profile")])
 
-        emoji = WORK_CATEGORIES[main_category]["emoji"]
+        emoji = WORK_CATEGORIES[cat_id]["emoji"]
 
         await query.edit_message_text(
-            f"{emoji} <b>Категория:</b> {main_category}\n\n"
+            f"{emoji} <b>Категория:</b> {category_name}\n\n"
             "🔧 <b>Выберите подкатегории:</b>\n\n"
             "Нажимайте подходящие кнопки (можно несколько).\n"
             "Когда закончите — нажмите «✅ Завершить выбор категорий».",
@@ -3003,10 +3024,10 @@ async def edit_ask_more_categories(update: Update, context: ContextTypes.DEFAULT
     if choice == "yes":
         # Возвращаемся к выбору основной категории
         keyboard = []
-        for category_name, category_data in WORK_CATEGORIES.items():
+        for cat_id, category_data in WORK_CATEGORIES.items():
             keyboard.append([InlineKeyboardButton(
-                category_name,
-                callback_data=f"editmaincat_{category_name}"
+                category_data["name"],
+                callback_data=f"editmaincat_{cat_id}"
             )])
         keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="worker_profile")])
 
@@ -5898,10 +5919,10 @@ async def create_order_city_select(update: Update, context: ContextTypes.DEFAULT
 
         # Переходим к выбору основной категории
         keyboard = []
-        for category_name, category_data in WORK_CATEGORIES.items():
+        for cat_id, category_data in WORK_CATEGORIES.items():
             keyboard.append([InlineKeyboardButton(
-                category_name,
-                callback_data=f"order_maincat_{category_name}"
+                category_data["name"],
+                callback_data=f"order_maincat_{cat_id}"
             )])
 
         await query.edit_message_text(
@@ -5918,17 +5939,18 @@ async def create_order_main_category(update: Update, context: ContextTypes.DEFAU
     query = update.callback_query
     await query.answer()
 
-    main_category = query.data.replace("order_maincat_", "")
-    context.user_data["order_main_category"] = main_category
+    cat_id = query.data.replace("order_maincat_", "")
+    category_name = WORK_CATEGORIES[cat_id]["name"]
+    context.user_data["order_main_category"] = cat_id
 
     # Получаем подкатегории для выбранной категории
-    subcategories = WORK_CATEGORIES[main_category]["subcategories"]
+    subcategories = WORK_CATEGORIES[cat_id]["subcategories"]
 
     # Создаем кнопки подкатегорий (2 в ряд)
     keyboard = []
     row = []
-    for subcat in subcategories:
-        row.append(InlineKeyboardButton(subcat, callback_data=f"order_subcat_{subcat}"))
+    for idx, subcat in enumerate(subcategories):
+        row.append(InlineKeyboardButton(subcat, callback_data=f"order_subcat_{cat_id}:{idx}"))
         if len(row) == 2:
             keyboard.append(row)
             row = []
@@ -5936,11 +5958,11 @@ async def create_order_main_category(update: Update, context: ContextTypes.DEFAU
         keyboard.append(row)
 
     city = context.user_data.get("order_city", "")
-    emoji = WORK_CATEGORIES[main_category]["emoji"]
+    emoji = WORK_CATEGORIES[cat_id]["emoji"]
 
     await query.edit_message_text(
         f"🏙 Город: {city}\n"
-        f"{emoji} Категория: {main_category}\n\n"
+        f"{emoji} Категория: {category_name}\n\n"
         "🔧 <b>Шаг 3:</b> Выберите подкатегорию работ:\n\n"
         "Выберите одну подкатегорию, которая наиболее точно описывает ваш заказ.",
         parse_mode="HTML",
@@ -5954,14 +5976,19 @@ async def create_order_subcategory_select(update: Update, context: ContextTypes.
     query = update.callback_query
     await query.answer()
 
-    subcategory = query.data.replace("order_subcat_", "")
+    # Парсим cat_id:index из callback_data
+    selected = query.data.replace("order_subcat_", "")
+    cat_id, idx_str = selected.split(":")
+    idx = int(idx_str)
+    subcategory = WORK_CATEGORIES[cat_id]["subcategories"][idx]
+
     context.user_data["order_category"] = subcategory
 
     # Переходим к описанию
-    main_category = context.user_data.get("order_main_category", "")
+    main_category_name = WORK_CATEGORIES[cat_id]["name"]
     await query.edit_message_text(
         f"Город: <b>{context.user_data['order_city']}</b>\n"
-        f"Категория: <b>{main_category} → {subcategory}</b>\n\n"
+        f"Категория: <b>{main_category_name} → {subcategory}</b>\n\n"
         "📝 <b>Шаг 4:</b> Опишите что нужно сделать\n\n"
         "💡 <b>Важно!</b> Мастера будут предлагать свою цену за услуги, поэтому укажите:\n"
         "✓ Объём работ (сколько розеток, метраж, количество)\n"
