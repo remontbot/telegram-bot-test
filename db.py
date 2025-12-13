@@ -3014,10 +3014,11 @@ def create_order(client_id, city, categories, description, photos, videos=None, 
 
 def get_orders_by_category(category, page=1, per_page=10):
     """
-    Получает открытые заказы по категории с пагинацией.
+    ИСПРАВЛЕНО: Получает открытые заказы по категории с пагинацией.
+    Использует нормализованную таблицу order_categories для точного поиска.
 
     Args:
-        category: Категория заказа
+        category: Категория заказа (точное совпадение)
         page: Номер страницы (начиная с 1)
         per_page: Количество заказов на странице
 
@@ -3027,28 +3028,33 @@ def get_orders_by_category(category, page=1, per_page=10):
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
+        # ИСПРАВЛЕНО: Используем order_categories для точного поиска вместо LIKE
         # Получаем общее количество заказов
         cursor.execute("""
-            SELECT COUNT(*) FROM orders o
-            WHERE o.status = 'open' AND o.category LIKE ?
-        """, (f"%{category}%",))
+            SELECT COUNT(DISTINCT o.id)
+            FROM orders o
+            JOIN order_categories oc ON o.id = oc.order_id
+            WHERE o.status = 'open'
+            AND oc.category = ?
+        """, (category,))
         total_count = cursor.fetchone()[0] if not USE_POSTGRES else cursor.fetchone()['count']
 
         # Получаем заказы для текущей страницы
         offset = (page - 1) * per_page
         cursor.execute("""
-            SELECT
+            SELECT DISTINCT
                 o.*,
                 c.name as client_name,
                 c.rating as client_rating,
                 c.rating_count as client_rating_count
             FROM orders o
+            JOIN order_categories oc ON o.id = oc.order_id
             JOIN clients c ON o.client_id = c.id
             WHERE o.status = 'open'
-            AND o.category LIKE ?
+            AND oc.category = ?
             ORDER BY o.created_at DESC
             LIMIT ? OFFSET ?
-        """, (f"%{category}%", per_page, offset))
+        """, (category, per_page, offset))
 
         orders = cursor.fetchall()
         has_next_page = (offset + per_page) < total_count
@@ -3951,44 +3957,41 @@ def delete_worker_notification(worker_user_id):
 
 def count_available_orders_for_worker(worker_user_id):
     """
-    Подсчитывает количество доступных заказов для мастера
+    ИСПРАВЛЕНО: Подсчитывает количество доступных заказов для мастера.
+    Использует нормализованные таблицы worker_categories и order_categories для точного поиска.
+
     (в его городе и его категориях, на которые он еще не откликнулся)
     """
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
-        
-        # Получаем worker_id по user_id
-        cursor.execute("SELECT id, city, categories FROM workers WHERE user_id = ?", (worker_user_id,))
+
+        # Получаем worker_id и город по user_id
+        cursor.execute("SELECT id, city FROM workers WHERE user_id = ?", (worker_user_id,))
         worker = cursor.fetchone()
-        
+
         if not worker:
             return 0
-        
-        worker_dict = dict(worker) if hasattr(worker, 'keys') else {'id': worker[0], 'city': worker[1], 'categories': worker[2]}
+
+        worker_dict = dict(worker) if hasattr(worker, 'keys') else {'id': worker[0], 'city': worker[1]}
         worker_id = worker_dict['id']
         city = worker_dict['city']
-        categories = worker_dict['categories']
-        
-        if not categories:
-            return 0
-        
-        # Разбиваем категории мастера
-        worker_categories = [cat.strip() for cat in categories.split(',')]
-        
-        # Считаем заказы
-        count = 0
-        for category in worker_categories:
-            # Ищем заказы в городе мастера и его категории, на которые он еще не откликнулся
-            cursor.execute("""
-                SELECT COUNT(*) FROM orders
-                WHERE status = 'open'
-                AND city = ?
-                AND category LIKE ?
-                AND id NOT IN (
-                    SELECT order_id FROM bids WHERE worker_id = ?
-                )
-            """, (city, f"%{category}%", worker_id))
-            result = cursor.fetchone()
-            count += result[0] if result else 0
-        
+
+        # ИСПРАВЛЕНО: Используем нормализованные таблицы вместо LIKE
+        # Ищем заказы через JOIN с order_categories и worker_categories
+        cursor.execute("""
+            SELECT COUNT(DISTINCT o.id)
+            FROM orders o
+            JOIN order_categories oc ON o.id = oc.order_id
+            JOIN worker_categories wc ON oc.category = wc.category
+            WHERE o.status = 'open'
+            AND o.city = ?
+            AND wc.worker_id = ?
+            AND o.id NOT IN (
+                SELECT order_id FROM bids WHERE worker_id = ?
+            )
+        """, (city, worker_id, worker_id))
+
+        result = cursor.fetchone()
+        count = result[0] if result else 0
+
         return count
