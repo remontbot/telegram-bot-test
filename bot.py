@@ -246,15 +246,23 @@ def main():
             CallbackQueryHandler(handlers.client_create_order, pattern="^client_create_order$")
         ],
         states={
+            handlers.CREATE_ORDER_REGION_SELECT: [
+                CallbackQueryHandler(handlers.create_order_region_select, pattern="^orderregion_"),
+            ],
             handlers.CREATE_ORDER_CITY: [
                 CallbackQueryHandler(handlers.create_order_city_select, pattern="^ordercity_"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.create_order_city_select),
+                CallbackQueryHandler(handlers.create_order_city_other, pattern="^ordercity_other$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.create_order_city_other),
+                CallbackQueryHandler(handlers.create_order_back_to_region, pattern="^create_order_back_to_region$"),
             ],
             handlers.CREATE_ORDER_MAIN_CATEGORY: [
                 CallbackQueryHandler(handlers.create_order_main_category, pattern="^order_maincat_"),
+                CallbackQueryHandler(handlers.create_order_back_to_region, pattern="^create_order_back_to_region$"),
+                CallbackQueryHandler(handlers.create_order_back_to_city, pattern="^create_order_back_to_city$"),
             ],
             handlers.CREATE_ORDER_SUBCATEGORY_SELECT: [
                 CallbackQueryHandler(handlers.create_order_subcategory_select, pattern="^order_subcat_"),
+                CallbackQueryHandler(handlers.create_order_back_to_maincat, pattern="^create_order_back_to_maincat$"),
             ],
             handlers.CREATE_ORDER_DESCRIPTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.create_order_description),
@@ -460,6 +468,11 @@ def main():
     # Загрузка фото (обрабатывает и portfolio_photos и profile_photo)
     application.add_handler(
         MessageHandler(filters.PHOTO, handlers.worker_add_photos_upload)
+    )
+
+    # Загрузка видео (для портфолио)
+    application.add_handler(
+        MessageHandler(filters.VIDEO, handlers.worker_add_photos_upload)
     )
 
     # Загрузка документов (когда пользователь перетягивает файл)

@@ -2072,7 +2072,7 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
     # Подсчитываем текущие фото
     current_photos_list = [p for p in current_photos.split(",") if p] if current_photos else []
     current_count = len(current_photos_list)
-    max_photos = 4
+    max_photos = 10
     available_slots = max_photos - current_count
 
     # Сохраняем в context - РЕЖИМ ДОБАВЛЕНИЯ ФОТО АКТИВЕН
@@ -2100,10 +2100,10 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
     if current_count == 0:
         hint_text = "🤵 <b>Первое фото должно быть с вашим лицом!</b>\n" \
                    "Это повышает доверие клиентов.\n\n" \
-                   "После можете добавить до 3 фотографий ваших работ."
+                   "После можете добавить до 9 фотографий ваших работ и 1 видео."
     else:
-        hint_text = f"📊 Загружено: {current_count}/4\n" \
-                   f"Можно добавить ещё: {available_slots} фото работ"
+        hint_text = f"📊 Загружено: {current_count}/10\n" \
+                   f"Можно добавить ещё: {available_slots} фото/видео работ"
 
     await query.edit_message_text(
         f"📸 <b>Добавление фото в портфолио</b>\n\n"
@@ -2131,12 +2131,32 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
         return
 
     file_id = None
+    is_video = False
 
     # Обработка фото (сжатое изображение)
     if update.message and update.message.photo:
         logger.info("Получено фото (photo) для добавления в портфолио")
         photo = update.message.photo[-1]  # Берём самое большое разрешение
         file_id = photo.file_id
+
+    # Обработка видео
+    elif update.message and update.message.video:
+        # Проверяем, не загружено ли уже видео
+        existing_videos = [p for p in context.user_data.get("existing_photos", []) if p.startswith("VIDEO:")]
+        new_videos = [p for p in context.user_data.get("new_photos", []) if p.startswith("VIDEO:")]
+        if len(existing_videos) + len(new_videos) >= 1:
+            keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]
+            await update.message.reply_text(
+                "⚠️ Можно загрузить максимум 1 видео.\n\n"
+                "У вас уже есть видео в портфолио.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+        logger.info("Получено видео для добавления в портфолио")
+        video = update.message.video
+        file_id = "VIDEO:" + video.file_id
+        is_video = True
 
     # Обработка документа (файл без сжатия)
     elif update.message and update.message.document:
@@ -2148,8 +2168,8 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
         else:
             keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]
             await update.message.reply_text(
-                "❌ Можно отправлять только изображения (JPG, PNG и т.д.).\n\n"
-                "Попробуйте отправить фото еще раз.",
+                "❌ Можно отправлять только изображения (JPG, PNG и т.д.) или видео.\n\n"
+                "Попробуйте отправить фото/видео еще раз.",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
@@ -2172,7 +2192,7 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
     existing_count = len(context.user_data.get("existing_photos", []))
     new_count = len(context.user_data.get("new_photos", []))
     total_count = existing_count + new_count
-    max_photos = 4
+    max_photos = 10
 
     if total_count >= max_photos:
         keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]
@@ -2189,19 +2209,20 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
     total_count = existing_count + new_count
     remaining = max_photos - total_count
 
-    logger.info(f"Фото добавлено. Новых: {new_count}, Всего: {total_count}")
+    media_type = "Видео" if is_video else "Фото"
+    logger.info(f"{media_type} добавлено. Новых: {new_count}, Всего: {total_count}")
 
     # ДОБАВЛЯЕМ КНОПКУ для завершения
     keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]
 
     await update.message.reply_text(
-        f"✅ Фото #{total_count} добавлено!\n\n"
+        f"✅ {media_type} #{total_count} добавлено!\n\n"
         f"📊 Статус:\n"
-        f"• Было фото: {existing_count}\n"
+        f"• Было: {existing_count}\n"
         f"• Добавлено новых: {new_count}\n"
         f"• Всего будет: {total_count}/{max_photos}\n"
         f"• Можно ещё: {remaining}\n\n"
-        f"Отправьте ещё фото или нажмите кнопку:",
+        f"Отправьте ещё фото/видео или нажмите кнопку:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
     )
@@ -5858,58 +5879,117 @@ async def add_second_role_client(update: Update, context: ContextTypes.DEFAULT_T
 # ------- СОЗДАНИЕ ЗАКАЗА -------
 
 async def client_create_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало создания заказа - выбор города"""
+    """Начало создания заказа - выбор региона"""
     query = update.callback_query
     await query.answer()
-    
+
     # Получаем профиль клиента
     user = db.get_user(query.from_user.id)
     if not user:
         await query.edit_message_text("Ошибка: пользователь не найден")
         return ConversationHandler.END
-    
+
     client_profile = db.get_client_profile(user["id"])
     if not client_profile:
         await query.edit_message_text("Ошибка: профиль клиента не найден")
         return ConversationHandler.END
-    
+
     # Сохраняем client_id
     context.user_data["order_client_id"] = client_profile["id"]
-    
-    # Предлагаем выбор города
-    cities = [
-        "Минск", "Гомель", "Могилёв", "Витебск",
-        "Гродно", "Брест", "Бобруйск", "Барановичи",
-        "Борисов", "Пинск", "Орша", "Мозырь",
-        "Новополоцк", "Лида", "Солигорск",
-        "Другой город"
-    ]
-    
+
+    # Показываем регионы Беларуси
     keyboard = []
-    row = []
-    for i, city in enumerate(cities):
-        row.append(InlineKeyboardButton(city, callback_data=f"ordercity_{city}"))
-        if len(row) == 2 or i == len(cities) - 1:
-            keyboard.append(row)
-            row = []
-    
+    for region_name, region_data in BELARUS_REGIONS.items():
+        keyboard.append([InlineKeyboardButton(
+            region_data["display"],
+            callback_data=f"orderregion_{region_name}"
+        )])
+
     await query.edit_message_text(
         "📝 <b>Создание заказа</b>\n\n"
-        "🏙 <b>Шаг 1:</b> В каком городе нужна работа?",
+        "🏙 <b>Шаг 1:</b> Где нужна работа? Выберите регион или город:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return CREATE_ORDER_CITY
+    return CREATE_ORDER_REGION_SELECT
+
+
+async def create_order_region_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора региона для заказа"""
+    query = update.callback_query
+    await query.answer()
+
+    region = query.data.replace("orderregion_", "")
+    region_data = BELARUS_REGIONS.get(region)
+
+    if not region_data:
+        await query.edit_message_text("❌ Ошибка выбора региона. Попробуйте снова.")
+        return CREATE_ORDER_REGION_SELECT
+
+    context.user_data["order_region"] = region
+
+    # Если выбран Минск или "Вся Беларусь" - сохраняем и переходим к выбору категорий
+    if region_data["type"] in ["city", "country"]:
+        context.user_data["order_city"] = region
+
+        # Переходим к выбору категорий
+        keyboard = []
+        for cat_id, category_data in WORK_CATEGORIES.items():
+            keyboard.append([InlineKeyboardButton(
+                category_data["name"],
+                callback_data=f"order_maincat_{cat_id}"
+            )])
+
+        # Добавляем кнопку "Назад"
+        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="create_order_back_to_region")])
+
+        await query.edit_message_text(
+            f"🏙 Город: {region_data['display']}\n\n"
+            "🔧 <b>Шаг 2:</b> Выберите основную категорию работ:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return CREATE_ORDER_MAIN_CATEGORY
+
+    # Если выбрана область - показываем города
+    else:
+        cities = region_data.get("cities", [])
+        keyboard = []
+        row = []
+        for city in cities:
+            row.append(InlineKeyboardButton(city, callback_data=f"ordercity_{city}"))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+
+        # Добавляем кнопку "Другой город в области"
+        keyboard.append([InlineKeyboardButton(
+            f"📍 Другой город в области",
+            callback_data="ordercity_other"
+        )])
+
+        # Добавляем кнопку "Назад"
+        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="create_order_back_to_region")])
+
+        await query.edit_message_text(
+            f"📍 Область: {region_data['display']}\n\n"
+            "🏙 Выберите город:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return CREATE_ORDER_CITY
 
 
 async def create_order_city_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка выбора города для заказа"""
     query = update.callback_query
     await query.answer()
-    
+
     city = query.data.replace("ordercity_", "")
-    
-    if city == "Другой город":
+
+    if city == "other":
         await query.edit_message_text(
             "🏙 Напишите название города:"
         )
@@ -5924,6 +6004,9 @@ async def create_order_city_select(update: Update, context: ContextTypes.DEFAULT
                 category_data["name"],
                 callback_data=f"order_maincat_{cat_id}"
             )])
+
+        # Добавляем кнопку "Назад"
+        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="create_order_back_to_city")])
 
         await query.edit_message_text(
             f"🏙 Город: <b>{city}</b>\n\n"
@@ -5956,6 +6039,9 @@ async def create_order_main_category(update: Update, context: ContextTypes.DEFAU
             row = []
     if row:
         keyboard.append(row)
+
+    # Добавляем кнопку "Назад"
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="create_order_back_to_maincat")])
 
     city = context.user_data.get("order_city", "")
     emoji = WORK_CATEGORIES[cat_id]["emoji"]
@@ -6153,6 +6239,132 @@ async def create_order_skip_photos(update: Update, context: ContextTypes.DEFAULT
     context.user_data["order_videos"] = []
 
     return await create_order_publish(update, context)
+
+
+
+
+# ------- ОБРАБОТЧИКИ КНОПОК "НАЗАД" ДЛЯ СОЗДАНИЯ ЗАКАЗА -------
+
+async def create_order_back_to_region(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат к выбору региона"""
+    query = update.callback_query
+    await query.answer()
+
+    # Показываем регионы Беларуси
+    keyboard = []
+    for region_name, region_data in BELARUS_REGIONS.items():
+        keyboard.append([InlineKeyboardButton(
+            region_data["display"],
+            callback_data=f"orderregion_{region_name}"
+        )])
+
+    await query.edit_message_text(
+        "📝 <b>Создание заказа</b>\n\n"
+        "🏙 <b>Шаг 1:</b> Где нужна работа? Выберите регион или город:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return CREATE_ORDER_REGION_SELECT
+
+
+async def create_order_back_to_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат к выбору города"""
+    query = update.callback_query
+    await query.answer()
+
+    region = context.user_data.get("order_region")
+    if not region:
+        # Если региона нет, возвращаемся к выбору региона
+        return await create_order_back_to_region(update, context)
+
+    region_data = BELARUS_REGIONS.get(region)
+    if not region_data:
+        return await create_order_back_to_region(update, context)
+
+    # Если это был Минск или Вся Беларусь - возвращаемся к выбору региона
+    if region_data["type"] in ["city", "country"]:
+        return await create_order_back_to_region(update, context)
+
+    # Показываем города области
+    cities = region_data.get("cities", [])
+    keyboard = []
+    row = []
+    for city in cities:
+        row.append(InlineKeyboardButton(city, callback_data=f"ordercity_{city}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    keyboard.append([InlineKeyboardButton(
+        f"📍 Другой город в области",
+        callback_data="ordercity_other"
+    )])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="create_order_back_to_region")])
+
+    await query.edit_message_text(
+        f"📍 Область: {region_data['display']}\n\n"
+        "🏙 Выберите город:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return CREATE_ORDER_CITY
+
+
+async def create_order_back_to_maincat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат к выбору основной категории"""
+    query = update.callback_query
+    await query.answer()
+
+    city = context.user_data.get("order_city", "")
+
+    keyboard = []
+    for cat_id, category_data in WORK_CATEGORIES.items():
+        keyboard.append([InlineKeyboardButton(
+            category_data["name"],
+            callback_data=f"order_maincat_{cat_id}"
+        )])
+
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="create_order_back_to_city")])
+
+    await query.edit_message_text(
+        f"🏙 Город: <b>{city}</b>\n\n"
+        "🔧 <b>Шаг 2:</b> Выберите основную категорию работ:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return CREATE_ORDER_MAIN_CATEGORY
+
+
+async def create_order_city_other(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка ввода города вручную при создании заказа"""
+    if update.callback_query:
+        # Это callback от кнопки "Другой город"
+        return CREATE_ORDER_CITY  # Ожидаем текстовое сообщение
+    else:
+        # Это текстовое сообщение с названием города
+        city = update.message.text.strip()
+        context.user_data["order_city"] = city
+
+        # Переходим к выбору категорий
+        keyboard = []
+        for cat_id, category_data in WORK_CATEGORIES.items():
+            keyboard.append([InlineKeyboardButton(
+                category_data["name"],
+                callback_data=f"order_maincat_{cat_id}"
+            )])
+
+        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="create_order_back_to_city")])
+
+        await update.message.reply_text(
+            f"🏙 Город: <b>{city}</b>\n\n"
+            "🔧 <b>Шаг 2:</b> Выберите основную категорию работ:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return CREATE_ORDER_MAIN_CATEGORY
+
 
 
 async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
