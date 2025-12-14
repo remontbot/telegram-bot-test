@@ -2176,10 +2176,10 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
             "📸 <b>Портфолио заполнено</b>\n\n"
             f"У вас уже загружено максимальное количество фото ({max_photos}).\n\n"
             "⚠️ <b>Напоминание:</b> Первое фото должно быть с вашим лицом!\n\n"
-            "Чтобы изменить фото, удалите старые через меню редактирования.",
+            "💡 <i>Функция удаления фото будет добавлена в следующем обновлении.</i>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]
+                [InlineKeyboardButton("⬅️ Назад к профилю", callback_data="worker_profile")]
             ])
         )
         context.user_data.clear()
@@ -5145,6 +5145,22 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "❌ Действие отменено.\n\n"
         "Возвращаемся в главное меню...",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return ConversationHandler.END
+
+
+async def cancel_edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Отмена редактирования профиля с возвратом к профилю мастера.
+    """
+    context.user_data.clear()
+
+    keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
+
+    await update.message.reply_text(
+        "❌ Действие отменено.\n\n"
+        "Возвращаемся к профилю...",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return ConversationHandler.END
