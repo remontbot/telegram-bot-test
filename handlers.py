@@ -2176,10 +2176,10 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
             "📸 <b>Портфолио заполнено</b>\n\n"
             f"У вас уже загружено максимальное количество фото ({max_photos}).\n\n"
             "⚠️ <b>Напоминание:</b> Первое фото должно быть с вашим лицом!\n\n"
-            "Чтобы изменить фото, удалите старые через меню редактирования.",
+            "💡 <i>Функция удаления фото будет добавлена в следующем обновлении.</i>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_worker_menu")]
+                [InlineKeyboardButton("⬅️ Назад к профилю", callback_data="worker_profile")]
             ])
         )
         context.user_data.clear()
@@ -4031,6 +4031,10 @@ async def worker_upload_work_photo_receive(update: Update, context: ContextTypes
     НОВОЕ: Получение фото завершённой работы от мастера.
     """
     try:
+        # КРИТИЧНО: Пропускаем если идет загрузка фото профиля или портфолио
+        if context.user_data.get('uploading_profile_photo') or context.user_data.get('adding_photos'):
+            return  # Пропускаем - пусть обработают другие handlers
+
         # Проверяем, что идёт процесс загрузки фото работы
         order_id = context.user_data.get('uploading_work_photo_order_id')
         if not order_id:
@@ -5145,6 +5149,22 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "❌ Действие отменено.\n\n"
         "Возвращаемся в главное меню...",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return ConversationHandler.END
+
+
+async def cancel_edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Отмена редактирования профиля с возвратом к профилю мастера.
+    """
+    context.user_data.clear()
+
+    keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
+
+    await update.message.reply_text(
+        "❌ Действие отменено.\n\n"
+        "Возвращаемся к профилю...",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return ConversationHandler.END

@@ -343,9 +343,9 @@ def main():
             ],
         },
         fallbacks=[
-            CommandHandler("cancel", handlers.cancel),
+            CommandHandler("cancel", handlers.cancel_edit_profile),
             CommandHandler("start", handlers.cancel_from_start),  # КРИТИЧНО: выход из застрявшего диалога
-            MessageHandler(filters.Regex("^(Отмена|отмена|cancel)$"), handlers.cancel),
+            MessageHandler(filters.Regex("^(Отмена|отмена|cancel)$"), handlers.cancel_edit_profile),
             CallbackQueryHandler(handlers.show_worker_profile, pattern="^worker_profile$"),
         ],
         allow_reentry=True,
