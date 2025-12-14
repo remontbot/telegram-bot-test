@@ -4031,6 +4031,10 @@ async def worker_upload_work_photo_receive(update: Update, context: ContextTypes
     НОВОЕ: Получение фото завершённой работы от мастера.
     """
     try:
+        # КРИТИЧНО: Пропускаем если идет загрузка фото профиля или портфолио
+        if context.user_data.get('uploading_profile_photo') or context.user_data.get('adding_photos'):
+            return  # Пропускаем - пусть обработают другие handlers
+
         # Проверяем, что идёт процесс загрузки фото работы
         order_id = context.user_data.get('uploading_work_photo_order_id')
         if not order_id:
