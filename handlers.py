@@ -299,6 +299,7 @@ def _get_bids_word(count):
     REGISTER_MASTER_CITY,
     REGISTER_MASTER_CITY_SELECT,
     REGISTER_MASTER_CITY_OTHER,
+    REGISTER_MASTER_CITIES_CONFIRM,
     REGISTER_MASTER_MAIN_CATEGORY,
     REGISTER_MASTER_SUBCATEGORY_SELECT,
     REGISTER_MASTER_ASK_MORE_CATEGORIES,
@@ -344,7 +345,7 @@ def _get_bids_word(count):
     ADMIN_MENU,
     BROADCAST_SELECT_AUDIENCE,
     BROADCAST_ENTER_MESSAGE,
-) = range(47)
+) = range(48)
 
 
 def is_valid_name(name: str) -> bool:
@@ -525,30 +526,27 @@ async def register_master_region_select(update: Update, context: ContextTypes.DE
 
     context.user_data["region"] = region
 
-    # Если выбран Минск или "Вся Беларусь" - сохраняем и переходим к выбору типа работ
+    # Если выбран Минск или "Вся Беларусь" - сохраняем и переходим к подтверждению городов
     if region_data["type"] in ["city", "country"]:
-        context.user_data["city"] = region
-        context.user_data["regions"] = region
+        # Инициализируем список городов если его нет
+        if "cities" not in context.user_data:
+            context.user_data["cities"] = []
 
-        # Переходим к выбору типа работ
-        keyboard = [
-            [InlineKeyboardButton(
-                f"{WORK_CATEGORIES['Наружные работы']['emoji']} Наружные работы",
-                callback_data="worktype_Наружные работы"
-            )],
-            [InlineKeyboardButton(
-                f"{WORK_CATEGORIES['Внутренние работы']['emoji']} Внутренние работы",
-                callback_data="worktype_Внутренние работы"
-            )],
-        ]
+        # Добавляем регион в список городов (если его там еще нет)
+        if region not in context.user_data["cities"]:
+            context.user_data["cities"].append(region)
 
-        await query.edit_message_text(
-            f"📍 Регион: {region}\n\n"
-            "🏗 <b>Выберите тип работ:</b>",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-        return REGISTER_MASTER_WORK_TYPE
+        # Сохраняем первый город как основной (для обратной совместимости)
+        if not context.user_data.get("city"):
+            context.user_data["city"] = region
+            context.user_data["regions"] = region
+
+        # Инициализируем список категорий если его нет
+        if "categories" not in context.user_data:
+            context.user_data["categories"] = []
+
+        # Переходим к подтверждению городов
+        return await show_cities_confirmation(query, context)
 
     # Если выбрана область - показываем города
     else:
@@ -592,15 +590,119 @@ async def register_master_city_select(update: Update, context: ContextTypes.DEFA
         )
         return REGISTER_MASTER_CITY_OTHER
     else:
-        context.user_data["city"] = city
-        region = context.user_data.get("region", city)
-        context.user_data["regions"] = region
+        # Инициализируем список городов если его нет
+        if "cities" not in context.user_data:
+            context.user_data["cities"] = []
+
+        # Добавляем город в список (если его там еще нет)
+        if city not in context.user_data["cities"]:
+            context.user_data["cities"].append(city)
+
+        # Сохраняем первый город как основной (для обратной совместимости)
+        if not context.user_data.get("city"):
+            context.user_data["city"] = city
+            region = context.user_data.get("region", city)
+            context.user_data["regions"] = region
 
         # Инициализируем список категорий если его нет
         if "categories" not in context.user_data:
             context.user_data["categories"] = []
 
-        # Переходим к выбору основной категории
+        # Переходим к подтверждению городов
+        return await show_cities_confirmation(query, context)
+
+
+async def register_master_city_other(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ввод другого города мастером вручную"""
+    city = update.message.text.strip()
+
+    # Инициализируем список городов если его нет
+    if "cities" not in context.user_data:
+        context.user_data["cities"] = []
+
+    # Добавляем город в список (если его там еще нет)
+    if city not in context.user_data["cities"]:
+        context.user_data["cities"].append(city)
+
+    # Сохраняем первый город как основной (для обратной совместимости)
+    if not context.user_data.get("city"):
+        context.user_data["city"] = city
+        region = context.user_data.get("region", city)
+        context.user_data["regions"] = region
+
+    # Инициализируем список категорий если его нет
+    if "categories" not in context.user_data:
+        context.user_data["categories"] = []
+
+    # Отправляем сообщение с подтверждением через фейковый query
+    class FakeQuery:
+        def __init__(self, message):
+            self.message = message
+            self.from_user = message.from_user
+
+        async def edit_message_text(self, text, **kwargs):
+            await self.message.reply_text(text, **kwargs)
+
+    fake_query = FakeQuery(update.message)
+    return await show_cities_confirmation(fake_query, context)
+
+
+async def show_cities_confirmation(query, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает выбранные города и предлагает добавить еще или завершить"""
+    cities = context.user_data.get("cities", [])
+
+    cities_text = "\n".join([f"  📍 {city}" for city in cities])
+
+    text = (
+        f"🏙 <b>Выбранные города ({len(cities)}):</b>\n"
+        f"{cities_text}\n\n"
+        "Вы можете добавить еще города или завершить выбор:"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("➕ Добавить еще город", callback_data="add_more_cities")],
+        [InlineKeyboardButton("✅ Завершить выбор городов", callback_data="finish_cities")],
+    ]
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return REGISTER_MASTER_CITIES_CONFIRM
+
+
+async def register_master_cities_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора: добавить еще город или завершить"""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "add_more_cities":
+        # Показываем регионы снова
+        keyboard = []
+        for region_name, region_data in BELARUS_REGIONS.items():
+            keyboard.append([InlineKeyboardButton(
+                region_data["display"],
+                callback_data=f"masterregion_{region_name}"
+            )])
+
+        cities = context.user_data.get("cities", [])
+        cities_text = ", ".join(cities)
+
+        await query.edit_message_text(
+            f"🏙 <b>Уже выбрано:</b> {cities_text}\n\n"
+            "Выберите регион для добавления города:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return REGISTER_MASTER_REGION_SELECT
+
+    elif query.data == "finish_cities":
+        # Завершаем выбор городов, переходим к категориям
+        cities = context.user_data.get("cities", [])
+        cities_text = ", ".join(cities)
+
         keyboard = []
         for cat_id, category_data in WORK_CATEGORIES.items():
             keyboard.append([InlineKeyboardButton(
@@ -609,40 +711,12 @@ async def register_master_city_select(update: Update, context: ContextTypes.DEFA
             )])
 
         await query.edit_message_text(
-            f"🏙 Город: {city}\n\n"
+            f"🏙 Города: {cities_text}\n\n"
             "🔧 <b>Шаг 4/7:</b> Выберите основную категорию работ:",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
         return REGISTER_MASTER_MAIN_CATEGORY
-
-
-async def register_master_city_other(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ввод другого города мастером вручную"""
-    city = update.message.text.strip()
-    context.user_data["city"] = city
-    region = context.user_data.get("region", city)
-    context.user_data["regions"] = region
-
-    # Переходим к выбору основной категории
-    # Инициализируем список категорий если его нет
-    if "categories" not in context.user_data:
-        context.user_data["categories"] = []
-
-    keyboard = []
-    for cat_id, category_data in WORK_CATEGORIES.items():
-            keyboard.append([InlineKeyboardButton(
-                category_data["name"],
-                callback_data=f"maincat_{cat_id}"
-            )])
-
-    await update.message.reply_text(
-        f"🏙 Город: {city}\n\n"
-        "🔧 <b>Шаг 4/7:</b> Выберите основную категорию работ:",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-    return REGISTER_MASTER_MAIN_CATEGORY
 
 
 async def register_master_main_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -856,12 +930,12 @@ async def register_master_description(update: Update, context: ContextTypes.DEFA
     ]
     
     await update.message.reply_text(
-        "📸 <b>Ваше портфолио (до 4 фотографий)</b>\n\n"
+        "📸 <b>Ваше портфолио (до 10 фотографий)</b>\n\n"
         "Добавьте фотографии, чтобы клиенты увидели качество ваших работ.\n\n"
         "⚠️ <b>ВАЖНО про первое фото:</b>\n"
-        "🤵 Первая фотография должна быть <b>с вашим лицом</b>\n"
+        "🤵 Первая фотография <b>желательно с вашим лицом</b>\n"
         "Это повышает доверие клиентов и показывает, что вы реальный мастер.\n\n"
-        "📋 Дальше добавьте <b>до 3 фотографий ваших работ:</b>\n"
+        "📋 Дальше добавьте <b>до 9 фотографий ваших работ:</b>\n"
         "• Завершённые объекты\n"
         "• Процесс работы\n"
         "• Примеры сложных проектов\n\n"
@@ -880,14 +954,14 @@ async def register_master_photos(update: Update, context: ContextTypes.DEFAULT_T
     if query.data == "add_photos_yes":
         context.user_data["portfolio_photos"] = []
         await query.edit_message_text(
-            "📸 <b>Загрузка портфолио (до 4 фото)</b>\n\n"
-            "🤵 <b>Фото #1 - Ваше лицо (обязательно!)</b>\n\n"
+            "📸 <b>Загрузка портфолио (до 10 фото)</b>\n\n"
+            "🤵 <b>Фото #1 - Желательно с вашим лицом!</b>\n\n"
             "Отправьте фото, на котором вас хорошо видно.\n"
             "Это может быть:\n"
             "• Фото на рабочем месте\n"
             "• Фото с инструментом\n"
             "• Фото на объекте\n\n"
-            "❗ Главное - чтобы было видно ваше лицо. Это повышает доверие клиентов.",
+            "💡 Фото с лицом повышает доверие клиентов и увеличивает отклики!",
             parse_mode="HTML",
         )
         return REGISTER_MASTER_PHOTOS
@@ -965,7 +1039,7 @@ async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return REGISTER_MASTER_PHOTOS
 
-        if len(context.user_data["portfolio_photos"]) < 4:
+        if len(context.user_data["portfolio_photos"]) < 10:
             context.user_data["portfolio_photos"].append(file_id)
             count = len(context.user_data["portfolio_photos"])
             logger.info(f"Фото добавлено. Всего: {count}")
@@ -973,31 +1047,33 @@ async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYP
             # Разные сообщения в зависимости от номера фото
             if count == 1:
                 await update.message.reply_text(
-                    "✅ <b>Фото #1 с вашим лицом добавлено!</b>\n\n"
-                    "📸 <b>Теперь добавьте фото ваших работ</b> (до 3 штук):\n\n"
+                    "✅ <b>Фото #1 добавлено!</b>\n\n"
+                    "💡 <b>РЕКОМЕНДАЦИЯ:</b> Первое фото желательно с вашим лицом!\n"
+                    "Это повышает доверие клиентов и увеличивает количество откликов.\n\n"
+                    "📸 <b>Теперь добавьте фото ваших работ</b> (до 9 штук):\n\n"
                     "Отправьте фотографии завершённых проектов, которыми вы гордитесь.\n\n"
                     "Когда загрузите все фото, напишите:\n"
                     "/done_photos или просто: готово",
                     parse_mode="HTML"
                 )
-            elif count < 4:
+            elif count < 10:
                 await update.message.reply_text(
                     f"✅ Фото #{count} добавлено!\n\n"
-                    f"📊 Загружено: {count}/4\n"
-                    f"Можно ещё: {4 - count}\n\n"
+                    f"📊 Загружено: {count}/10\n"
+                    f"Можно ещё: {10 - count}\n\n"
                     f"Отправьте ещё фото или напишите:\n"
                     f"/done_photos (или: готово)",
                     parse_mode="HTML"
                 )
-            else:  # count == 4
+            else:  # count == 10
                 await update.message.reply_text(
-                    "✅ Отлично! Все 4 фотографии загружены!\n\n"
+                    "✅ Отлично! Все 10 фотографий загружены!\n\n"
                     "📝 Напишите /done_photos или просто: готово\n"
                     "чтобы завершить регистрацию."
                 )
         else:
             await update.message.reply_text(
-                "⚠️ Максимум 4 фотографии.\n\n"
+                "⚠️ Максимум 10 фотографий.\n\n"
                 "Отправьте /done_photos для завершения."
             )
 
@@ -1077,6 +1153,7 @@ async def finalize_master_registration(update, context):
             experience=context.user_data["experience"],
             description=context.user_data["description"],
             portfolio_photos=photos_json,
+            cities=context.user_data.get("cities"),  # Список всех городов мастера
         )
 
     except ValueError as e:
@@ -5850,13 +5927,26 @@ async def worker_bid_select_currency(update: Update, context: ContextTypes.DEFAU
         InlineKeyboardButton("❌ Отмена", callback_data="cancel_bid")
     ]])
 
-    await query.edit_message_text(
+    text = (
         f"💰 <b>Валюта выбрана: {currency} ({currency_symbol})</b>\n\n"
         f"Теперь введите вашу цену в {currency} (только число):\n\n"
-        "Например: <code>150</code> или <code>99.50</code>",
-        parse_mode="HTML",
-        reply_markup=keyboard
+        "Например: <code>150</code> или <code>99.50</code>"
     )
+
+    # Пробуем отредактировать как caption (если есть фото), иначе как text
+    try:
+        await query.edit_message_caption(
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+    except:
+        # Если не получилось (нет фото), редактируем текст
+        await query.edit_message_text(
+            text=text,
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
 
     return BID_ENTER_PRICE
 

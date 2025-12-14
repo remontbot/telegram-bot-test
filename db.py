@@ -678,11 +678,16 @@ def delete_user_profile(telegram_id):
 
 # --- Профили мастеров и заказчиков ---
 
-def create_worker_profile(user_id, name, phone, city, regions, categories, experience, description, portfolio_photos=""):
+def create_worker_profile(user_id, name, phone, city, regions, categories, experience, description, portfolio_photos="", cities=None):
     """
     ОБНОВЛЕНО: Добавляет категории в нормализованную таблицу worker_categories.
+    ОБНОВЛЕНО: Поддержка множественного выбора городов через параметр cities.
     ИСПРАВЛЕНО: Валидация file_id для portfolio_photos.
     ИСПРАВЛЕНО: Проверка существования профиля для предотвращения race condition.
+
+    Args:
+        cities: Список городов (опционально). Если указан, используется вместо city.
+                Первый город из списка сохраняется в поле city для обратной совместимости.
     """
     # КРИТИЧНО: Проверяем что профиль еще не существует (race condition защита)
     existing_profile = get_worker_profile(user_id)
@@ -719,6 +724,12 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
         categories_list = [cat.strip() for cat in categories.split(',') if cat.strip()]
         add_worker_categories(worker_id, categories_list)
         logger.info(f"📋 Добавлены категории для мастера {worker_id}: {categories_list}")
+
+    # НОВОЕ: Добавляем города в таблицу worker_cities
+    if cities and isinstance(cities, list):
+        for city_name in cities:
+            add_worker_city(worker_id, city_name)
+        logger.info(f"🏙 Добавлено {len(cities)} городов для мастера {worker_id}: {cities}")
 
 
 def create_client_profile(user_id, name, phone, city, description, regions=None):
@@ -3959,37 +3970,49 @@ def count_available_orders_for_worker(worker_user_id):
     """
     ИСПРАВЛЕНО: Подсчитывает количество доступных заказов для мастера.
     Использует нормализованные таблицы worker_categories и order_categories для точного поиска.
+    Использует worker_cities для поиска заказов во всех городах мастера.
 
-    (в его городе и его категориях, на которые он еще не откликнулся)
+    (в его городах и его категориях, на которые он еще не откликнулся)
     """
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
-        # Получаем worker_id и город по user_id
-        cursor.execute("SELECT id, city FROM workers WHERE user_id = ?", (worker_user_id,))
+        # Получаем worker_id по user_id
+        cursor.execute("SELECT id FROM workers WHERE user_id = ?", (worker_user_id,))
         worker = cursor.fetchone()
 
         if not worker:
             return 0
 
-        worker_dict = dict(worker) if hasattr(worker, 'keys') else {'id': worker[0], 'city': worker[1]}
-        worker_id = worker_dict['id']
-        city = worker_dict['city']
+        worker_id = worker[0]
+
+        # Получаем список городов мастера
+        cursor.execute("SELECT city FROM worker_cities WHERE worker_id = ?", (worker_id,))
+        cities_result = cursor.fetchall()
+
+        if not cities_result:
+            return 0
+
+        cities = [row[0] for row in cities_result]
 
         # ИСПРАВЛЕНО: Используем нормализованные таблицы вместо LIKE
         # Ищем заказы через JOIN с order_categories и worker_categories
-        cursor.execute("""
+        # Проверяем, что заказ находится в одном из городов мастера
+        placeholders = ','.join('?' * len(cities))
+        query = f"""
             SELECT COUNT(DISTINCT o.id)
             FROM orders o
             JOIN order_categories oc ON o.id = oc.order_id
             JOIN worker_categories wc ON oc.category = wc.category
             WHERE o.status = 'open'
-            AND o.city = ?
+            AND o.city IN ({placeholders})
             AND wc.worker_id = ?
             AND o.id NOT IN (
                 SELECT order_id FROM bids WHERE worker_id = ?
             )
-        """, (city, worker_id, worker_id))
+        """
+
+        cursor.execute(query, (*cities, worker_id, worker_id))
 
         result = cursor.fetchone()
         count = result[0] if result else 0
@@ -4098,6 +4121,50 @@ def migrate_add_admin_and_ads():
 
         except Exception as e:
             logger.error(f"⚠️ Error in migrate_add_admin_and_ads: {e}")
+            conn.rollback()
+
+
+def migrate_add_worker_cities():
+    """
+    Добавляет таблицу worker_cities для хранения нескольких городов у мастера.
+    Мигрирует существующие данные из поля workers.city в новую таблицу.
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            # Создаем таблицу worker_cities
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS worker_cities (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    worker_id INTEGER NOT NULL,
+                    city TEXT NOT NULL,
+                    FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE CASCADE,
+                    UNIQUE (worker_id, city)
+                )
+            """)
+            logger.info("✅ Таблица worker_cities создана")
+
+            # Мигрируем существующие данные из workers.city
+            cursor.execute("""
+                SELECT id, city FROM workers WHERE city IS NOT NULL AND city != ''
+            """)
+            workers = cursor.fetchall()
+
+            for worker in workers:
+                worker_id, city = worker
+                cursor.execute("""
+                    INSERT OR IGNORE INTO worker_cities (worker_id, city)
+                    VALUES (?, ?)
+                """, (worker_id, city))
+
+            logger.info(f"✅ Мигрировано {len(workers)} городов из поля workers.city")
+
+            conn.commit()
+            logger.info("✅ Migration completed: worker_cities table!")
+
+        except Exception as e:
+            logger.error(f"⚠️ Error in migrate_add_worker_cities: {e}")
             conn.rollback()
 
 
@@ -4263,3 +4330,63 @@ def get_all_users():
         cursor = get_cursor(conn)
         cursor.execute("SELECT * FROM users")
         return cursor.fetchall()
+
+
+# ------- ФУНКЦИИ ДЛЯ РАБОТЫ С ГОРОДАМИ МАСТЕРА -------
+
+def add_worker_city(worker_id, city):
+    """Добавляет город к мастеру"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            INSERT OR IGNORE INTO worker_cities (worker_id, city)
+            VALUES (?, ?)
+        """, (worker_id, city))
+        conn.commit()
+        logger.info(f"✅ Город '{city}' добавлен мастеру worker_id={worker_id}")
+
+
+def remove_worker_city(worker_id, city):
+    """Удаляет город у мастера"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            DELETE FROM worker_cities WHERE worker_id = ? AND city = ?
+        """, (worker_id, city))
+        conn.commit()
+        logger.info(f"✅ Город '{city}' удален у мастера worker_id={worker_id}")
+
+
+def get_worker_cities(worker_id):
+    """Получает список всех городов мастера"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT city FROM worker_cities WHERE worker_id = ? ORDER BY id
+        """, (worker_id,))
+        return [row[0] for row in cursor.fetchall()]
+
+
+def clear_worker_cities(worker_id):
+    """Удаляет все города у мастера"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("DELETE FROM worker_cities WHERE worker_id = ?", (worker_id,))
+        conn.commit()
+        logger.info(f"✅ Все города удалены у мастера worker_id={worker_id}")
+
+
+def set_worker_cities(worker_id, cities):
+    """Устанавливает список городов мастера (заменяет все существующие)"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        # Удаляем все существующие
+        cursor.execute("DELETE FROM worker_cities WHERE worker_id = ?", (worker_id,))
+        # Добавляем новые
+        for city in cities:
+            cursor.execute("""
+                INSERT OR IGNORE INTO worker_cities (worker_id, city)
+                VALUES (?, ?)
+            """, (worker_id, city))
+        conn.commit()
+        logger.info(f"✅ Установлено {len(cities)} городов для мастера worker_id={worker_id}")
