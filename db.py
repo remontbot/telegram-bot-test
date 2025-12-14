@@ -4255,3 +4255,11 @@ def log_ad_view(ad_id, user_id, placement, clicked=False):
             cursor.execute("UPDATE ads SET view_count = view_count + 1 WHERE id = ?", (ad_id,))
 
         conn.commit()
+
+
+def get_all_users():
+    """Получает всех пользователей (для broadcast)"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT * FROM users")
+        return cursor.fetchall()

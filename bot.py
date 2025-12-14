@@ -813,6 +813,35 @@ def main():
         )
     )
 
+    # --- ConversationHandler для админ-панели ---
+    admin_conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("admin", handlers.admin_panel)
+        ],
+        states={
+            handlers.ADMIN_MENU: [
+                CallbackQueryHandler(handlers.admin_broadcast_start, pattern="^admin_broadcast$"),
+                CallbackQueryHandler(handlers.admin_create_ad_start, pattern="^admin_create_ad$"),
+                CallbackQueryHandler(handlers.admin_stats, pattern="^admin_stats$"),
+                CallbackQueryHandler(handlers.admin_close, pattern="^admin_close$"),
+                CallbackQueryHandler(handlers.admin_panel, pattern="^admin_back$"),  # Возврат в меню
+            ],
+            handlers.BROADCAST_SELECT_AUDIENCE: [
+                CallbackQueryHandler(handlers.admin_broadcast_select_audience, pattern="^broadcast_"),
+                CallbackQueryHandler(handlers.admin_panel, pattern="^admin_back$"),
+            ],
+            handlers.BROADCAST_ENTER_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_broadcast_send),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", handlers.cancel_from_command),
+        ],
+        allow_reentry=True,
+    )
+
+    application.add_handler(admin_conv_handler)
+
     # Обработчик неизвестных команд
     application.add_handler(
         MessageHandler(filters.COMMAND, handlers.unknown_command)

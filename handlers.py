@@ -340,7 +340,11 @@ def _get_bids_word(count):
     # Состояния для оставления отзыва
     REVIEW_SELECT_RATING,
     REVIEW_ENTER_COMMENT,
-) = range(44)
+    # Состояния для админ-панели
+    ADMIN_MENU,
+    BROADCAST_SELECT_AUDIENCE,
+    BROADCAST_ENTER_MESSAGE,
+) = range(47)
 
 
 def is_valid_name(name: str) -> bool:
@@ -7846,3 +7850,219 @@ async def check_expired_chats_command(update: Update, context: ContextTypes.DEFA
 # ============================================
 # КОНЕЦ СИСТЕМЫ УВЕДОМЛЕНИЙ
 # ============================================
+
+
+# ============================================
+# АДМИН-ПАНЕЛЬ И РЕКЛАМА
+# ============================================
+
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Админ-панель - доступна только админам"""
+    telegram_id = update.effective_user.id
+
+    if not db.is_admin(telegram_id):
+        await update.message.reply_text("❌ У вас нет прав администратора.")
+        return ConversationHandler.END
+
+    keyboard = [
+        [InlineKeyboardButton("📢 Отправить Broadcast", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("📺 Создать рекламу", callback_data="admin_create_ad")],
+        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton("❌ Закрыть", callback_data="admin_close")],
+    ]
+
+    await update.message.reply_text(
+        "🔧 <b>АДМИН-ПАНЕЛЬ</b>\n\n"
+        "Выберите действие:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало создания broadcast"""
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = [
+        [InlineKeyboardButton("👥 Всем", callback_data="broadcast_all")],
+        [InlineKeyboardButton("👷 Только мастерам", callback_data="broadcast_workers")],
+        [InlineKeyboardButton("📋 Только клиентам", callback_data="broadcast_clients")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")],
+    ]
+
+    await query.edit_message_text(
+        "📢 <b>СОЗДАНИЕ BROADCAST</b>\n\n"
+        "Кому отправить сообщение?",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return BROADCAST_SELECT_AUDIENCE
+
+
+async def admin_broadcast_select_audience(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор аудитории для broadcast"""
+    query = update.callback_query
+    await query.answer()
+
+    audience = query.data.replace("broadcast_", "")
+    context.user_data['broadcast_audience'] = audience
+
+    audience_text = {
+        'all': '👥 Всем пользователям',
+        'workers': '👷 Только мастерам',
+        'clients': '📋 Только клиентам'
+    }.get(audience, 'Неизвестно')
+
+    await query.edit_message_text(
+        f"📢 <b>СОЗДАНИЕ BROADCAST</b>\n\n"
+        f"Аудитория: {audience_text}\n\n"
+        f"Теперь введите текст сообщения:\n"
+        f"(Поддерживается HTML: &lt;b&gt;жирный&lt;/b&gt;, &lt;i&gt;курсив&lt;/i&gt;)\n\n"
+        f"Или отправьте /cancel для отмены",
+        parse_mode="HTML"
+    )
+
+    return BROADCAST_ENTER_MESSAGE
+
+
+async def admin_broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправка broadcast сообщения"""
+    message_text = update.message.text
+    audience = context.user_data.get('broadcast_audience', 'all')
+    telegram_id = update.effective_user.id
+
+    # Создаем broadcast в БД
+    broadcast_id = db.create_broadcast(message_text, audience, None, telegram_id)
+
+    # Получаем список пользователей
+    users = db.get_all_users()  # Нужно создать эту функцию в db.py
+
+    sent_count = 0
+    failed_count = 0
+
+    # Фильтруем по аудитории и отправляем
+    for user in users:
+        user_dict = dict(user)
+
+        # Проверяем аудиторию
+        if audience == 'workers':
+            worker = db.get_worker_profile(user_dict['id'])
+            if not worker:
+                continue
+        elif audience == 'clients':
+            client = db.get_client_profile(user_dict['id'])
+            if not client:
+                continue
+
+        # Отправляем сообщение
+        try:
+            await context.bot.send_message(
+                chat_id=user_dict['telegram_id'],
+                text=message_text,
+                parse_mode="HTML"
+            )
+            sent_count += 1
+        except Exception as e:
+            logger.error(f"Ошибка отправки broadcast пользователю {user_dict['telegram_id']}: {e}")
+            failed_count += 1
+
+    # Обновляем статистику в БД
+    with db.get_db_connection() as conn:
+        cursor = db.get_cursor(conn)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            UPDATE broadcasts
+            SET sent_at = ?, sent_count = ?, failed_count = ?
+            WHERE id = ?
+        """, (now, sent_count, failed_count, broadcast_id))
+        conn.commit()
+
+    await update.message.reply_text(
+        f"✅ <b>Broadcast отправлен!</b>\n\n"
+        f"📊 Отправлено: {sent_count}\n"
+        f"❌ Ошибок: {failed_count}",
+        parse_mode="HTML"
+    )
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+async def admin_create_ad_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Упрощенное создание рекламы через текстовую команду"""
+    query = update.callback_query
+    await query.answer()
+
+    await query.edit_message_text(
+        "📺 <b>СОЗДАНИЕ РЕКЛАМЫ</b>\n\n"
+        "Для создания рекламы используйте команду:\n\n"
+        "<code>/createad</code>\n\n"
+        "Формат:\n"
+        "• Заголовок\n"
+        "• Описание\n"
+        "• URL кнопки\n"
+        "• Текст кнопки\n"
+        "• Placement (menu_banner/morning_digest)\n\n"
+        "Или отправьте фото с описанием в виде:\n"
+        "Заголовок | Описание | URL | Текст кнопки | Placement",
+        parse_mode="HTML"
+    )
+
+    return ConversationHandler.END
+
+
+async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Статистика по broadcast и рекламе"""
+    query = update.callback_query
+    await query.answer()
+
+    # Получаем статистику из БД
+    with db.get_db_connection() as conn:
+        cursor = db.get_cursor(conn)
+
+        # Broadcasts
+        cursor.execute("SELECT COUNT(*), SUM(sent_count), SUM(failed_count) FROM broadcasts")
+        broadcast_stats = cursor.fetchone()
+
+        # Ads
+        cursor.execute("SELECT COUNT(*), SUM(view_count), SUM(click_count) FROM ads WHERE active = 1")
+        ad_stats = cursor.fetchone()
+
+    broadcast_count = broadcast_stats[0] if broadcast_stats else 0
+    total_sent = broadcast_stats[1] if broadcast_stats and broadcast_stats[1] else 0
+    total_failed = broadcast_stats[2] if broadcast_stats and broadcast_stats[2] else 0
+
+    ad_count = ad_stats[0] if ad_stats else 0
+    total_views = ad_stats[1] if ad_stats and ad_stats[1] else 0
+    total_clicks = ad_stats[2] if ad_stats and ad_stats[2] else 0
+
+    await query.edit_message_text(
+        "📊 <b>СТАТИСТИКА</b>\n\n"
+        "📢 <b>Broadcasts:</b>\n"
+        f"• Всего отправлено: {broadcast_count}\n"
+        f"• Доставлено сообщений: {total_sent}\n"
+        f"• Ошибок: {total_failed}\n\n"
+        "📺 <b>Реклама:</b>\n"
+        f"• Активных объявлений: {ad_count}\n"
+        f"• Просмотров: {total_views}\n"
+        f"• Кликов: {total_clicks}",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")
+        ]])
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Закрыть админ-панель"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("✅ Админ-панель закрыта.")
+    context.user_data.clear()
+    return ConversationHandler.END
