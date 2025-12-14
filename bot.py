@@ -84,7 +84,13 @@ def main():
     db.migrate_normalize_categories()  # ИСПРАВЛЕНИЕ: Нормализация категорий мастеров (точный поиск вместо LIKE)
     db.migrate_normalize_order_categories()  # ИСПРАВЛЕНИЕ: Нормализация категорий заказов (точный поиск вместо LIKE)
     db.migrate_add_ready_in_days_and_notifications()  # Добавляем ready_in_days в bids и worker_notifications
+    db.migrate_add_admin_and_ads()  # Добавляем систему админ-панели, broadcast и рекламы
     db.create_indexes()  # Создаем индексы для оптимизации производительности
+
+    # Добавляем супер-админа (замените YOUR_TELEGRAM_ID на ваш реальный telegram_id)
+    SUPER_ADMIN_TELEGRAM_ID = None  # TODO: Заменить на ваш telegram_id
+    if SUPER_ADMIN_TELEGRAM_ID:
+        db.add_admin_user(SUPER_ADMIN_TELEGRAM_ID, role='super_admin')
 
     token = get_bot_token()
 

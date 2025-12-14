@@ -3995,3 +3995,263 @@ def count_available_orders_for_worker(worker_user_id):
         count = result[0] if result else 0
 
         return count
+
+
+# ============================================
+# СИСТЕМА АДМИН-ПАНЕЛИ И РЕКЛАМЫ
+# ============================================
+
+def migrate_add_admin_and_ads():
+    """
+    Добавляет таблицы для:
+    1. Админ-панели (супер-админы для broadcast и управления рекламой)
+    2. Системы рекламы с таргетингом по категориям
+    3. Broadcast-оповещений
+    4. Статистики просмотров рекламы
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            # 1. Таблица админов
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS admin_users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER UNIQUE NOT NULL,
+                    role TEXT DEFAULT 'admin',
+                    added_at TEXT NOT NULL,
+                    added_by INTEGER
+                )
+            """)
+            logger.info("✅ Таблица admin_users создана")
+
+            # 2. Таблица broadcast-оповещений
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS broadcasts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_text TEXT NOT NULL,
+                    target_audience TEXT NOT NULL,
+                    photo_file_id TEXT,
+                    created_at TEXT NOT NULL,
+                    sent_at TEXT,
+                    sent_count INTEGER DEFAULT 0,
+                    failed_count INTEGER DEFAULT 0,
+                    created_by INTEGER NOT NULL,
+                    FOREIGN KEY (created_by) REFERENCES admin_users(telegram_id)
+                )
+            """)
+            logger.info("✅ Таблица broadcasts создана")
+
+            # 3. Таблица рекламы
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    photo_file_id TEXT,
+                    button_text TEXT,
+                    button_url TEXT,
+                    target_audience TEXT NOT NULL,
+                    placement TEXT NOT NULL,
+                    active BOOLEAN DEFAULT 1,
+                    start_date TEXT,
+                    end_date TEXT,
+                    max_views_per_user_per_day INTEGER DEFAULT 1,
+                    view_count INTEGER DEFAULT 0,
+                    click_count INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    created_by INTEGER NOT NULL,
+                    FOREIGN KEY (created_by) REFERENCES admin_users(telegram_id)
+                )
+            """)
+            logger.info("✅ Таблица ads создана")
+
+            # 4. Таблица связи рекламы с категориями (для таргетинга)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ad_categories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ad_id INTEGER NOT NULL,
+                    category TEXT NOT NULL,
+                    FOREIGN KEY (ad_id) REFERENCES ads(id) ON DELETE CASCADE,
+                    UNIQUE (ad_id, category)
+                )
+            """)
+            logger.info("✅ Таблица ad_categories создана")
+
+            # 5. Таблица просмотров рекламы
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ad_views (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ad_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    viewed_at TEXT NOT NULL,
+                    clicked BOOLEAN DEFAULT 0,
+                    placement TEXT,
+                    FOREIGN KEY (ad_id) REFERENCES ads(id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users(id)
+                )
+            """)
+            logger.info("✅ Таблица ad_views создана")
+
+            conn.commit()
+            logger.info("✅ Migration completed: admin and ads system!")
+
+        except Exception as e:
+            logger.error(f"⚠️ Error in migrate_add_admin_and_ads: {e}")
+            conn.rollback()
+
+
+def add_admin_user(telegram_id, role='admin', added_by=None):
+    """Добавляет пользователя в список админов"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO admin_users (telegram_id, role, added_at, added_by)
+            VALUES (?, ?, ?, ?)
+        """, (telegram_id, role, now, added_by))
+
+        conn.commit()
+        logger.info(f"✅ Админ добавлен: telegram_id={telegram_id}, role={role}")
+
+
+def is_admin(telegram_id):
+    """Проверяет является ли пользователь админом"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT COUNT(*) FROM admin_users WHERE telegram_id = ?", (telegram_id,))
+        result = cursor.fetchone()
+        return result[0] > 0 if result else False
+
+
+def create_broadcast(message_text, target_audience, photo_file_id, created_by):
+    """Создает broadcast-оповещение"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        cursor.execute("""
+            INSERT INTO broadcasts (message_text, target_audience, photo_file_id, created_at, created_by)
+            VALUES (?, ?, ?, ?, ?)
+        """, (message_text, target_audience, photo_file_id, now, created_by))
+
+        conn.commit()
+        broadcast_id = cursor.lastrowid
+        logger.info(f"✅ Broadcast создан: ID={broadcast_id}, audience={target_audience}")
+        return broadcast_id
+
+
+def create_ad(title, description, photo_file_id, button_text, button_url,
+              target_audience, placement, start_date, end_date,
+              max_views_per_user_per_day, created_by, categories=None):
+    """Создает рекламу с опциональным таргетингом по категориям"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        cursor.execute("""
+            INSERT INTO ads (
+                title, description, photo_file_id, button_text, button_url,
+                target_audience, placement, start_date, end_date,
+                max_views_per_user_per_day, created_at, created_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (title, description, photo_file_id, button_text, button_url,
+              target_audience, placement, start_date, end_date,
+              max_views_per_user_per_day, now, created_by))
+
+        ad_id = cursor.lastrowid
+
+        # Добавляем категории для таргетинга (если указаны)
+        if categories:
+            for category in categories:
+                cursor.execute("""
+                    INSERT INTO ad_categories (ad_id, category)
+                    VALUES (?, ?)
+                """, (ad_id, category))
+
+        conn.commit()
+        logger.info(f"✅ Реклама создана: ID={ad_id}, categories={categories}")
+        return ad_id
+
+
+def get_active_ad(placement, user_id=None, user_categories=None):
+    """
+    Получает активную рекламу для показа.
+
+    Args:
+        placement: где показывать ('menu_banner', 'morning_digest')
+        user_id: ID пользователя (для проверки лимита показов)
+        user_categories: список категорий пользователя (для таргетинга)
+
+    Returns:
+        dict с данными рекламы или None
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        today_start = datetime.now().strftime("%Y-%m-%d 00:00:00")
+
+        # Базовый запрос
+        query = """
+            SELECT a.*
+            FROM ads a
+            WHERE a.active = 1
+            AND a.placement = ?
+            AND (a.start_date IS NULL OR a.start_date <= ?)
+            AND (a.end_date IS NULL OR a.end_date >= ?)
+        """
+        params = [placement, now, now]
+
+        # Если есть категории пользователя - фильтруем по таргетингу
+        if user_categories:
+            query += """
+                AND (
+                    NOT EXISTS (SELECT 1 FROM ad_categories WHERE ad_id = a.id)
+                    OR EXISTS (
+                        SELECT 1 FROM ad_categories ac
+                        WHERE ac.ad_id = a.id
+                        AND ac.category IN ({})
+                    )
+                )
+            """.format(','.join('?' * len(user_categories)))
+            params.extend(user_categories)
+
+        # Проверяем лимит показов пользователю
+        if user_id:
+            query += """
+                AND (
+                    SELECT COUNT(*) FROM ad_views av
+                    WHERE av.ad_id = a.id
+                    AND av.user_id = ?
+                    AND av.viewed_at >= ?
+                ) < a.max_views_per_user_per_day
+            """
+            params.extend([user_id, today_start])
+
+        query += " ORDER BY a.id DESC LIMIT 1"
+
+        cursor.execute(query, params)
+        result = cursor.fetchone()
+
+        return dict(result) if result else None
+
+
+def log_ad_view(ad_id, user_id, placement, clicked=False):
+    """Записывает просмотр/клик по рекламе"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        cursor.execute("""
+            INSERT INTO ad_views (ad_id, user_id, viewed_at, clicked, placement)
+            VALUES (?, ?, ?, ?, ?)
+        """, (ad_id, user_id, now, clicked, placement))
+
+        # Обновляем счетчики
+        if clicked:
+            cursor.execute("UPDATE ads SET click_count = click_count + 1 WHERE id = ?", (ad_id,))
+        else:
+            cursor.execute("UPDATE ads SET view_count = view_count + 1 WHERE id = ?", (ad_id,))
+
+        conn.commit()
