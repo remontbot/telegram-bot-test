@@ -7,6 +7,7 @@ from telegram.ext import (
     ConversationHandler,
     MessageHandler,
     CallbackQueryHandler,
+    ContextTypes,
     filters,
 )
 from telegram import Update
@@ -63,10 +64,32 @@ def get_bot_token() -> str:
 
 
 def main():
+    # Инициализация connection pool (для PostgreSQL)
+    db.init_connection_pool()
+
     db.init_db()
     db.migrate_add_portfolio_photos()  # Добавляем колонку если её нет
     db.migrate_add_order_photos()  # Добавляем колонку photos в orders
     db.migrate_add_currency_to_bids()  # Добавляем колонку currency в bids
+    db.migrate_add_cascading_deletes()  # Добавляем cascading deletes для PostgreSQL
+    db.migrate_add_order_completion_tracking()  # Добавляем отслеживание завершения заказов
+    db.migrate_add_profile_photo()  # Добавляем поле для фото профиля мастера
+    db.migrate_add_premium_features()  # Добавляем поля для premium функций (выключены по умолчанию)
+    db.migrate_add_moderation()  # Добавляем поля для модерации и банов
+    db.migrate_add_regions_to_clients()  # Добавляем поле regions в таблицу clients
+    db.migrate_add_videos_to_orders()  # Добавляем поле videos в таблицу orders
+    db.migrate_add_chat_system()  # Создаём таблицы для чата между клиентом и мастером
+    db.migrate_add_transactions()  # Создаём таблицу для истории транзакций
+    db.migrate_add_notification_settings()  # Добавляем настройки уведомлений для мастеров
+    db.migrate_normalize_categories()  # ИСПРАВЛЕНИЕ: Нормализация категорий мастеров (точный поиск вместо LIKE)
+    db.migrate_normalize_order_categories()  # ИСПРАВЛЕНИЕ: Нормализация категорий заказов (точный поиск вместо LIKE)
+    db.migrate_add_ready_in_days_and_notifications()  # Добавляем ready_in_days в bids и worker_notifications
+    db.migrate_add_admin_and_ads()  # Добавляем систему админ-панели, broadcast и рекламы
+    db.create_indexes()  # Создаем индексы для оптимизации производительности
+
+    # Добавляем супер-админа
+    SUPER_ADMIN_TELEGRAM_ID = 641830790  # Ваш telegram_id
+    db.add_admin_user(SUPER_ADMIN_TELEGRAM_ID, role='super_admin')
 
     token = get_bot_token()
 
@@ -102,6 +125,12 @@ def main():
                     handlers.register_master_phone,
                 )
             ],
+            handlers.REGISTER_MASTER_REGION_SELECT: [
+                CallbackQueryHandler(
+                    handlers.register_master_region_select,
+                    pattern="^masterregion_",
+                )
+            ],
             handlers.REGISTER_MASTER_CITY: [
                 CallbackQueryHandler(
                     handlers.register_master_city_select,
@@ -120,17 +149,23 @@ def main():
                     handlers.register_master_city_other,
                 )
             ],
-            # Районы больше не используются - переходим сразу к категориям
-            handlers.REGISTER_MASTER_CATEGORIES_SELECT: [
+            # Новые состояния для выбора категорий (7 основных категорий)
+            handlers.REGISTER_MASTER_MAIN_CATEGORY: [
                 CallbackQueryHandler(
-                    handlers.register_master_categories_select,
-                    pattern="^cat_",
+                    handlers.register_master_main_category,
+                    pattern="^maincat_",
                 )
             ],
-            handlers.REGISTER_MASTER_CATEGORIES_OTHER: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    handlers.register_master_categories_other,
+            handlers.REGISTER_MASTER_SUBCATEGORY_SELECT: [
+                CallbackQueryHandler(
+                    handlers.register_master_subcategory_select,
+                    pattern="^subcat_",
+                )
+            ],
+            handlers.REGISTER_MASTER_ASK_MORE_CATEGORIES: [
+                CallbackQueryHandler(
+                    handlers.register_master_ask_more_categories,
+                    pattern="^more_",
                 )
             ],
             # ОБНОВЛЕНО: Теперь опыт выбирается кнопками
@@ -153,7 +188,7 @@ def main():
                     pattern="^add_photos_",
                 ),
                 MessageHandler(
-                    filters.PHOTO | filters.TEXT,
+                    filters.PHOTO | filters.TEXT | filters.VIDEO | filters.Document.ALL,
                     handlers.handle_master_photos,
                 ),
             ],
@@ -169,6 +204,12 @@ def main():
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     handlers.register_client_phone,
+                )
+            ],
+            handlers.REGISTER_CLIENT_REGION_SELECT: [
+                CallbackQueryHandler(
+                    handlers.register_client_region_select,
+                    pattern="^clientregion_",
                 )
             ],
             handlers.REGISTER_CLIENT_CITY: [
@@ -193,6 +234,11 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", handlers.cancel),
+            CommandHandler("start", handlers.cancel_from_start),  # КРИТИЧНО: выход из застрявшего диалога
+            MessageHandler(filters.Regex("^(Отмена|отмена|cancel)$"), handlers.cancel),
+            CallbackQueryHandler(handlers.cancel_from_callback, pattern="^go_main_menu$"),  # КРИТИЧНО: выход через кнопку меню
+            CallbackQueryHandler(handlers.cancel_from_callback, pattern="^show_worker_menu$"),  # КРИТИЧНО: выход через кнопку меню мастера
+            CallbackQueryHandler(handlers.cancel_from_callback, pattern="^show_client_menu$"),  # КРИТИЧНО: выход через кнопку меню клиента
         ],
         allow_reentry=True,
     )
@@ -206,24 +252,39 @@ def main():
             CallbackQueryHandler(handlers.client_create_order, pattern="^client_create_order$")
         ],
         states={
+            handlers.CREATE_ORDER_REGION_SELECT: [
+                CallbackQueryHandler(handlers.create_order_region_select, pattern="^orderregion_"),
+            ],
             handlers.CREATE_ORDER_CITY: [
                 CallbackQueryHandler(handlers.create_order_city_select, pattern="^ordercity_"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.create_order_city_select),
+                CallbackQueryHandler(handlers.create_order_city_other, pattern="^ordercity_other$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.create_order_city_other),
+                CallbackQueryHandler(handlers.create_order_back_to_region, pattern="^create_order_back_to_region$"),
             ],
-            handlers.CREATE_ORDER_CATEGORIES: [
-                CallbackQueryHandler(handlers.create_order_categories_select, pattern="^ordercat_"),
+            handlers.CREATE_ORDER_MAIN_CATEGORY: [
+                CallbackQueryHandler(handlers.create_order_main_category, pattern="^order_maincat_"),
+                CallbackQueryHandler(handlers.create_order_back_to_region, pattern="^create_order_back_to_region$"),
+                CallbackQueryHandler(handlers.create_order_back_to_city, pattern="^create_order_back_to_city$"),
+            ],
+            handlers.CREATE_ORDER_SUBCATEGORY_SELECT: [
+                CallbackQueryHandler(handlers.create_order_subcategory_select, pattern="^order_subcat_"),
+                CallbackQueryHandler(handlers.create_order_back_to_maincat, pattern="^create_order_back_to_maincat$"),
             ],
             handlers.CREATE_ORDER_DESCRIPTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.create_order_description),
             ],
             handlers.CREATE_ORDER_PHOTOS: [
                 MessageHandler(filters.PHOTO, handlers.create_order_photo_upload),
+                MessageHandler(filters.VIDEO, handlers.create_order_photo_upload),
+                CommandHandler("done", handlers.create_order_done_uploading),
                 CallbackQueryHandler(handlers.create_order_skip_photos, pattern="^order_skip_photos$"),
                 CallbackQueryHandler(handlers.create_order_publish, pattern="^order_publish$"),
             ],
         },
         fallbacks=[
             CommandHandler("cancel", handlers.cancel),
+            CommandHandler("start", handlers.cancel_from_start),  # КРИТИЧНО: выход из застрявшего диалога
+            MessageHandler(filters.Regex("^(Отмена|отмена|cancel)$"), handlers.cancel),
         ],
         allow_reentry=True,
     )
@@ -251,14 +312,21 @@ def main():
             handlers.EDIT_PHONE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.edit_phone_save),
             ],
+            handlers.EDIT_REGION_SELECT: [
+                CallbackQueryHandler(handlers.edit_region_select, pattern="^editregion_"),
+            ],
             handlers.EDIT_CITY: [
+                CallbackQueryHandler(handlers.edit_city_select, pattern="^editcity_"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.edit_city_save),
             ],
-            handlers.EDIT_CATEGORIES_SELECT: [
-                CallbackQueryHandler(handlers.edit_categories_select, pattern="^editcat_"),
+            handlers.EDIT_MAIN_CATEGORY: [
+                CallbackQueryHandler(handlers.edit_main_category, pattern="^editmaincat_"),
             ],
-            handlers.EDIT_CATEGORIES_OTHER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.edit_categories_other),
+            handlers.EDIT_SUBCATEGORY_SELECT: [
+                CallbackQueryHandler(handlers.edit_subcategory_select, pattern="^editsubcat_"),
+            ],
+            handlers.EDIT_ASK_MORE_CATEGORIES: [
+                CallbackQueryHandler(handlers.edit_ask_more_categories, pattern="^editmore_"),
             ],
             handlers.EDIT_EXPERIENCE: [
                 CallbackQueryHandler(handlers.edit_experience_save, pattern="^editexp_"),
@@ -269,6 +337,8 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", handlers.cancel),
+            CommandHandler("start", handlers.cancel_from_start),  # КРИТИЧНО: выход из застрявшего диалога
+            MessageHandler(filters.Regex("^(Отмена|отмена|cancel)$"), handlers.cancel),
             CallbackQueryHandler(handlers.show_worker_profile, pattern="^worker_profile$"),
         ],
         allow_reentry=True,
@@ -283,11 +353,14 @@ def main():
             CallbackQueryHandler(handlers.worker_bid_on_order, pattern="^bid_on_order_")
         ],
         states={
+            handlers.BID_SELECT_CURRENCY: [
+                CallbackQueryHandler(handlers.worker_bid_select_currency, pattern="^bid_currency_"),
+            ],
             handlers.BID_ENTER_PRICE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.worker_bid_enter_price),
             ],
-            handlers.BID_SELECT_CURRENCY: [
-                CallbackQueryHandler(handlers.worker_bid_select_currency, pattern="^bid_currency_"),
+            handlers.BID_SELECT_READY_DAYS: [
+                CallbackQueryHandler(handlers.worker_bid_select_ready_days, pattern="^ready_days_"),
             ],
             handlers.BID_ENTER_COMMENT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.worker_bid_enter_comment),
@@ -310,6 +383,80 @@ def main():
         )
     )
 
+    # --- Обработчик отмены заказа ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.cancel_order_handler,
+            pattern="^cancel_order_"
+        )
+    )
+
+    # НОВОЕ: Обработчики завершения заказа и оценки мастера
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.complete_order_handler,
+            pattern="^complete_order_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.submit_order_rating,
+            pattern="^rate_order_"
+        )
+    )
+
+    # НОВОЕ: Обработчики фотографий завершённых работ
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_upload_work_photo_start,
+            pattern="^upload_work_photo_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_skip_work_photo,
+            pattern="^skip_work_photo_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_finish_work_photos,
+            pattern="^finish_work_photos_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_cancel_work_photos,
+            pattern="^cancel_work_photos_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_check_work_photos,
+            pattern="^check_work_photos_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_verify_work_photo,
+            pattern="^verify_photo_"
+        )
+    )
+
+    # MessageHandler для приёма фото завершённых работ от мастера
+    application.add_handler(
+        MessageHandler(
+            filters.PHOTO & ~filters.COMMAND,
+            handlers.worker_upload_work_photo_receive
+        )
+    )
+
     # --- Обработчики для добавления фото (БЕЗ ConversationHandler) ---
     
     # Начало добавления фото
@@ -321,10 +468,29 @@ def main():
     application.add_handler(
         CallbackQueryHandler(handlers.worker_add_photos_finish_callback, pattern="^finish_adding_photos$")
     )
-    
-    # Загрузка фото (только когда активен режим добавления)
+
+    # --- Обработчики фото профиля ---
+    application.add_handler(
+        CallbackQueryHandler(handlers.edit_profile_photo_start, pattern="^edit_profile_photo$")
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(handlers.cancel_profile_photo, pattern="^cancel_profile_photo$")
+    )
+
+    # Загрузка фото (обрабатывает и portfolio_photos и profile_photo)
     application.add_handler(
         MessageHandler(filters.PHOTO, handlers.worker_add_photos_upload)
+    )
+
+    # Загрузка видео (для портфолио)
+    application.add_handler(
+        MessageHandler(filters.VIDEO, handlers.worker_add_photos_upload)
+    )
+
+    # Загрузка документов (когда пользователь перетягивает файл)
+    application.add_handler(
+        MessageHandler(filters.Document.ALL, handlers.worker_add_photos_upload)
     )
 
     # --- Меню мастера и заказчика ---
@@ -338,8 +504,37 @@ def main():
 
     application.add_handler(
         CallbackQueryHandler(
+            handlers.toggle_notifications,
+            pattern="^toggle_notifications$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_my_bids,
+            pattern="^worker_my_bids$",
+        )
+    )
+
+    # НОВОЕ: Мои заказы мастера (заказы в работе)
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_my_orders,
+            pattern="^worker_my_orders$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
             handlers.show_client_menu,
             pattern="^show_client_menu$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_my_payments,
+            pattern="^client_my_payments$",
         )
     )
 
@@ -426,6 +621,132 @@ def main():
         )
     )
 
+    # --- Обработчики завершения заказа ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_complete_order,
+            pattern="^complete_order_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_complete_order,
+            pattern="^worker_complete_order_"
+        )
+    )
+
+    # --- Обработчики просмотра отзывов ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.show_reviews,
+            pattern="^show_reviews_"
+        )
+    )
+
+    # --- Обработчики галереи работ ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.view_portfolio,
+            pattern="^view_portfolio$"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.portfolio_navigate,
+            pattern="^portfolio_(prev|next)$"
+        )
+    )
+
+    # --- Обработчики просмотра откликов ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.view_order_bids,
+            pattern="^view_bids_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.sort_bids_handler,
+            pattern="^sort_bids_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.bid_navigate,
+            pattern="^bid_(prev|next)$"
+        )
+    )
+
+    # --- Обработчики выбора мастера и оплаты ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.select_master,
+            pattern="^select_master_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.pay_with_stars,
+            pattern="^pay_stars_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.pay_with_card,
+            pattern="^pay_card_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.confirm_payment,
+            pattern="^confirm_payment_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.test_payment_success,
+            pattern="^test_payment_success_"
+        )
+    )
+
+    # --- Обработчики чатов ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.open_chat,
+            pattern="^open_chat_"
+        )
+    )
+
+    # --- ConversationHandler для отзывов ---
+    review_conv_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(handlers.start_review, pattern="^leave_review_"),
+        ],
+        states={
+            handlers.REVIEW_SELECT_RATING: [
+                CallbackQueryHandler(handlers.review_select_rating, pattern="^review_rating_"),
+            ],
+            handlers.REVIEW_ENTER_COMMENT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.review_enter_comment),
+                CallbackQueryHandler(handlers.review_skip_comment, pattern="^review_skip_comment$"),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(handlers.cancel_review, pattern="^cancel_review$"),
+        ],
+        allow_reentry=True,
+    )
+
+    application.add_handler(review_conv_handler)
+
     # Команда для очистки профиля
     application.add_handler(
         CommandHandler("reset_profile", handlers.reset_profile_command)
@@ -441,10 +762,198 @@ def main():
         CommandHandler("add_test_workers", handlers.add_test_workers_command)
     )
 
+    # === ADMIN КОМАНДЫ ===
+
+    # Команды управления premium функциями (только для администратора)
+    application.add_handler(
+        CommandHandler("enable_premium", handlers.enable_premium_command)
+    )
+
+    application.add_handler(
+        CommandHandler("disable_premium", handlers.disable_premium_command)
+    )
+
+    application.add_handler(
+        CommandHandler("premium_status", handlers.premium_status_command)
+    )
+
+    # Команды модерации (только для администратора)
+    application.add_handler(
+        CommandHandler("ban", handlers.ban_user_command)
+    )
+
+    application.add_handler(
+        CommandHandler("unban", handlers.unban_user_command)
+    )
+
+    application.add_handler(
+        CommandHandler("banned", handlers.banned_users_command)
+    )
+
+    # Команда статистики (только для администратора)
+    application.add_handler(
+        CommandHandler("stats", handlers.stats_command)
+    )
+
+    # Команда для массовой рассылки уведомлений (только для администратора)
+    application.add_handler(
+        CommandHandler("announce", handlers.announce_command)
+    )
+
+    # Команда для проверки просроченных чатов (только для администратора)
+    application.add_handler(
+        CommandHandler("check_expired_chats", handlers.check_expired_chats_command)
+    )
+
+    # Глобальный обработчик сообщений для чатов (ВАЖНО: должен быть ДО unknown_command)
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handlers.handle_chat_message
+        )
+    )
+
+    # --- ConversationHandler для админ-панели ---
+    admin_conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("admin", handlers.admin_panel)
+        ],
+        states={
+            handlers.ADMIN_MENU: [
+                CallbackQueryHandler(handlers.admin_broadcast_start, pattern="^admin_broadcast$"),
+                CallbackQueryHandler(handlers.admin_create_ad_start, pattern="^admin_create_ad$"),
+                CallbackQueryHandler(handlers.admin_stats, pattern="^admin_stats$"),
+                CallbackQueryHandler(handlers.admin_close, pattern="^admin_close$"),
+                CallbackQueryHandler(handlers.admin_panel, pattern="^admin_back$"),  # Возврат в меню
+            ],
+            handlers.BROADCAST_SELECT_AUDIENCE: [
+                CallbackQueryHandler(handlers.admin_broadcast_select_audience, pattern="^broadcast_"),
+                CallbackQueryHandler(handlers.admin_panel, pattern="^admin_back$"),
+            ],
+            handlers.BROADCAST_ENTER_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_broadcast_send),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", handlers.cancel_from_command),
+        ],
+        allow_reentry=True,
+    )
+
+    application.add_handler(admin_conv_handler)
+
     # Обработчик неизвестных команд
     application.add_handler(
         MessageHandler(filters.COMMAND, handlers.unknown_command)
     )
+
+    # --- ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК ---
+    async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        КРИТИЧЕСКИ ВАЖНО: Глобальный обработчик всех необработанных ошибок.
+        Предотвращает крашинг бота и помогает пользователям восстановиться.
+        """
+        logger.error(
+            f"❌ EXCEPTION while handling update {update}",
+            exc_info=context.error
+        )
+
+        # Логируем контекст для debugging
+        if context.user_data:
+            logger.error(f"User data: {context.user_data}")
+
+        try:
+            # Пытаемся уведомить пользователя
+            if update and update.effective_message:
+                error_message = (
+                    "❌ <b>Произошла ошибка</b>\n\n"
+                    "К сожалению, что-то пошло не так.\n\n"
+                    "Попробуйте:\n"
+                    "• Отправить /start для возврата в главное меню\n"
+                    "• Повторить действие через минуту\n\n"
+                    "Если проблема повторяется, обратитесь в поддержку."
+                )
+
+                await update.effective_message.reply_text(
+                    error_message,
+                    parse_mode="HTML"
+                )
+            elif update and update.callback_query:
+                # Если это callback query, отвечаем через answer
+                await update.callback_query.answer(
+                    "❌ Произошла ошибка. Попробуйте отправить /start",
+                    show_alert=True
+                )
+        except Exception as e:
+            logger.error(f"❌ Error in error_handler itself: {e}", exc_info=True)
+
+    # Регистрируем обработчик ошибок
+    application.add_error_handler(error_handler)
+
+    # --- ФОНОВАЯ ЗАДАЧА: Проверка просроченных заказов ---
+    async def check_deadlines_job(context):
+        """
+        Периодическая проверка просроченных заказов.
+        Запускается каждый час.
+        """
+        logger.info("🔍 Запуск проверки просроченных заказов...")
+
+        expired_orders = db.check_expired_orders()
+
+        if not expired_orders:
+            logger.debug("Просроченных заказов не найдено")
+            return
+
+        logger.info(f"📋 Найдено просроченных заказов: {len(expired_orders)}")
+
+        # Отправляем уведомления
+        for order_data in expired_orders:
+            order_id = order_data['order_id']
+            client_user_id = order_data['client_user_id']
+            worker_user_ids = order_data['worker_user_ids']
+            title = order_data['title']
+
+            # Уведомляем клиента
+            try:
+                client_user = db.get_user_by_id(client_user_id)
+                if client_user:
+                    await context.bot.send_message(
+                        chat_id=client_user['telegram_id'],
+                        text=f"⏰ Заказ #{order_id} истёк по дедлайну\n\n"
+                             f"📝 {title}\n\n"
+                             f"Заказ автоматически закрыт, так как прошёл указанный срок выполнения."
+                    )
+                    logger.info(f"✅ Уведомление клиента {client_user_id} отправлено")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки уведомления клиенту {client_user_id}: {e}")
+
+            # Уведомляем мастеров
+            for worker_user_id in worker_user_ids:
+                try:
+                    worker_user = db.get_user_by_id(worker_user_id)
+                    if worker_user:
+                        await context.bot.send_message(
+                            chat_id=worker_user['telegram_id'],
+                            text=f"⏰ Заказ #{order_id} истёк по дедлайну\n\n"
+                                 f"📝 {title}\n\n"
+                                 f"Заказ автоматически закрыт."
+                        )
+                except Exception as e:
+                    logger.error(f"❌ Ошибка отправки уведомления мастеру {worker_user_id}: {e}")
+
+        logger.info(f"✅ Проверка просроченных заказов завершена. Обработано: {len(expired_orders)}")
+
+    # Добавляем задачу в очередь (запуск каждый час)
+    job_queue = application.job_queue
+    if job_queue is not None:
+        job_queue.run_repeating(
+            check_deadlines_job,
+            interval=3600,  # 3600 секунд = 1 час
+            first=10  # Первый запуск через 10 секунд после старта бота
+        )
+        logger.info("⏰ Фоновая задача проверки дедлайнов активирована (каждый час)")
+    else:
+        logger.warning("⚠️ JobQueue не доступен. Проверка дедлайнов отключена.")
 
     logger.info("Бот запущен. Опрос обновлений...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
