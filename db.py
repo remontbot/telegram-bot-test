@@ -711,10 +711,7 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
         validated_photos = validate_photo_list(portfolio_photos, "portfolio_photos")
         portfolio_photos = ",".join(validated_photos)
 
-    # Валидация profile_photo
-    if profile_photo and not validate_file_id(profile_photo):
-        logger.warning(f"⚠️ Невалидный profile_photo: {profile_photo}, сбрасываем в пустую строку")
-        profile_photo = ""
+    # NOTE: profile_photo уже валидируется в handlers.py перед вызовом этой функции
 
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
