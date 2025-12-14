@@ -5101,6 +5101,19 @@ async def cancel_from_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     return await go_main_menu(update, context)
 
 
+async def cancel_from_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена через команду /cancel"""
+    context.user_data.clear()
+    logger.info(f"User {update.effective_user.id} cancelled conversation via /cancel command")
+
+    await update.message.reply_text(
+        "❌ Действие отменено.\n\n"
+        "Отправьте /start для возврата в главное меню."
+    )
+
+    return ConversationHandler.END
+
+
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Команда не распознана. Используйте /start.")
 
