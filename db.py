@@ -678,14 +678,16 @@ def delete_user_profile(telegram_id):
 
 # --- Профили мастеров и заказчиков ---
 
-def create_worker_profile(user_id, name, phone, city, regions, categories, experience, description, portfolio_photos="", cities=None):
+def create_worker_profile(user_id, name, phone, city, regions, categories, experience, description, portfolio_photos="", profile_photo="", cities=None):
     """
     ОБНОВЛЕНО: Добавляет категории в нормализованную таблицу worker_categories.
     ОБНОВЛЕНО: Поддержка множественного выбора городов через параметр cities.
+    ОБНОВЛЕНО: Поддержка profile_photo - фото профиля мастера.
     ИСПРАВЛЕНО: Валидация file_id для portfolio_photos.
     ИСПРАВЛЕНО: Проверка существования профиля для предотвращения race condition.
 
     Args:
+        profile_photo: file_id фото профиля (опционально).
         cities: Список городов (опционально). Если указан, используется вместо city.
                 Первый город из списка сохраняется в поле city для обратной совместимости.
     """
@@ -709,12 +711,17 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
         validated_photos = validate_photo_list(portfolio_photos, "portfolio_photos")
         portfolio_photos = ",".join(validated_photos)
 
+    # Валидация profile_photo
+    if profile_photo and not validate_file_id(profile_photo):
+        logger.warning(f"⚠️ Невалидный profile_photo: {profile_photo}, сбрасываем в пустую строку")
+        profile_photo = ""
+
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
         cursor.execute("""
-            INSERT INTO workers (user_id, name, phone, city, regions, categories, experience, description, portfolio_photos)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, name, phone, city, regions, categories, experience, description, portfolio_photos))
+            INSERT INTO workers (user_id, name, phone, city, regions, categories, experience, description, portfolio_photos, profile_photo)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, name, phone, city, regions, categories, experience, description, portfolio_photos, profile_photo))
         worker_id = cursor.lastrowid
         conn.commit()  # КРИТИЧНО: Без этого транзакция не фиксируется!
         logger.info(f"✅ Создан профиль мастера: ID={worker_id}, User={user_id}, Имя={name}, Город={city}")
