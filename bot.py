@@ -85,6 +85,7 @@ def main():
     db.migrate_normalize_order_categories()  # ИСПРАВЛЕНИЕ: Нормализация категорий заказов (точный поиск вместо LIKE)
     db.migrate_add_ready_in_days_and_notifications()  # Добавляем ready_in_days в bids и worker_notifications
     db.migrate_add_admin_and_ads()  # Добавляем систему админ-панели, broadcast и рекламы
+    db.migrate_add_worker_cities()  # Добавляем таблицу для множественного выбора городов мастером
     db.create_indexes()  # Создаем индексы для оптимизации производительности
 
     # Добавляем супер-админа
@@ -147,6 +148,12 @@ def main():
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     handlers.register_master_city_other,
+                )
+            ],
+            handlers.REGISTER_MASTER_CITIES_CONFIRM: [
+                CallbackQueryHandler(
+                    handlers.register_master_cities_confirm,
+                    pattern="^(add_more_cities|finish_cities)$",
                 )
             ],
             # Новые состояния для выбора категорий (7 основных категорий)
