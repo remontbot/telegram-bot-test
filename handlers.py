@@ -1702,6 +1702,40 @@ async def toggle_notifications(update: Update, context: ContextTypes.DEFAULT_TYP
     await show_worker_menu(update, context)
 
 
+async def toggle_client_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Переключает уведомления для клиента"""
+    query = update.callback_query
+    await query.answer()
+
+    user = db.get_user_by_telegram_id(update.effective_user.id)
+    if not user:
+        await query.edit_message_text("❌ Пользователь не найден.")
+        return
+
+    # Получаем текущий статус
+    current_status = db.are_client_notifications_enabled(user['id'])
+
+    # Переключаем статус
+    new_status = not current_status
+    db.set_client_notifications_enabled(user['id'], new_status)
+
+    status_text = "включены ✅" if new_status else "отключены ❌"
+
+    notification_on_text = 'Вы будете получать уведомления о новых откликах на ваши заказы.'
+    notification_off_text = 'Вы НЕ будете получать уведомления об откликах. Вы можете проверять отклики вручную в разделе "Мои заказы".'
+
+    await query.edit_message_text(
+        f"🔔 <b>Уведомления {status_text}</b>\n\n"
+        f"{notification_on_text if new_status else notification_off_text}\n\n"
+        "Возвращаемся в меню...",
+        parse_mode="HTML"
+    )
+
+    # Возвращаемся в меню клиента через 2 секунды
+    await asyncio.sleep(2)
+    await show_client_menu(update, context)
+
+
 async def worker_my_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает все отклики мастера с их статусами"""
     query = update.callback_query
@@ -1911,11 +1945,17 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    # Получаем текущий статус уведомлений для клиента
+    user = db.get_user_by_telegram_id(update.effective_user.id)
+    notifications_enabled = db.are_client_notifications_enabled(user['id']) if user else True
+    notification_status = "🔔 Вкл" if notifications_enabled else "🔕 Выкл"
+
     keyboard = [
         [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
         [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
         [InlineKeyboardButton("💳 Мои платежи", callback_data="client_my_payments")],
         [InlineKeyboardButton("🔍 Найти мастера", callback_data="client_browse_workers")],
+        [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_client_notifications")],
         [InlineKeyboardButton("🧰 Главное меню", callback_data="go_main_menu")],
     ]
 
@@ -3411,9 +3451,12 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML"
             )
             return
-        
+
         logger.info(f"User найден: id={user['id']}")
-        
+
+        # Уведомление НЕ удаляется автоматически - оно висит и напоминает об откликах
+        # Клиент может отключить уведомления в настройках если захочет
+
         client_profile = db.get_client_profile(user["id"])
         if not client_profile:
             logger.error(f"Client profile не найден для user_id: {user['id']}")
@@ -4559,13 +4602,23 @@ async def show_bid_card(update: Update, context: ContextTypes.DEFAULT_TYPE, quer
             except:
                 pass
 
-            await context.bot.send_photo(
-                chat_id=query.from_user.id,
-                photo=photo_to_show,
-                caption=text,
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+            try:
+                await context.bot.send_photo(
+                    chat_id=query.from_user.id,
+                    photo=photo_to_show,
+                    caption=text,
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            except Exception as photo_error:
+                # Если не удалось отправить фото, отправляем без фото
+                logger.warning(f"Не удалось отправить фото отклика: {photo_error}")
+                await context.bot.send_message(
+                    chat_id=query.from_user.id,
+                    text=text,
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
         else:
             # Нет фото - просто редактируем текст
             await query.edit_message_text(
@@ -4577,8 +4630,14 @@ async def show_bid_card(update: Update, context: ContextTypes.DEFAULT_TYPE, quer
     except Exception as e:
         logger.error(f"Ошибка в show_bid_card: {e}", exc_info=True)
         keyboard = [[InlineKeyboardButton("⬅️ К моим заказам", callback_data="client_my_orders")]]
-        await query.edit_message_text(
-            f"❌ Ошибка при отображении отклика:\n{str(e)}",
+        # Сообщение могло быть удалено, поэтому используем send_message вместо edit
+        try:
+            await query.message.delete()
+        except:
+            pass
+        await context.bot.send_message(
+            chat_id=query.from_user.id,
+            text=f"❌ Ошибка при отображении отклика:\n{str(e)}",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -5278,14 +5337,17 @@ async def worker_view_orders(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Просмотр доступных заказов для мастера"""
     query = update.callback_query
     await query.answer()
-    
+
     try:
         # Получаем профиль мастера
         user = db.get_user(query.from_user.id)
         if not user:
             await query.edit_message_text("❌ Ошибка: пользователь не найден.")
             return
-        
+
+        # Уведомление НЕ удаляется автоматически - оно висит и напоминает о заказах
+        # Мастер может отключить уведомления в настройках если захочет
+
         worker_profile = db.get_worker_profile(user["id"])
         if not worker_profile:
             await query.edit_message_text("❌ Ошибка: профиль мастера не найден.")
@@ -6115,6 +6177,7 @@ async def worker_bid_publish(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await notify_client_new_bid(
                 context,
                 client_user['telegram_id'],
+                client_user['id'],  # client_user_id для системы уведомлений
                 order_id,
                 worker_name,
                 price,
@@ -7330,12 +7393,27 @@ def declension_orders(count):
         return "доступных заказов"
 
 
+def declension_bids(count):
+    """Склонение слова 'отклик' в зависимости от числа"""
+    if count % 10 == 1 and count % 100 != 11:
+        return "новый отклик"
+    elif count % 10 in [2, 3, 4] and count % 100 not in [12, 13, 14]:
+        return "новых отклика"
+    else:
+        return "новых откликов"
+
+
 async def notify_worker_new_order(context, worker_telegram_id, worker_user_id, order_dict):
     """
     Уведомление мастеру о новом заказе - ОБНОВЛЯЕТ существующее сообщение.
     Вместо спама отдельными сообщениями показывает одно обновляемое сообщение с количеством.
     """
     try:
+        # Проверяем включены ли уведомления у мастера
+        if not db.are_notifications_enabled(worker_user_id):
+            logger.info(f"Уведомления отключены для мастера {worker_user_id}, пропускаем отправку")
+            return False
+
         # Подсчитываем все доступные заказы для этого мастера
         available_orders_count = db.count_available_orders_for_worker(worker_user_id)
 
@@ -7392,21 +7470,68 @@ async def notify_worker_new_order(context, worker_telegram_id, worker_user_id, o
         return False
 
 
-async def notify_client_new_bid(context, client_telegram_id, order_id, worker_name, price, currency):
-    """Уведомление клиенту о новом отклике на его заказ"""
+async def notify_client_new_bid(context, client_telegram_id, client_user_id, order_id, worker_name, price, currency):
+    """
+    Уведомление клиенту о новом отклике - ОБНОВЛЯЕТ существующее сообщение.
+    Вместо спама отдельными сообщениями показывает одно обновляемое сообщение.
+    """
     try:
+        # Проверяем включены ли уведомления у клиента
+        if not db.are_client_notifications_enabled(client_user_id):
+            logger.info(f"Уведомления отключены для клиента {client_user_id}, пропускаем отправку")
+            return False
+
+        # Подсчитываем общее количество непрочитанных откликов
+        orders_with_bids = db.get_orders_with_unread_bids(client_user_id)
+        total_bids = sum(order.get('bid_count', 0) for order in orders_with_bids)
+
         text = (
-            f"🔔 <b>Новый отклик на ваш заказ #{order_id}!</b>\n\n"
-            f"👤 Мастер: {worker_name}\n"
-            f"💰 Предложенная цена: {price} {currency}\n\n"
-            f"💡 Посмотрите все отклики в разделе «Мои заказы»"
+            f"🔔 <b>У вас {total_bids} {declension_bids(total_bids)}!</b>\n\n"
+            f"📍 Последний: Заказ #{order_id} от {worker_name} ({price} {currency})\n\n"
+            f"👇 Нажмите кнопку чтобы посмотреть все отклики"
         )
 
-        await context.bot.send_message(
-            chat_id=client_telegram_id,
-            text=text,
-            parse_mode="HTML"
-        )
+        keyboard = [[InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Пытаемся получить существующее уведомление
+        notification = db.get_client_notification(client_user_id)
+
+        try:
+            if notification and notification.get('notification_message_id'):
+                # Пытаемся РЕДАКТИРОВАТЬ существующее сообщение
+                await context.bot.edit_message_text(
+                    chat_id=notification['notification_chat_id'],
+                    message_id=notification['notification_message_id'],
+                    text=text,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML"
+                )
+                # Обновляем счетчик
+                db.save_client_notification(
+                    client_user_id,
+                    notification['notification_message_id'],
+                    notification['notification_chat_id'],
+                    total_bids
+                )
+                logger.info(f"✅ Обновлено уведомление для клиента {client_user_id}: {total_bids} откликов")
+            else:
+                # Сообщения нет - отправляем НОВОЕ
+                raise Exception("No existing notification")
+
+        except Exception as edit_error:
+            # Не удалось отредактировать (сообщение удалено или не существует) - отправляем новое
+            logger.info(f"Отправка нового уведомления для клиента {client_user_id}: {edit_error}")
+            msg = await context.bot.send_message(
+                chat_id=client_telegram_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode="HTML"
+            )
+            # Сохраняем message_id для будущих обновлений
+            db.save_client_notification(client_user_id, msg.message_id, client_telegram_id, total_bids)
+            logger.info(f"✅ Отправлено новое уведомление клиенту {client_user_id}")
+
         return True
     except Exception as e:
         logger.error(f"Ошибка при отправке уведомления клиенту {client_telegram_id}: {e}")

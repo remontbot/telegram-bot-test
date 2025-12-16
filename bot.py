@@ -518,6 +518,13 @@ def main():
 
     application.add_handler(
         CallbackQueryHandler(
+            handlers.toggle_client_notifications,
+            pattern="^toggle_client_notifications$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
             handlers.worker_my_bids,
             pattern="^worker_my_bids$",
         )
