@@ -2717,10 +2717,8 @@ async def edit_profile_photo_start(update: Update, context: ContextTypes.DEFAULT
 async def upload_profile_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка загружаемого фото профиля"""
 
-    # Проверяем активен ли режим загрузки фото профиля
-    if not context.user_data.get("uploading_profile_photo"):
-        logger.info("Получено фото но режим загрузки фото профиля не активен - игнорируем")
-        return
+    # Этот handler вызывается только если флаг установлен (проверка в worker_add_photos_upload)
+    # Двойная проверка не нужна
 
     file_id = None
 
@@ -2841,7 +2839,7 @@ async def manage_portfolio_photos(update: Update, context: ContextTypes.DEFAULT_
             "Добавьте фото через меню редактирования профиля.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("⬅️ Назад", callback_data="edit_profile")
+                InlineKeyboardButton("⬅️ Назад к редактированию", callback_data="edit_profile_menu")
             ]])
         )
         return
@@ -2855,7 +2853,7 @@ async def manage_portfolio_photos(update: Update, context: ContextTypes.DEFAULT_
             "У вас пока нет фото работ в портфолио.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("⬅️ Назад", callback_data="edit_profile")
+                InlineKeyboardButton("⬅️ Назад к редактированию", callback_data="edit_profile_menu")
             ]])
         )
         return
@@ -2893,7 +2891,7 @@ async def show_portfolio_photo(query, context, index):
 
     # Кнопка удаления
     keyboard.append([InlineKeyboardButton("🗑 Удалить это фото", callback_data=f"delete_portfolio_photo_{index}")])
-    keyboard.append([InlineKeyboardButton("⬅️ Назад к профилю", callback_data="edit_profile")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад к профилю", callback_data="worker_profile")])
 
     caption = (
         f"📸 <b>Фото {index + 1} из {len(photos_list)}</b>\n\n"
