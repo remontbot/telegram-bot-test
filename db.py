@@ -2141,7 +2141,7 @@ def migrate_add_transactions():
 
 def migrate_add_notification_settings():
     """
-    Добавляет поле для управления уведомлениями мастеров:
+    Добавляет поле для управления уведомлениями мастеров и клиентов:
     - notifications_enabled (по умолчанию TRUE - уведомления включены)
     """
     with get_db_connection() as conn:
@@ -2149,6 +2149,7 @@ def migrate_add_notification_settings():
 
         try:
             if USE_POSTGRES:
+                # Миграция для workers
                 cursor.execute("""
                     DO $$
                     BEGIN
@@ -2160,12 +2161,33 @@ def migrate_add_notification_settings():
                         END IF;
                     END $$;
                 """)
+
+                # Миграция для clients
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'clients' AND column_name = 'notifications_enabled'
+                        ) THEN
+                            ALTER TABLE clients ADD COLUMN notifications_enabled BOOLEAN DEFAULT TRUE;
+                        END IF;
+                    END $$;
+                """)
             else:
+                # SQLite - миграция для workers
                 cursor.execute("PRAGMA table_info(workers)")
                 worker_columns = [column[1] for column in cursor.fetchall()]
 
                 if 'notifications_enabled' not in worker_columns:
                     cursor.execute("ALTER TABLE workers ADD COLUMN notifications_enabled INTEGER DEFAULT 1")
+
+                # SQLite - миграция для clients
+                cursor.execute("PRAGMA table_info(clients)")
+                client_columns = [column[1] for column in cursor.fetchall()]
+
+                if 'notifications_enabled' not in client_columns:
+                    cursor.execute("ALTER TABLE clients ADD COLUMN notifications_enabled INTEGER DEFAULT 1")
 
             conn.commit()
             print("✅ Notification settings migration completed successfully!")
