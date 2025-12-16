@@ -485,6 +485,19 @@ def main():
         CallbackQueryHandler(handlers.cancel_profile_photo, pattern="^cancel_profile_photo$")
     )
 
+    # --- Управление фото портфолио ---
+    application.add_handler(
+        CallbackQueryHandler(handlers.manage_portfolio_photos, pattern="^manage_portfolio_photos$")
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(handlers.portfolio_photo_navigate, pattern="^portfolio_(prev|next)_")
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(handlers.delete_portfolio_photo, pattern="^delete_portfolio_photo_")
+    )
+
     # Загрузка фото (обрабатывает и portfolio_photos и profile_photo)
     application.add_handler(
         MessageHandler(filters.PHOTO, handlers.worker_add_photos_upload)

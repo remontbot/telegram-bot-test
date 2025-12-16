@@ -2809,6 +2809,217 @@ async def cancel_profile_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 
+# ------- УПРАВЛЕНИЕ ФОТО ПОРТФОЛИО -------
+
+async def manage_portfolio_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает фото портфолио с возможностью удаления"""
+    query = update.callback_query
+    await query.answer()
+
+    # Получаем профиль мастера
+    telegram_id = query.from_user.id
+    user = db.get_user(telegram_id)
+    if not user:
+        await query.edit_message_text("❌ Пользователь не найден.")
+        return
+
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+
+    worker_profile = db.get_worker_profile(user_id)
+    if not worker_profile:
+        await query.edit_message_text("❌ Профиль мастера не найден.")
+        return
+
+    profile_dict = dict(worker_profile)
+    portfolio_photos = profile_dict.get("portfolio_photos", "")
+
+    if not portfolio_photos:
+        await query.edit_message_text(
+            "📸 <b>Управление фото работ</b>\n\n"
+            "У вас пока нет фото работ в портфолио.\n\n"
+            "Добавьте фото через меню редактирования профиля.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data="edit_profile")
+            ]])
+        )
+        return
+
+    # Парсим фото и видео
+    photos_list = [p.strip() for p in portfolio_photos.split(',') if p.strip()]
+
+    if not photos_list:
+        await query.edit_message_text(
+            "📸 <b>Управление фото работ</b>\n\n"
+            "У вас пока нет фото работ в портфолио.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data="edit_profile")
+            ]])
+        )
+        return
+
+    # Сохраняем список фото в контекст и начинаем с первого
+    context.user_data['portfolio_photos'] = photos_list
+    context.user_data['current_photo_index'] = 0
+
+    # Показываем первое фото
+    await show_portfolio_photo(query, context, 0)
+
+
+async def show_portfolio_photo(query, context, index):
+    """Показывает конкретное фото из портфолио с кнопками навигации и удаления"""
+    photos_list = context.user_data.get('portfolio_photos', [])
+
+    if index >= len(photos_list):
+        index = 0
+
+    photo_id = photos_list[index]
+    is_video = photo_id.startswith("VIDEO:")
+
+    # Формируем кнопки
+    keyboard = []
+
+    # Кнопки навигации
+    nav_buttons = []
+    if index > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Предыдущее", callback_data=f"portfolio_prev_{index}"))
+    if index < len(photos_list) - 1:
+        nav_buttons.append(InlineKeyboardButton("Следующее ➡️", callback_data=f"portfolio_next_{index}"))
+
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
+    # Кнопка удаления
+    keyboard.append([InlineKeyboardButton("🗑 Удалить это фото", callback_data=f"delete_portfolio_photo_{index}")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад к профилю", callback_data="edit_profile")])
+
+    caption = (
+        f"📸 <b>Фото {index + 1} из {len(photos_list)}</b>\n\n"
+        f"{'🎥 Видео' if is_video else '📷 Фото'}\n\n"
+        f"Нажмите кнопку ниже чтобы удалить это фото."
+    )
+
+    # Удаляем предыдущее сообщение
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+
+    # Отправляем фото/видео
+    try:
+        if is_video:
+            clean_video_id = photo_id.replace("VIDEO:", "")
+            await context.bot.send_video(
+                chat_id=query.message.chat_id,
+                video=clean_video_id,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await context.bot.send_photo(
+                chat_id=query.message.chat_id,
+                photo=photo_id,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при отправке фото портфолио: {e}")
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=f"❌ Ошибка при отображении фото #{index + 1}\n\n"
+                 f"Возможно файл был удален из Telegram.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+
+async def portfolio_photo_navigate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Навигация по фото портфолио"""
+    query = update.callback_query
+    await query.answer()
+
+    # Парсим направление и текущий индекс из callback_data
+    data = query.data
+    if data.startswith("portfolio_prev_"):
+        current_index = int(data.split("_")[-1])
+        new_index = current_index - 1
+    elif data.startswith("portfolio_next_"):
+        current_index = int(data.split("_")[-1])
+        new_index = current_index + 1
+    else:
+        return
+
+    context.user_data['current_photo_index'] = new_index
+    await show_portfolio_photo(query, context, new_index)
+
+
+async def delete_portfolio_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удаляет фото из портфолио"""
+    query = update.callback_query
+    await query.answer()
+
+    # Парсим индекс из callback_data
+    index = int(query.data.split("_")[-1])
+
+    # Получаем профиль мастера
+    telegram_id = query.from_user.id
+    user = db.get_user(telegram_id)
+    if not user:
+        await query.edit_message_text("❌ Пользователь не найден.")
+        return
+
+    user_dict = dict(user)
+    user_id = user_dict.get("id")
+
+    # Удаляем фото
+    photos_list = context.user_data.get('portfolio_photos', [])
+    if index >= len(photos_list):
+        await query.answer("❌ Фото не найдено", show_alert=True)
+        return
+
+    deleted_photo = photos_list.pop(index)
+
+    # Обновляем в БД
+    new_portfolio = ",".join(photos_list)
+    db.update_worker_field(user_id, "portfolio_photos", new_portfolio)
+
+    logger.info(f"Удалено фото из портфолио мастера {user_id}: индекс {index}")
+
+    # Если остались фото - показываем следующее или предыдущее
+    if photos_list:
+        context.user_data['portfolio_photos'] = photos_list
+
+        # Если удалили последнее - показываем предпоследнее
+        new_index = min(index, len(photos_list) - 1)
+        context.user_data['current_photo_index'] = new_index
+
+        await query.answer("✅ Фото удалено", show_alert=True)
+        await show_portfolio_photo(query, context, new_index)
+    else:
+        # Фото больше нет - возвращаемся в меню
+        context.user_data.clear()
+
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="✅ <b>Фото удалено</b>\n\n"
+                 "Все фото из портфолио удалены.\n"
+                 "Вы можете добавить новые фото через меню редактирования профиля.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ К профилю", callback_data="worker_profile")
+            ]])
+        )
+
+
 # ------- РЕДАКТИРОВАНИЕ ПРОФИЛЯ -------
 
 async def show_edit_profile_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2824,7 +3035,8 @@ async def show_edit_profile_menu(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton("🔧 Изменить виды работ", callback_data="edit_categories")],
         [InlineKeyboardButton("📅 Изменить опыт", callback_data="edit_experience")],
         [InlineKeyboardButton("📝 Изменить описание", callback_data="edit_description")],
-        [InlineKeyboardButton("📸 Добавить/изменить фото работ", callback_data="worker_add_photos")],
+        [InlineKeyboardButton("📸 Добавить фото работ", callback_data="worker_add_photos")],
+        [InlineKeyboardButton("🗑 Управление фото работ", callback_data="manage_portfolio_photos")],
         [InlineKeyboardButton("⬅️ Назад к профилю", callback_data="worker_profile")],
     ]
 
