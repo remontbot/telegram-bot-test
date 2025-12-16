@@ -972,7 +972,27 @@ async def register_master_photos(update: Update, context: ContextTypes.DEFAULT_T
 
 async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка загруженных фотографий"""
-    logger.info(f"handle_master_photos вызван. Текст: {update.message.text if update.message.text else 'фото'}")
+    logger.info(f"🔧 DEBUG: handle_master_photos вызван. Текст: {update.message.text if update.message.text else 'фото'}")
+
+    # КРИТИЧНО: Проверяем, не зарегистрирован ли уже пользователь
+    telegram_id = update.effective_user.id
+    existing_user = db.get_user(telegram_id)
+
+    if existing_user:
+        logger.warning(f"🔧 DEBUG: Пользователь {telegram_id} УЖЕ ЗАРЕГИСТРИРОВАН! Завершаем ConversationHandler")
+        context.user_data.clear()
+
+        await update.message.reply_text(
+            "✅ Вы уже зарегистрированы!\n\n"
+            "Чтобы добавить фото в портфолио, используйте меню:\n"
+            "Профиль → Добавить фото работ\n\n"
+            "Или нажмите /start для возврата в главное меню.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Главное меню", callback_data="show_worker_menu")
+            ]])
+        )
+
+        return ConversationHandler.END
 
     # КРИТИЧНО: Проверка на видео/документы (не фото)
     if update.message.video:
