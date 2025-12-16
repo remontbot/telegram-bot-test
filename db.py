@@ -579,6 +579,31 @@ def init_db():
             );
         """)
 
+        # НОВОЕ: Таблица настроек уведомлений пользователей
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS notification_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER UNIQUE NOT NULL,
+                new_orders_enabled BOOLEAN DEFAULT 1,      -- Уведомления о новых заказах (для мастеров)
+                new_bids_enabled BOOLEAN DEFAULT 1,        -- Уведомления о новых откликах (для заказчиков)
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+        """)
+
+        # НОВОЕ: Таблица отправленных уведомлений (для предотвращения дубликатов)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sent_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                notification_type TEXT NOT NULL,           -- 'new_orders', 'new_bids'
+                message_id INTEGER,                        -- ID сообщения для удаления
+                sent_at TEXT NOT NULL,
+                cleared_at TEXT,                           -- Когда уведомление было просмотрено/удалено
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+        """)
+
         conn.commit()
 
 
@@ -3925,8 +3950,20 @@ def migrate_add_ready_in_days_and_notifications():
                 )
             """)
 
+            # 3. Создаем таблицу client_notifications
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS client_notifications (
+                    user_id INTEGER PRIMARY KEY,
+                    notification_message_id INTEGER,
+                    notification_chat_id INTEGER,
+                    last_update_timestamp INTEGER,
+                    unread_bids_count INTEGER DEFAULT 0,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """)
+
             conn.commit()
-            print("✅ Migration completed: added ready_in_days and worker_notifications!")
+            print("✅ Migration completed: added ready_in_days, worker_notifications and client_notifications!")
 
         except Exception as e:
             print(f"⚠️  Error in migrate_add_ready_in_days_and_notifications: {e}")
@@ -3968,6 +4005,74 @@ def delete_worker_notification(worker_user_id):
         cursor = get_cursor(conn)
         cursor.execute("DELETE FROM worker_notifications WHERE user_id = ?", (worker_user_id,))
         conn.commit()
+
+
+# === CLIENT NOTIFICATIONS HELPERS ===
+
+def save_client_notification(client_user_id, message_id, chat_id, bids_count=0):
+    """Сохраняет или обновляет ID сообщения с уведомлением для клиента"""
+    from datetime import datetime
+
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        timestamp = int(datetime.now().timestamp())
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO client_notifications
+            (user_id, notification_message_id, notification_chat_id, last_update_timestamp, unread_bids_count)
+            VALUES (?, ?, ?, ?, ?)
+        """, (client_user_id, message_id, chat_id, timestamp, bids_count))
+        conn.commit()
+
+
+def get_client_notification(client_user_id):
+    """Получает сохраненное уведомление клиента"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT * FROM client_notifications WHERE user_id = ?
+        """, (client_user_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def delete_client_notification(client_user_id):
+    """Удаляет сохраненное уведомление (когда клиент просмотрел все отклики)"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("DELETE FROM client_notifications WHERE user_id = ?", (client_user_id,))
+        conn.commit()
+
+
+def get_orders_with_unread_bids(client_user_id):
+    """
+    Получает все заказы клиента с количеством откликов.
+
+    Args:
+        client_user_id: ID пользователя-клиента
+
+    Returns:
+        list: Список заказов с полем bid_count
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT
+                o.id,
+                o.city,
+                o.category,
+                o.description,
+                o.status,
+                COUNT(b.id) as bid_count
+            FROM orders o
+            LEFT JOIN bids b ON o.id = b.order_id AND b.status = 'active'
+            WHERE o.client_id = (SELECT id FROM clients WHERE user_id = ?)
+                AND o.status = 'open'
+            GROUP BY o.id
+            HAVING bid_count > 0
+        """, (client_user_id,))
+
+        return [dict(row) for row in cursor.fetchall()]
 
 
 def count_available_orders_for_worker(worker_user_id):
@@ -4394,3 +4499,227 @@ def set_worker_cities(worker_id, cities):
             """, (worker_id, city))
         conn.commit()
         logger.info(f"✅ Установлено {len(cities)} городов для мастера worker_id={worker_id}")
+
+
+# ============================================================
+# СИСТЕМА УВЕДОМЛЕНИЙ
+# ============================================================
+
+def get_notification_settings(user_id):
+    """
+    Получает настройки уведомлений пользователя.
+    Если настроек нет - создает с дефолтными значениями.
+
+    Args:
+        user_id: ID пользователя
+
+    Returns:
+        dict: Настройки уведомлений
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT new_orders_enabled, new_bids_enabled
+            FROM notification_settings
+            WHERE user_id = ?
+        """, (user_id,))
+
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+
+        # Создаем дефолтные настройки
+        now = datetime.now().isoformat()
+        cursor.execute("""
+            INSERT OR IGNORE INTO notification_settings (user_id, new_orders_enabled, new_bids_enabled, updated_at)
+            VALUES (?, 1, 1, ?)
+        """, (user_id, now))
+        conn.commit()
+
+        return {
+            'new_orders_enabled': True,
+            'new_bids_enabled': True
+        }
+
+
+def update_notification_setting(user_id, setting_name, enabled):
+    """
+    Обновляет конкретную настройку уведомлений.
+
+    Args:
+        user_id: ID пользователя
+        setting_name: 'new_orders_enabled' или 'new_bids_enabled'
+        enabled: True/False
+    """
+    allowed_settings = ['new_orders_enabled', 'new_bids_enabled']
+    if setting_name not in allowed_settings:
+        raise ValueError(f"Недопустимое имя настройки: {setting_name}")
+
+    now = datetime.now().isoformat()
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Создаем запись если не существует
+        cursor.execute("""
+            INSERT OR IGNORE INTO notification_settings (user_id, new_orders_enabled, new_bids_enabled, updated_at)
+            VALUES (?, 1, 1, ?)
+        """, (user_id, now))
+
+        # Обновляем настройку
+        query = f"UPDATE notification_settings SET {setting_name} = ?, updated_at = ? WHERE user_id = ?"
+        cursor.execute(query, (1 if enabled else 0, now, user_id))
+        conn.commit()
+
+        logger.info(f"📢 Настройка уведомлений обновлена: user_id={user_id}, {setting_name}={enabled}")
+
+
+def has_active_notification(user_id, notification_type):
+    """
+    Проверяет, есть ли активное (не просмотренное) уведомление у пользователя.
+
+    Args:
+        user_id: ID пользователя
+        notification_type: 'new_orders' или 'new_bids'
+
+    Returns:
+        bool: True если есть активное уведомление
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT id FROM sent_notifications
+            WHERE user_id = ? AND notification_type = ? AND cleared_at IS NULL
+            ORDER BY sent_at DESC
+            LIMIT 1
+        """, (user_id, notification_type))
+
+        return cursor.fetchone() is not None
+
+
+def save_sent_notification(user_id, notification_type, message_id=None):
+    """
+    Сохраняет информацию об отправленном уведомлении.
+
+    Args:
+        user_id: ID пользователя
+        notification_type: 'new_orders' или 'new_bids'
+        message_id: ID сообщения в Telegram (для последующего удаления)
+
+    Returns:
+        int: ID созданной записи
+    """
+    now = datetime.now().isoformat()
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            INSERT INTO sent_notifications (user_id, notification_type, message_id, sent_at)
+            VALUES (?, ?, ?, ?)
+        """, (user_id, notification_type, message_id, now))
+        conn.commit()
+
+        notification_id = cursor.lastrowid
+        logger.info(f"📬 Уведомление сохранено: id={notification_id}, user_id={user_id}, type={notification_type}")
+        return notification_id
+
+
+def clear_notification(user_id, notification_type):
+    """
+    Помечает уведомление как просмотренное (очищает).
+
+    Args:
+        user_id: ID пользователя
+        notification_type: 'new_orders' или 'new_bids'
+    """
+    now = datetime.now().isoformat()
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            UPDATE sent_notifications
+            SET cleared_at = ?
+            WHERE user_id = ? AND notification_type = ? AND cleared_at IS NULL
+        """, (now, user_id, notification_type))
+        conn.commit()
+
+        logger.info(f"✅ Уведомление очищено: user_id={user_id}, type={notification_type}")
+
+
+def get_active_notification_message_id(user_id, notification_type):
+    """
+    Получает message_id активного уведомления для удаления.
+
+    Args:
+        user_id: ID пользователя
+        notification_type: 'new_orders' или 'new_bids'
+
+    Returns:
+        int | None: message_id или None если не найдено
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT message_id FROM sent_notifications
+            WHERE user_id = ? AND notification_type = ? AND cleared_at IS NULL
+            ORDER BY sent_at DESC
+            LIMIT 1
+        """, (user_id, notification_type))
+
+        row = cursor.fetchone()
+        return row['message_id'] if row else None
+
+
+def get_workers_for_new_order_notification(order_city, order_category):
+    """
+    Получает список мастеров, которым нужно отправить уведомление о новом заказе.
+    Учитывает:
+    - Настройки уведомлений (включены ли уведомления)
+    - Соответствие города и категории
+    - Отсутствие активных уведомлений
+
+    Args:
+        order_city: Город заказа
+        order_category: Категория заказа
+
+    Returns:
+        list: Список словарей с данными мастеров (user_id, telegram_id, name)
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Получаем мастеров у которых:
+        # 1. Включены уведомления о новых заказах (или настройки не заданы - по умолчанию включено)
+        # 2. Работают в нужном городе
+        # 3. Работают в нужной категории
+        # 4. Нет активного уведомления о новых заказах
+        cursor.execute("""
+            SELECT DISTINCT
+                w.user_id,
+                u.telegram_id,
+                w.name
+            FROM workers w
+            INNER JOIN users u ON w.user_id = u.id
+            LEFT JOIN notification_settings ns ON w.user_id = ns.user_id
+            LEFT JOIN sent_notifications sn ON (
+                w.user_id = sn.user_id
+                AND sn.notification_type = 'new_orders'
+                AND sn.cleared_at IS NULL
+            )
+            WHERE
+                (ns.new_orders_enabled = 1 OR ns.new_orders_enabled IS NULL)
+                AND sn.id IS NULL
+                AND (
+                    w.city LIKE ? OR
+                    w.regions LIKE ? OR
+                    EXISTS (
+                        SELECT 1 FROM worker_cities wc
+                        WHERE wc.worker_id = w.id AND wc.city = ?
+                    )
+                )
+                AND w.categories LIKE ?
+        """, (
+            f'%{order_city}%',
+            f'%{order_city}%',
+            order_city,
+            f'%{order_category}%'
+        ))
+
+        return [dict(row) for row in cursor.fetchall()]
