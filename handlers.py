@@ -1702,6 +1702,40 @@ async def toggle_notifications(update: Update, context: ContextTypes.DEFAULT_TYP
     await show_worker_menu(update, context)
 
 
+async def toggle_client_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Переключает уведомления для клиента"""
+    query = update.callback_query
+    await query.answer()
+
+    user = db.get_user_by_telegram_id(update.effective_user.id)
+    if not user:
+        await query.edit_message_text("❌ Пользователь не найден.")
+        return
+
+    # Получаем текущий статус
+    current_status = db.are_client_notifications_enabled(user['id'])
+
+    # Переключаем статус
+    new_status = not current_status
+    db.set_client_notifications_enabled(user['id'], new_status)
+
+    status_text = "включены ✅" if new_status else "отключены ❌"
+
+    notification_on_text = 'Вы будете получать уведомления о новых откликах на ваши заказы.'
+    notification_off_text = 'Вы НЕ будете получать уведомления об откликах. Вы можете проверять отклики вручную в разделе "Мои заказы".'
+
+    await query.edit_message_text(
+        f"🔔 <b>Уведомления {status_text}</b>\n\n"
+        f"{notification_on_text if new_status else notification_off_text}\n\n"
+        "Возвращаемся в меню...",
+        parse_mode="HTML"
+    )
+
+    # Возвращаемся в меню клиента через 2 секунды
+    await asyncio.sleep(2)
+    await show_client_menu(update, context)
+
+
 async def worker_my_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает все отклики мастера с их статусами"""
     query = update.callback_query
@@ -1911,11 +1945,17 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    # Получаем текущий статус уведомлений для клиента
+    user = db.get_user_by_telegram_id(update.effective_user.id)
+    notifications_enabled = db.are_client_notifications_enabled(user['id']) if user else True
+    notification_status = "🔔 Вкл" if notifications_enabled else "🔕 Выкл"
+
     keyboard = [
         [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
         [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
         [InlineKeyboardButton("💳 Мои платежи", callback_data="client_my_payments")],
         [InlineKeyboardButton("🔍 Найти мастера", callback_data="client_browse_workers")],
+        [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_client_notifications")],
         [InlineKeyboardButton("🧰 Главное меню", callback_data="go_main_menu")],
     ]
 
@@ -3414,8 +3454,8 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         logger.info(f"User найден: id={user['id']}")
 
-        # Удаляем уведомление об откликах (клиент просмотрел)
-        db.delete_client_notification(user["id"])
+        # Уведомление НЕ удаляется автоматически - оно висит и напоминает об откликах
+        # Клиент может отключить уведомления в настройках если захочет
 
         client_profile = db.get_client_profile(user["id"])
         if not client_profile:
@@ -5305,8 +5345,8 @@ async def worker_view_orders(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await query.edit_message_text("❌ Ошибка: пользователь не найден.")
             return
 
-        # Удаляем уведомление о новых заказах (мастер просмотрел)
-        db.delete_worker_notification(user["id"])
+        # Уведомление НЕ удаляется автоматически - оно висит и напоминает о заказах
+        # Мастер может отключить уведомления в настройках если захочет
 
         worker_profile = db.get_worker_profile(user["id"])
         if not worker_profile:
@@ -7369,6 +7409,11 @@ async def notify_worker_new_order(context, worker_telegram_id, worker_user_id, o
     Вместо спама отдельными сообщениями показывает одно обновляемое сообщение с количеством.
     """
     try:
+        # Проверяем включены ли уведомления у мастера
+        if not db.are_notifications_enabled(worker_user_id):
+            logger.info(f"Уведомления отключены для мастера {worker_user_id}, пропускаем отправку")
+            return False
+
         # Подсчитываем все доступные заказы для этого мастера
         available_orders_count = db.count_available_orders_for_worker(worker_user_id)
 
@@ -7431,6 +7476,11 @@ async def notify_client_new_bid(context, client_telegram_id, client_user_id, ord
     Вместо спама отдельными сообщениями показывает одно обновляемое сообщение.
     """
     try:
+        # Проверяем включены ли уведомления у клиента
+        if not db.are_client_notifications_enabled(client_user_id):
+            logger.info(f"Уведомления отключены для клиента {client_user_id}, пропускаем отправку")
+            return False
+
         # Подсчитываем общее количество непрочитанных откликов
         orders_with_bids = db.get_orders_with_unread_bids(client_user_id)
         total_bids = sum(order.get('bid_count', 0) for order in orders_with_bids)

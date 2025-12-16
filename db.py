@@ -2782,6 +2782,61 @@ def set_notifications_enabled(user_id, enabled):
         return cursor.rowcount > 0
 
 
+def are_client_notifications_enabled(user_id):
+    """
+    Проверяет включены ли уведомления для клиента.
+
+    Args:
+        user_id: ID пользователя в таблице users
+
+    Returns:
+        True если уведомления включены или настройка не найдена (по умолчанию включены)
+        False если уведомления отключены
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT notifications_enabled
+            FROM clients
+            WHERE user_id = ?
+        """, (user_id,))
+        result = cursor.fetchone()
+
+        # Если запись не найдена или поле не существует - по умолчанию включены
+        if not result:
+            return True
+
+        # SQLite хранит boolean как INTEGER (1 или 0), PostgreSQL как BOOLEAN
+        return bool(result[0]) if result[0] is not None else True
+
+
+def set_client_notifications_enabled(user_id, enabled):
+    """
+    Включает или отключает уведомления для клиента.
+
+    Args:
+        user_id: ID пользователя в таблице users
+        enabled: True для включения, False для отключения
+
+    Returns:
+        True если обновление успешно, False если клиент не найден
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Для совместимости с SQLite и PostgreSQL
+        value = 1 if enabled else 0 if not USE_POSTGRES else enabled
+
+        cursor.execute("""
+            UPDATE clients
+            SET notifications_enabled = ?
+            WHERE user_id = ?
+        """, (value, user_id))
+
+        conn.commit()
+        return cursor.rowcount > 0
+
+
 # === PREMIUM FEATURES HELPERS ===
 
 def is_premium_enabled():
