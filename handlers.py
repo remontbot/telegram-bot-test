@@ -972,7 +972,27 @@ async def register_master_photos(update: Update, context: ContextTypes.DEFAULT_T
 
 async def handle_master_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка загруженных фотографий"""
-    logger.info(f"handle_master_photos вызван. Текст: {update.message.text if update.message.text else 'фото'}")
+    logger.info(f"🔧 DEBUG: handle_master_photos вызван. Текст: {update.message.text if update.message.text else 'фото'}")
+
+    # КРИТИЧНО: Проверяем, не зарегистрирован ли уже пользователь
+    telegram_id = update.effective_user.id
+    existing_user = db.get_user(telegram_id)
+
+    if existing_user:
+        logger.warning(f"🔧 DEBUG: Пользователь {telegram_id} УЖЕ ЗАРЕГИСТРИРОВАН! Завершаем ConversationHandler")
+        context.user_data.clear()
+
+        await update.message.reply_text(
+            "✅ Вы уже зарегистрированы!\n\n"
+            "Чтобы добавить фото в портфолио, используйте меню:\n"
+            "Профиль → Добавить фото работ\n\n"
+            "Или нажмите /start для возврата в главное меню.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Главное меню", callback_data="show_worker_menu")
+            ]])
+        )
+
+        return ConversationHandler.END
 
     # КРИТИЧНО: Проверка на видео/документы (не фото)
     if update.message.video:
@@ -2209,6 +2229,7 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
     context.user_data["existing_photos"] = current_photos_list
     context.user_data["new_photos"] = []
 
+    logger.info(f"🔧 DEBUG: Флаг adding_photos установлен для user_id={user_id}, telegram_id={telegram_id}")
     logger.info(f"Запущен режим добавления фото для user_id={user_id}")
 
     if available_slots <= 0:
@@ -2249,14 +2270,21 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
 async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка загружаемых фото (photo или document)"""
 
+    telegram_id = update.effective_user.id
+    logger.info(f"🔧 DEBUG: worker_add_photos_upload вызван для telegram_id={telegram_id}")
+    logger.info(f"🔧 DEBUG: context.user_data = {context.user_data}")
+    logger.info(f"🔧 DEBUG: uploading_profile_photo = {context.user_data.get('uploading_profile_photo')}")
+    logger.info(f"🔧 DEBUG: adding_photos = {context.user_data.get('adding_photos')}")
+
     # Если активен режим загрузки фото профиля - передаем управление туда
     if context.user_data.get("uploading_profile_photo"):
+        logger.info(f"🔧 DEBUG: Передаем управление в upload_profile_photo")
         return await upload_profile_photo(update, context)
 
     # Проверяем активен ли режим добавления фото
     if not context.user_data.get("adding_photos"):
         # Игнорируем фото если режим не активен
-        logger.info("Получено фото но режим добавления не активен - игнорируем")
+        logger.info("🔧 DEBUG: Получено фото но режим добавления не активен - игнорируем")
         return
 
     file_id = None
@@ -2683,6 +2711,7 @@ async def edit_profile_photo_start(update: Update, context: ContextTypes.DEFAULT
     # Устанавливаем флаг загрузки фото профиля
     context.user_data['uploading_profile_photo'] = True
     context.user_data['user_id'] = user_id
+    logger.info(f"🔧 DEBUG: Флаг uploading_profile_photo установлен для user_id={user_id}, telegram_id={telegram_id}")
 
     if current_photo:
         # Показываем текущее фото
@@ -2717,6 +2746,9 @@ async def edit_profile_photo_start(update: Update, context: ContextTypes.DEFAULT
 async def upload_profile_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка загружаемого фото профиля"""
 
+    telegram_id = update.effective_user.id
+    logger.info(f"🔧 DEBUG: upload_profile_photo вызван для telegram_id={telegram_id}")
+
     # Этот handler вызывается только если флаг установлен (проверка в worker_add_photos_upload)
     # Двойная проверка не нужна
 
@@ -2724,7 +2756,7 @@ async def upload_profile_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Обработка фото (сжатое изображение)
     if update.message and update.message.photo:
-        logger.info("Получено фото профиля (photo)")
+        logger.info("🔧 DEBUG: Получено фото профиля (photo)")
         photo = update.message.photo[-1]  # Берём самое большое разрешение
         file_id = photo.file_id
 
