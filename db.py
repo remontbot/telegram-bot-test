@@ -813,6 +813,19 @@ def get_worker_by_user_id(user_id):
     return get_worker_profile(user_id)
 
 
+def get_worker_profile_by_id(worker_id):
+    """Возвращает профиль мастера по id записи в таблице workers"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT w.*, u.telegram_id
+            FROM workers w
+            JOIN users u ON w.user_id = u.id
+            WHERE w.id = ?
+        """, (worker_id,))
+        return cursor.fetchone()
+
+
 def get_worker_completed_orders_count(worker_user_id):
     """
     Подсчитывает количество завершенных заказов мастера (status='completed').
