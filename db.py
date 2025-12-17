@@ -1991,10 +1991,17 @@ def migrate_add_premium_features():
                 """)
 
             # Устанавливаем premium_enabled = false по умолчанию
-            cursor.execute("""
-                INSERT OR IGNORE INTO settings (key, value)
-                VALUES ('premium_enabled', 'false')
-            """)
+            if USE_POSTGRES:
+                cursor.execute("""
+                    INSERT INTO settings (key, value)
+                    VALUES ('premium_enabled', 'false')
+                    ON CONFLICT (key) DO NOTHING
+                """)
+            else:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO settings (key, value)
+                    VALUES ('premium_enabled', 'false')
+                """)
 
             # Добавляем поля для premium в orders
             if USE_POSTGRES:
@@ -4402,10 +4409,17 @@ def migrate_add_worker_cities():
 
             for worker in workers:
                 worker_id, city = worker
-                cursor.execute("""
-                    INSERT OR IGNORE INTO worker_cities (worker_id, city)
-                    VALUES (?, ?)
-                """, (worker_id, city))
+                if USE_POSTGRES:
+                    cursor.execute("""
+                        INSERT INTO worker_cities (worker_id, city)
+                        VALUES (%s, %s)
+                        ON CONFLICT (worker_id, city) DO NOTHING
+                    """, (worker_id, city))
+                else:
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO worker_cities (worker_id, city)
+                        VALUES (?, ?)
+                    """, (worker_id, city))
 
             logger.info(f"✅ Мигрировано {len(workers)} городов из поля workers.city")
 
@@ -4423,10 +4437,17 @@ def add_admin_user(telegram_id, role='admin', added_by=None):
         cursor = get_cursor(conn)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        cursor.execute("""
-            INSERT OR IGNORE INTO admin_users (telegram_id, role, added_at, added_by)
-            VALUES (?, ?, ?, ?)
-        """, (telegram_id, role, now, added_by))
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO admin_users (telegram_id, role, added_at, added_by)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (telegram_id) DO NOTHING
+            """, (telegram_id, role, now, added_by))
+        else:
+            cursor.execute("""
+                INSERT OR IGNORE INTO admin_users (telegram_id, role, added_at, added_by)
+                VALUES (?, ?, ?, ?)
+            """, (telegram_id, role, now, added_by))
 
         conn.commit()
         logger.info(f"✅ Админ добавлен: telegram_id={telegram_id}, role={role}")
@@ -4587,10 +4608,17 @@ def add_worker_city(worker_id, city):
     """Добавляет город к мастеру"""
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
-        cursor.execute("""
-            INSERT OR IGNORE INTO worker_cities (worker_id, city)
-            VALUES (?, ?)
-        """, (worker_id, city))
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO worker_cities (worker_id, city)
+                VALUES (%s, %s)
+                ON CONFLICT (worker_id, city) DO NOTHING
+            """, (worker_id, city))
+        else:
+            cursor.execute("""
+                INSERT OR IGNORE INTO worker_cities (worker_id, city)
+                VALUES (?, ?)
+            """, (worker_id, city))
         conn.commit()
         logger.info(f"✅ Город '{city}' добавлен мастеру worker_id={worker_id}")
 
@@ -4630,13 +4658,23 @@ def set_worker_cities(worker_id, cities):
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
         # Удаляем все существующие
-        cursor.execute("DELETE FROM worker_cities WHERE worker_id = ?", (worker_id,))
+        if USE_POSTGRES:
+            cursor.execute("DELETE FROM worker_cities WHERE worker_id = %s", (worker_id,))
+        else:
+            cursor.execute("DELETE FROM worker_cities WHERE worker_id = ?", (worker_id,))
         # Добавляем новые
         for city in cities:
-            cursor.execute("""
-                INSERT OR IGNORE INTO worker_cities (worker_id, city)
-                VALUES (?, ?)
-            """, (worker_id, city))
+            if USE_POSTGRES:
+                cursor.execute("""
+                    INSERT INTO worker_cities (worker_id, city)
+                    VALUES (%s, %s)
+                    ON CONFLICT (worker_id, city) DO NOTHING
+                """, (worker_id, city))
+            else:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO worker_cities (worker_id, city)
+                    VALUES (?, ?)
+                """, (worker_id, city))
         conn.commit()
         logger.info(f"✅ Установлено {len(cities)} городов для мастера worker_id={worker_id}")
 
@@ -4670,10 +4708,17 @@ def get_notification_settings(user_id):
 
         # Создаем дефолтные настройки
         now = datetime.now().isoformat()
-        cursor.execute("""
-            INSERT OR IGNORE INTO notification_settings (user_id, new_orders_enabled, new_bids_enabled, updated_at)
-            VALUES (?, 1, 1, ?)
-        """, (user_id, now))
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO notification_settings (user_id, new_orders_enabled, new_bids_enabled, updated_at)
+                VALUES (%s, TRUE, TRUE, %s)
+                ON CONFLICT (user_id) DO NOTHING
+            """, (user_id, now))
+        else:
+            cursor.execute("""
+                INSERT OR IGNORE INTO notification_settings (user_id, new_orders_enabled, new_bids_enabled, updated_at)
+                VALUES (?, 1, 1, ?)
+            """, (user_id, now))
         conn.commit()
 
         return {
@@ -4700,14 +4745,23 @@ def update_notification_setting(user_id, setting_name, enabled):
         cursor = get_cursor(conn)
 
         # Создаем запись если не существует
-        cursor.execute("""
-            INSERT OR IGNORE INTO notification_settings (user_id, new_orders_enabled, new_bids_enabled, updated_at)
-            VALUES (?, 1, 1, ?)
-        """, (user_id, now))
-
-        # Обновляем настройку
-        query = f"UPDATE notification_settings SET {setting_name} = ?, updated_at = ? WHERE user_id = ?"
-        cursor.execute(query, (1 if enabled else 0, now, user_id))
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO notification_settings (user_id, new_orders_enabled, new_bids_enabled, updated_at)
+                VALUES (%s, TRUE, TRUE, %s)
+                ON CONFLICT (user_id) DO NOTHING
+            """, (user_id, now))
+            # Обновляем настройку
+            query = f"UPDATE notification_settings SET {setting_name} = %s, updated_at = %s WHERE user_id = %s"
+            cursor.execute(query, (enabled, now, user_id))
+        else:
+            cursor.execute("""
+                INSERT OR IGNORE INTO notification_settings (user_id, new_orders_enabled, new_bids_enabled, updated_at)
+                VALUES (?, 1, 1, ?)
+            """, (user_id, now))
+            # Обновляем настройку
+            query = f"UPDATE notification_settings SET {setting_name} = ?, updated_at = ? WHERE user_id = ?"
+            cursor.execute(query, (1 if enabled else 0, now, user_id))
         conn.commit()
 
         logger.info(f"📢 Настройка уведомлений обновлена: user_id={user_id}, {setting_name}={enabled}")
