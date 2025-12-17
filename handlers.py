@@ -162,14 +162,22 @@ async def safe_edit_message(query, text, **kwargs):
     Обрабатывает:
     - Timeout callback_query (>30 сек)
     - Попытка редактировать одинаковый текст
+    - Сообщения с фото (вместо текста)
     - Другие BadRequest ошибки
 
-    Если редактирование невозможно, отправляет новое сообщение.
+    Если редактирование невозможно, удаляет старое и отправляет новое сообщение.
     """
     import telegram
 
     try:
-        await query.edit_message_text(text, **kwargs)
+        # Проверяем, есть ли в сообщении фото
+        if query.message.photo:
+            # Сообщение с фото - удаляем и отправляем текстовое
+            await query.message.delete()
+            await query.message.reply_text(text, **kwargs)
+        else:
+            # Обычное текстовое сообщение - редактируем
+            await query.edit_message_text(text, **kwargs)
     except telegram.error.BadRequest as e:
         error_msg = str(e).lower()
 
@@ -3094,6 +3102,118 @@ async def delete_portfolio_photo(update: Update, context: ContextTypes.DEFAULT_T
         )
 
 
+async def view_worker_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Просмотр галереи работ другого мастера (для клиента)"""
+    query = update.callback_query
+    await query.answer()
+
+    # Извлекаем worker_id из callback_data
+    try:
+        worker_id = int(query.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await safe_edit_message(query, "❌ Ошибка: неверный формат данных")
+        return
+
+    # Получаем профиль мастера
+    worker_profile = db.get_worker_profile_by_id(worker_id)
+
+    if not worker_profile:
+        await safe_edit_message(query, "❌ Профиль мастера не найден")
+        return
+
+    profile_dict = dict(worker_profile)
+    portfolio_photos = profile_dict.get("portfolio_photos") or ""
+
+    if not portfolio_photos:
+        await safe_edit_message(
+            query,
+            "📸 У этого мастера пока нет фото работ.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data="client_my_orders")
+            ]])
+        )
+        return
+
+    photo_ids = [p.strip() for p in portfolio_photos.split(",") if p.strip()]
+
+    # Сохраняем в context для навигации
+    context.user_data['viewing_worker_portfolio'] = photo_ids
+    context.user_data['viewing_worker_portfolio_index'] = 0
+    context.user_data['viewing_worker_id'] = worker_id
+
+    # Показываем первое фото
+    keyboard = []
+
+    # Навигация если фото больше одного
+    if len(photo_ids) > 1:
+        nav_buttons = [
+            InlineKeyboardButton("◀️", callback_data="worker_portfolio_view_prev"),
+            InlineKeyboardButton(f"1/{len(photo_ids)}", callback_data="noop"),
+            InlineKeyboardButton("▶️", callback_data="worker_portfolio_view_next")
+        ]
+        keyboard.append(nav_buttons)
+
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="client_my_orders")])
+
+    try:
+        await query.message.delete()
+        await query.message.reply_photo(
+            photo=photo_ids[0],
+            caption=f"📸 <b>Работы мастера</b>\n\n1 из {len(photo_ids)}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при показе галереи мастера: {e}")
+        await safe_edit_message(query, "❌ Ошибка при загрузке фото")
+
+
+async def worker_portfolio_view_navigate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Навигация по галерее работ другого мастера"""
+    query = update.callback_query
+    await query.answer()
+
+    photos = context.user_data.get('viewing_worker_portfolio', [])
+    current_index = context.user_data.get('viewing_worker_portfolio_index', 0)
+
+    if not photos:
+        await query.message.delete()
+        await query.message.reply_text("❌ Ошибка: фотографии не найдены")
+        return
+
+    # Определяем направление
+    if query.data == "worker_portfolio_view_next":
+        current_index = (current_index + 1) % len(photos)
+    elif query.data == "worker_portfolio_view_prev":
+        current_index = (current_index - 1) % len(photos)
+
+    context.user_data['viewing_worker_portfolio_index'] = current_index
+
+    # Обновляем фото
+    keyboard = []
+
+    if len(photos) > 1:
+        nav_buttons = [
+            InlineKeyboardButton("◀️", callback_data="worker_portfolio_view_prev"),
+            InlineKeyboardButton(f"{current_index + 1}/{len(photos)}", callback_data="noop"),
+            InlineKeyboardButton("▶️", callback_data="worker_portfolio_view_next")
+        ]
+        keyboard.append(nav_buttons)
+
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="client_my_orders")])
+
+    try:
+        await query.message.delete()
+        await query.message.reply_photo(
+            photo=photos[current_index],
+            caption=f"📸 <b>Работы мастера</b>\n\n{current_index + 1} из {len(photos)}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при навигации по галерее: {e}")
+
+
 # ------- РЕДАКТИРОВАНИЕ ПРОФИЛЯ -------
 
 async def show_edit_profile_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3732,7 +3852,8 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = db.get_user(query.from_user.id)
         if not user:
             logger.error(f"User не найден для telegram_id: {query.from_user.id}")
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 "❌ Ошибка: пользователь не найден.\n\nНажмите /start для регистрации.",
                 parse_mode="HTML"
             )
@@ -3746,7 +3867,8 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         client_profile = db.get_client_profile(user["id"])
         if not client_profile:
             logger.error(f"Client profile не найден для user_id: {user['id']}")
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 "❌ Ошибка: профиль клиента не найден.\n\n"
                 "Возможно произошла ошибка при регистрации.\n"
                 "Нажмите /start и зарегистрируйтесь заново.",
@@ -3766,8 +3888,9 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("📝 Создать первый заказ", callback_data="client_create_order")],
                 [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")],
             ]
-            
-            await query.edit_message_text(
+
+            await safe_edit_message(
+                query,
                 "📂 <b>Мои заказы</b>\n\n"
                 "У вас пока нет созданных заказов.\n\n"
                 "Создайте первый заказ, чтобы начать получать отклики от мастеров!",
@@ -3867,8 +3990,9 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard.append([InlineKeyboardButton("📝 Создать новый заказ", callback_data="client_create_order")])
         keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")])
-        
-        await query.edit_message_text(
+
+        await safe_edit_message(
+            query,
             orders_text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -4974,7 +5098,8 @@ async def select_master(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 break
 
         if not selected_bid:
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 "❌ Ошибка: отклик не найден.",
                 parse_mode="HTML"
             )
@@ -5005,7 +5130,8 @@ async def select_master(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("⬅️ Назад к откликам", callback_data=f"view_bids_{order_id}")],
         ]
 
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -5013,7 +5139,8 @@ async def select_master(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"Ошибка в select_master: {e}", exc_info=True)
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             f"❌ Ошибка при выборе мастера:\n{str(e)}",
             parse_mode="HTML"
         )
@@ -5647,6 +5774,10 @@ async def worker_view_orders(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Теперь: 5 категорий = 1 SQL запрос
         all_orders = db.get_orders_by_categories(categories, per_page=30)
         all_orders = [dict(order) for order in all_orders]
+
+        # Фильтруем заказы - не показываем те, на которые мастер уже откликнулся
+        worker_user_id = user["id"]
+        all_orders = [order for order in all_orders if not db.check_worker_bid_exists(order['id'], worker_user_id)]
         
         if not all_orders:
             keyboard = [
@@ -7709,7 +7840,7 @@ async def notify_worker_new_order(context, worker_telegram_id, worker_user_id, o
             f"👇 Нажмите кнопку чтобы посмотреть все доступные заказы"
         )
 
-        keyboard = [[InlineKeyboardButton("📋 Посмотреть заказы", callback_data="worker_available_orders")]]
+        keyboard = [[InlineKeyboardButton("📋 Посмотреть заказы", callback_data="worker_view_orders")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         # Пытаемся получить существующее уведомление

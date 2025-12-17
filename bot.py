@@ -498,6 +498,15 @@ def main():
         CallbackQueryHandler(handlers.delete_portfolio_photo, pattern="^delete_portfolio_photo_")
     )
 
+    # --- Просмотр портфолио другого мастера ---
+    application.add_handler(
+        CallbackQueryHandler(handlers.view_worker_portfolio, pattern="^view_worker_portfolio_")
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(handlers.worker_portfolio_view_navigate, pattern="^worker_portfolio_view_(prev|next)$")
+    )
+
     # Загрузка фото (обрабатывает и portfolio_photos и profile_photo)
     # КРИТИЧНО: Группа -1 чтобы выполнялось РАНЬШЕ ConversationHandler
     application.add_handler(
