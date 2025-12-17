@@ -2745,7 +2745,14 @@ def get_unread_messages_count(chat_id, user_id):
             SELECT COUNT(*) FROM messages
             WHERE chat_id = ? AND sender_user_id != ? AND is_read = 0
         """, (chat_id, user_id))
-        return cursor.fetchone()[0]
+        result = cursor.fetchone()
+        if not result:
+            return 0
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return result.get('count', 0)
+        else:
+            return result[0]
 
 
 def confirm_worker_in_chat(chat_id):
@@ -2993,10 +3000,19 @@ def set_premium_enabled(enabled):
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
         value = 'true' if enabled else 'false'
-        cursor.execute("""
-            INSERT OR REPLACE INTO settings (key, value, updated_at)
-            VALUES ('premium_enabled', ?, datetime('now'))
-        """, (value,))
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO settings (key, value, updated_at)
+                VALUES ('premium_enabled', %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (key) DO UPDATE SET
+                    value = EXCLUDED.value,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (value,))
+        else:
+            cursor.execute("""
+                INSERT OR REPLACE INTO settings (key, value, updated_at)
+                VALUES ('premium_enabled', ?, datetime('now'))
+            """, (value,))
         conn.commit()
 
 
@@ -3019,10 +3035,19 @@ def set_setting(key, value):
     """Устанавливает значение настройки"""
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
-        cursor.execute("""
-            INSERT OR REPLACE INTO settings (key, value, updated_at)
-            VALUES (?, ?, datetime('now'))
-        """, (key, value))
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO settings (key, value, updated_at)
+                VALUES (%s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (key) DO UPDATE SET
+                    value = EXCLUDED.value,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (key, value))
+        else:
+            cursor.execute("""
+                INSERT OR REPLACE INTO settings (key, value, updated_at)
+                VALUES (?, ?, datetime('now'))
+            """, (key, value))
         conn.commit()
 
 
@@ -3094,6 +3119,16 @@ def get_banned_users():
 
 # === ANALYTICS HELPERS ===
 
+def _get_count_from_result(result):
+    """Helper для извлечения значения COUNT(*) из результата fetchone()"""
+    if not result:
+        return 0
+    # PostgreSQL возвращает dict, SQLite может вернуть tuple
+    if isinstance(result, dict):
+        return result.get('count', 0)
+    else:
+        return result[0]
+
 def get_analytics_stats():
     """Получает основную статистику для аналитики"""
     with get_db_connection() as conn:
@@ -3103,43 +3138,43 @@ def get_analytics_stats():
 
         # Всего пользователей
         cursor.execute("SELECT COUNT(*) FROM users")
-        stats['total_users'] = cursor.fetchone()[0]
+        stats['total_users'] = _get_count_from_result(cursor.fetchone())
 
         # Забаненных пользователей
         cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
-        stats['banned_users'] = cursor.fetchone()[0]
+        stats['banned_users'] = _get_count_from_result(cursor.fetchone())
 
         # Мастеров
         cursor.execute("SELECT COUNT(*) FROM workers")
-        stats['total_workers'] = cursor.fetchone()[0]
+        stats['total_workers'] = _get_count_from_result(cursor.fetchone())
 
         # Клиентов
         cursor.execute("SELECT COUNT(*) FROM clients")
-        stats['total_clients'] = cursor.fetchone()[0]
+        stats['total_clients'] = _get_count_from_result(cursor.fetchone())
 
         # Заказов (всего)
         cursor.execute("SELECT COUNT(*) FROM orders")
-        stats['total_orders'] = cursor.fetchone()[0]
+        stats['total_orders'] = _get_count_from_result(cursor.fetchone())
 
         # Активных заказов
         cursor.execute("SELECT COUNT(*) FROM orders WHERE status = 'open'")
-        stats['active_orders'] = cursor.fetchone()[0]
+        stats['active_orders'] = _get_count_from_result(cursor.fetchone())
 
         # Завершённых заказов
         cursor.execute("SELECT COUNT(*) FROM orders WHERE status = 'completed'")
-        stats['completed_orders'] = cursor.fetchone()[0]
+        stats['completed_orders'] = _get_count_from_result(cursor.fetchone())
 
         # Откликов (всего)
         cursor.execute("SELECT COUNT(*) FROM bids")
-        stats['total_bids'] = cursor.fetchone()[0]
+        stats['total_bids'] = _get_count_from_result(cursor.fetchone())
 
         # Активных откликов
         cursor.execute("SELECT COUNT(*) FROM bids WHERE status = 'active'")
-        stats['active_bids'] = cursor.fetchone()[0]
+        stats['active_bids'] = _get_count_from_result(cursor.fetchone())
 
         # Отзывов
         cursor.execute("SELECT COUNT(*) FROM reviews")
-        stats['total_reviews'] = cursor.fetchone()[0]
+        stats['total_reviews'] = _get_count_from_result(cursor.fetchone())
 
         # Premium статус
         stats['premium_enabled'] = is_premium_enabled()
@@ -3282,7 +3317,7 @@ def get_orders_by_category(category, page=1, per_page=10):
             WHERE o.status = 'open'
             AND oc.category = ?
         """, (category,))
-        total_count = cursor.fetchone()[0] if not USE_POSTGRES else cursor.fetchone()['count']
+        total_count = _get_count_from_result(cursor.fetchone())
 
         # Получаем заказы для текущей страницы
         offset = (page - 1) * per_page
@@ -3375,7 +3410,7 @@ def get_client_orders(client_id, page=1, per_page=10):
 
         # Получаем общее количество заказов
         cursor.execute("SELECT COUNT(*) FROM orders WHERE client_id = ?", (client_id,))
-        total_count = cursor.fetchone()[0] if not USE_POSTGRES else cursor.fetchone()['count']
+        total_count = _get_count_from_result(cursor.fetchone())
 
         # Получаем заказы для текущей страницы
         offset = (page - 1) * per_page
@@ -3679,7 +3714,14 @@ def check_worker_bid_exists(order_id, worker_id):
             WHERE order_id = ? AND worker_id = ?
         """, (order_id, worker_id))
 
-        return cursor.fetchone()[0] > 0
+        result = cursor.fetchone()
+        if not result:
+            return False
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return result.get('count', 0) > 0
+        else:
+            return result[0] > 0
 
 
 def get_bids_count_for_order(order_id):
@@ -3692,7 +3734,14 @@ def get_bids_count_for_order(order_id):
             WHERE order_id = ? AND status = 'active'
         """, (order_id,))
 
-        return cursor.fetchone()[0]
+        result = cursor.fetchone()
+        if not result:
+            return 0
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return result.get('count', 0)
+        else:
+            return result[0]
 
 
 def get_bids_for_worker(worker_id):
@@ -4187,16 +4236,28 @@ def migrate_add_ready_in_days_and_notifications():
 def save_worker_notification(worker_user_id, message_id, chat_id, orders_count=0):
     """Сохраняет или обновляет ID сообщения с уведомлением для мастера"""
     from datetime import datetime
-    
+
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
         timestamp = int(datetime.now().timestamp())
-        
-        cursor.execute("""
-            INSERT OR REPLACE INTO worker_notifications 
-            (user_id, notification_message_id, notification_chat_id, last_update_timestamp, available_orders_count)
-            VALUES (?, ?, ?, ?, ?)
-        """, (worker_user_id, message_id, chat_id, timestamp, orders_count))
+
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO worker_notifications
+                (user_id, notification_message_id, notification_chat_id, last_update_timestamp, available_orders_count)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    notification_message_id = EXCLUDED.notification_message_id,
+                    notification_chat_id = EXCLUDED.notification_chat_id,
+                    last_update_timestamp = EXCLUDED.last_update_timestamp,
+                    available_orders_count = EXCLUDED.available_orders_count
+            """, (worker_user_id, message_id, chat_id, timestamp, orders_count))
+        else:
+            cursor.execute("""
+                INSERT OR REPLACE INTO worker_notifications
+                (user_id, notification_message_id, notification_chat_id, last_update_timestamp, available_orders_count)
+                VALUES (?, ?, ?, ?, ?)
+            """, (worker_user_id, message_id, chat_id, timestamp, orders_count))
         conn.commit()
 
 
@@ -4228,11 +4289,23 @@ def save_client_notification(client_user_id, message_id, chat_id, bids_count=0):
         cursor = get_cursor(conn)
         timestamp = int(datetime.now().timestamp())
 
-        cursor.execute("""
-            INSERT OR REPLACE INTO client_notifications
-            (user_id, notification_message_id, notification_chat_id, last_update_timestamp, unread_bids_count)
-            VALUES (?, ?, ?, ?, ?)
-        """, (client_user_id, message_id, chat_id, timestamp, bids_count))
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO client_notifications
+                (user_id, notification_message_id, notification_chat_id, last_update_timestamp, unread_bids_count)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    notification_message_id = EXCLUDED.notification_message_id,
+                    notification_chat_id = EXCLUDED.notification_chat_id,
+                    last_update_timestamp = EXCLUDED.last_update_timestamp,
+                    unread_bids_count = EXCLUDED.unread_bids_count
+            """, (client_user_id, message_id, chat_id, timestamp, bids_count))
+        else:
+            cursor.execute("""
+                INSERT OR REPLACE INTO client_notifications
+                (user_id, notification_message_id, notification_chat_id, last_update_timestamp, unread_bids_count)
+                VALUES (?, ?, ?, ?, ?)
+            """, (client_user_id, message_id, chat_id, timestamp, bids_count))
         conn.commit()
 
 
