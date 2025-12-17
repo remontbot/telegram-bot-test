@@ -393,6 +393,21 @@ def main():
         )
     )
 
+    # --- Обработчики категорий заказов ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_active_orders,
+            pattern="^client_active_orders$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_completed_orders,
+            pattern="^client_completed_orders$",
+        )
+    )
+
     # --- Обработчик отмены заказа ---
     application.add_handler(
         CallbackQueryHandler(
@@ -413,6 +428,14 @@ def main():
         CallbackQueryHandler(
             handlers.submit_order_rating,
             pattern="^rate_order_"
+        )
+    )
+
+    # --- Обработчик добавления комментария к отзыву ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.add_comment_to_review,
+            pattern="^add_comment_"
         )
     )
 
@@ -464,6 +487,14 @@ def main():
         MessageHandler(
             filters.PHOTO & ~filters.COMMAND,
             handlers.worker_upload_work_photo_receive
+        )
+    )
+
+    # MessageHandler для приёма комментариев к отзывам
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handlers.receive_review_comment
         )
     )
 
