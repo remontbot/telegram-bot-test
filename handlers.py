@@ -5500,7 +5500,14 @@ async def open_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg_dict = dict(msg)
                 sender_role = msg_dict['sender_role']
                 message_text = msg_dict['message_text']
-                created_at = msg_dict['created_at'][:16]  # Обрезаем до минут
+
+                # PostgreSQL возвращает datetime объект, SQLite возвращает строку
+                created_at_raw = msg_dict['created_at']
+                if isinstance(created_at_raw, str):
+                    created_at = created_at_raw[:16]  # Обрезаем до минут
+                else:
+                    # datetime объект - форматируем
+                    created_at = created_at_raw.strftime('%Y-%m-%d %H:%M')
 
                 if sender_role == my_role:
                     text += f"<b>Вы:</b> {message_text}\n"
