@@ -844,7 +844,13 @@ def get_worker_completed_orders_count(worker_user_id):
             WHERE selected_worker_id = ? AND status = 'completed'
         """, (worker_user_id,))
         result = cursor.fetchone()
-        return result[0] if result else 0
+        if not result:
+            return 0
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return result.get('count', 0)
+        else:
+            return result[0]
 
 
 def calculate_photo_limit(worker_user_id):
@@ -1073,7 +1079,13 @@ def add_completed_work_photo(order_id, worker_id, photo_id):
                 cursor.execute("SELECT last_insert_rowid()")
 
             result = cursor.fetchone()
-            return result[0] if result else None
+            if not result:
+                return None
+            # PostgreSQL возвращает dict, SQLite может вернуть tuple
+            if isinstance(result, dict):
+                return result.get('lastval') or result.get('last_insert_rowid()')
+            else:
+                return result[0]
         except Exception as e:
             logger.error(f"Ошибка при добавлении фото завершённой работы: {e}")
             return None
@@ -2740,7 +2752,13 @@ def is_worker_confirmed(chat_id):
         cursor = get_cursor(conn)
         cursor.execute("SELECT worker_confirmed FROM chats WHERE id = ?", (chat_id,))
         result = cursor.fetchone()
-        return bool(result[0]) if result else False
+        if not result:
+            return False
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return bool(result.get('worker_confirmed', False))
+        else:
+            return bool(result[0])
 
 
 # === TRANSACTION HELPERS ===
@@ -2945,7 +2963,13 @@ def is_premium_enabled():
         cursor = get_cursor(conn)
         cursor.execute("SELECT value FROM settings WHERE key = 'premium_enabled'")
         result = cursor.fetchone()
-        return result and result[0] == 'true'
+        if not result:
+            return False
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return result.get('value') == 'true'
+        else:
+            return result[0] == 'true'
 
 
 def set_premium_enabled(enabled):
@@ -2966,7 +2990,13 @@ def get_setting(key, default=None):
         cursor = get_cursor(conn)
         cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
         result = cursor.fetchone()
-        return result[0] if result else default
+        if not result:
+            return default
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return result.get('value', default)
+        else:
+            return result[0]
 
 
 def set_setting(key, value):
@@ -2991,7 +3021,11 @@ def is_user_banned(telegram_id):
         """, (telegram_id,))
         result = cursor.fetchone()
         if result:
-            return bool(result[0])
+            # PostgreSQL возвращает dict, SQLite может вернуть tuple
+            if isinstance(result, dict):
+                return bool(result.get('is_banned', False))
+            else:
+                return bool(result[0])
         return False
 
 
@@ -3700,7 +3734,13 @@ def select_bid(bid_id):
             logger.warning(f"Отклик {bid_id} не найден")
             return False
 
-        order_id, worker_id, order_status = result[0], result[1], result[2]
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            order_id = result['order_id']
+            worker_id = result['worker_id']
+            order_status = result['status']
+        else:
+            order_id, worker_id, order_status = result[0], result[1], result[2]
 
         # ЗАЩИТА ОТ RACE CONDITION: проверяем что заказ еще не был выбран
         if order_status not in ('open', 'waiting_master_confirmation'):
@@ -4248,7 +4288,11 @@ def count_available_orders_for_worker(worker_user_id):
         if not worker:
             return 0
 
-        worker_id = worker[0]
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(worker, dict):
+            worker_id = worker['id']
+        else:
+            worker_id = worker[0]
 
         # Получаем список городов мастера
         cursor.execute("SELECT city FROM worker_cities WHERE worker_id = ?", (worker_id,))
@@ -4257,7 +4301,11 @@ def count_available_orders_for_worker(worker_user_id):
         if not cities_result:
             return 0
 
-        cities = [row[0] for row in cities_result]
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if cities_result and isinstance(cities_result[0], dict):
+            cities = [row['city'] for row in cities_result]
+        else:
+            cities = [row[0] for row in cities_result]
 
         # ИСПРАВЛЕНО: Используем нормализованные таблицы вместо LIKE
         # Ищем заказы через JOIN с order_categories и worker_categories
@@ -4279,7 +4327,13 @@ def count_available_orders_for_worker(worker_user_id):
         cursor.execute(query, (*cities, worker_id, worker_id))
 
         result = cursor.fetchone()
-        count = result[0] if result else 0
+        if not result:
+            return 0
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            count = result.get('count', 0)
+        else:
+            count = result[0]
 
         return count
 
@@ -4467,7 +4521,14 @@ def is_admin(telegram_id):
         cursor = get_cursor(conn)
         cursor.execute("SELECT COUNT(*) FROM admin_users WHERE telegram_id = ?", (telegram_id,))
         result = cursor.fetchone()
-        return result[0] > 0 if result else False
+        if not result:
+            return False
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            count = result.get('count', 0)
+            return count > 0
+        else:
+            return result[0] > 0
 
 
 def create_broadcast(message_text, target_audience, photo_file_id, created_by):
