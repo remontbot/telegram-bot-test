@@ -2304,7 +2304,12 @@ def migrate_normalize_categories():
                         WHERE table_name = 'worker_categories'
                     )
                 """)
-                table_exists = cursor.fetchone()[0]
+                result = cursor.fetchone()
+                # PostgreSQL возвращает dict, SQLite может вернуть tuple
+                if isinstance(result, dict):
+                    table_exists = bool(result.get('exists', False))
+                else:
+                    table_exists = bool(result[0]) if result else False
             else:
                 cursor.execute("""
                     SELECT name FROM sqlite_master
@@ -2344,8 +2349,13 @@ def migrate_normalize_categories():
 
             migrated_count = 0
             for worker in workers:
-                worker_id = worker[0]
-                categories_str = worker[1]
+                # PostgreSQL возвращает dict, SQLite может вернуть tuple
+                if isinstance(worker, dict):
+                    worker_id = worker['id']
+                    categories_str = worker['categories']
+                else:
+                    worker_id = worker[0]
+                    categories_str = worker[1]
 
                 if not categories_str:
                     continue
@@ -2410,7 +2420,12 @@ def migrate_normalize_order_categories():
 
             # 2. Проверяем есть ли уже данные в order_categories
             cursor.execute("SELECT COUNT(*) FROM order_categories")
-            existing_count = cursor.fetchone()[0] if not USE_POSTGRES else cursor.fetchone()['count']
+            result = cursor.fetchone()
+            # PostgreSQL возвращает dict, SQLite может вернуть tuple
+            if isinstance(result, dict):
+                existing_count = result.get('count', 0)
+            else:
+                existing_count = result[0] if result else 0
 
             if existing_count > 0:
                 logger.info(f"✅ Категории заказов уже мигрированы ({existing_count} записей)")
@@ -2422,7 +2437,8 @@ def migrate_normalize_order_categories():
 
             migrated_count = 0
             for order in orders:
-                if USE_POSTGRES:
+                # PostgreSQL возвращает dict, SQLite может вернуть tuple
+                if isinstance(order, dict):
                     order_id = order['id']
                     categories_str = order['category']
                 else:
