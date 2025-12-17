@@ -2731,7 +2731,7 @@ def mark_messages_as_read(chat_id, user_id):
         cursor = get_cursor(conn)
         cursor.execute("""
             UPDATE messages
-            SET is_read = 1
+            SET is_read = TRUE
             WHERE chat_id = ? AND sender_user_id != ?
         """, (chat_id, user_id))
         conn.commit()
@@ -2743,7 +2743,7 @@ def get_unread_messages_count(chat_id, user_id):
         cursor = get_cursor(conn)
         cursor.execute("""
             SELECT COUNT(*) FROM messages
-            WHERE chat_id = ? AND sender_user_id != ? AND is_read = 0
+            WHERE chat_id = ? AND sender_user_id != ? AND is_read = FALSE
         """, (chat_id, user_id))
         result = cursor.fetchone()
         if not result:
@@ -2763,7 +2763,7 @@ def confirm_worker_in_chat(chat_id):
         cursor = get_cursor(conn)
         cursor.execute("""
             UPDATE chats
-            SET worker_confirmed = 1, worker_confirmed_at = ?
+            SET worker_confirmed = TRUE, worker_confirmed_at = ?
             WHERE id = ?
         """, (datetime.now().isoformat(), chat_id))
         conn.commit()
@@ -2842,7 +2842,7 @@ def get_expired_chats(hours=24):
 
         cursor.execute("""
             SELECT * FROM chats
-            WHERE worker_confirmed = 0
+            WHERE worker_confirmed = FALSE
             AND created_at < ?
         """, (expiration_time.isoformat(),))
 
@@ -2906,14 +2906,22 @@ def set_notifications_enabled(user_id, enabled):
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
-        # Для совместимости с SQLite и PostgreSQL
-        value = 1 if enabled else 0 if not USE_POSTGRES else enabled
-
-        cursor.execute("""
-            UPDATE workers
-            SET notifications_enabled = ?
-            WHERE user_id = ?
-        """, (value, user_id))
+        if USE_POSTGRES:
+            # PostgreSQL: используем TRUE/FALSE напрямую
+            value_str = 'TRUE' if enabled else 'FALSE'
+            cursor.execute(f"""
+                UPDATE workers
+                SET notifications_enabled = {value_str}
+                WHERE user_id = %s
+            """, (user_id,))
+        else:
+            # SQLite: используем 1/0
+            value = 1 if enabled else 0
+            cursor.execute("""
+                UPDATE workers
+                SET notifications_enabled = ?
+                WHERE user_id = ?
+            """, (value, user_id))
 
         conn.commit()
         return cursor.rowcount > 0
@@ -2965,14 +2973,22 @@ def set_client_notifications_enabled(user_id, enabled):
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
-        # Для совместимости с SQLite и PostgreSQL
-        value = 1 if enabled else 0 if not USE_POSTGRES else enabled
-
-        cursor.execute("""
-            UPDATE clients
-            SET notifications_enabled = ?
-            WHERE user_id = ?
-        """, (value, user_id))
+        if USE_POSTGRES:
+            # PostgreSQL: используем TRUE/FALSE напрямую
+            value_str = 'TRUE' if enabled else 'FALSE'
+            cursor.execute(f"""
+                UPDATE clients
+                SET notifications_enabled = {value_str}
+                WHERE user_id = %s
+            """, (user_id,))
+        else:
+            # SQLite: используем 1/0
+            value = 1 if enabled else 0
+            cursor.execute("""
+                UPDATE clients
+                SET notifications_enabled = ?
+                WHERE user_id = ?
+            """, (value, user_id))
 
         conn.commit()
         return cursor.rowcount > 0
@@ -3078,7 +3094,7 @@ def ban_user(telegram_id, reason, banned_by):
         cursor = get_cursor(conn)
         cursor.execute("""
             UPDATE users
-            SET is_banned = 1,
+            SET is_banned = TRUE,
                 ban_reason = ?,
                 banned_at = ?,
                 banned_by = ?
@@ -3094,7 +3110,7 @@ def unban_user(telegram_id):
         cursor = get_cursor(conn)
         cursor.execute("""
             UPDATE users
-            SET is_banned = 0,
+            SET is_banned = FALSE,
                 ban_reason = NULL,
                 banned_at = NULL,
                 banned_by = NULL
@@ -3111,7 +3127,7 @@ def get_banned_users():
         cursor.execute("""
             SELECT telegram_id, ban_reason, banned_at, banned_by
             FROM users
-            WHERE is_banned = 1
+            WHERE is_banned = TRUE
             ORDER BY banned_at DESC
         """)
         return cursor.fetchall()
@@ -3141,7 +3157,7 @@ def get_analytics_stats():
         stats['total_users'] = _get_count_from_result(cursor.fetchone())
 
         # Забаненных пользователей
-        cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
+        cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = TRUE")
         stats['banned_users'] = _get_count_from_result(cursor.fetchone())
 
         # Мастеров
