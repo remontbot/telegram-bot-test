@@ -813,6 +813,56 @@ def get_worker_by_user_id(user_id):
     return get_worker_profile(user_id)
 
 
+def get_worker_completed_orders_count(worker_user_id):
+    """
+    Подсчитывает количество завершенных заказов мастера (status='completed').
+
+    Args:
+        worker_user_id: ID пользователя-мастера
+
+    Returns:
+        int: Количество завершенных заказов
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM orders
+            WHERE selected_worker_id = ? AND status = 'completed'
+        """, (worker_user_id,))
+        result = cursor.fetchone()
+        return result[0] if result else 0
+
+
+def calculate_photo_limit(worker_user_id):
+    """
+    Рассчитывает максимальное количество фото для мастера на основе выполненных заказов.
+
+    Логика:
+    - Начальный лимит: 10 фото (при регистрации)
+    - За каждые 5 завершенных заказов: +5 фото
+    - Максимум: 30 фото
+
+    Args:
+        worker_user_id: ID пользователя-мастера
+
+    Returns:
+        int: Максимальное количество фото (от 10 до 30)
+    """
+    completed_orders = get_worker_completed_orders_count(worker_user_id)
+
+    # Базовый лимит: 10 фото
+    base_limit = 10
+
+    # За каждые 5 заказов добавляем 5 фото
+    bonus_photos = (completed_orders // 5) * 5
+
+    # Итоговый лимит (не больше 30)
+    total_limit = min(base_limit + bonus_photos, 30)
+
+    return total_limit
+
+
 def get_client_profile(user_id):
     """Возвращает профиль заказчика по user_id"""
     with get_db_connection() as conn:
