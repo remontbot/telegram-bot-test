@@ -2221,7 +2221,7 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
     # Подсчитываем текущие фото
     current_photos_list = [p for p in current_photos.split(",") if p] if current_photos else []
     current_count = len(current_photos_list)
-    max_photos = 10
+    max_photos = 30  # Увеличено с 10 до 30 для роста портфолио
     available_slots = max_photos - current_count
 
     # Сохраняем в context - РЕЖИМ ДОБАВЛЕНИЯ ФОТО АКТИВЕН
@@ -2275,6 +2275,15 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
     logger.info(f"🔧 DEBUG: context.user_data = {context.user_data}")
     logger.info(f"🔧 DEBUG: uploading_profile_photo = {context.user_data.get('uploading_profile_photo')}")
     logger.info(f"🔧 DEBUG: adding_photos = {context.user_data.get('adding_photos')}")
+
+    # КРИТИЧНО: Проверяем, зарегистрирован ли пользователь
+    # Если НЕТ - пропускаем (пусть ConversationHandler регистрации обработает)
+    existing_user = db.get_user(telegram_id)
+    if not existing_user:
+        logger.info(f"🔧 DEBUG: Пользователь {telegram_id} НЕ зарегистрирован - пропускаем обработку")
+        return  # Пропускаем, чтобы ConversationHandler мог обработать
+
+    logger.info(f"🔧 DEBUG: Пользователь {telegram_id} ЗАРЕГИСТРИРОВАН - обрабатываем фото")
 
     # Если активен режим загрузки фото профиля - передаем управление туда
     if context.user_data.get("uploading_profile_photo"):
@@ -2349,7 +2358,7 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
     existing_count = len(context.user_data.get("existing_photos", []))
     new_count = len(context.user_data.get("new_photos", []))
     total_count = existing_count + new_count
-    max_photos = 10
+    max_photos = 30  # Увеличено с 10 до 30 для роста портфолио
 
     if total_count >= max_photos:
         keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]

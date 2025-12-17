@@ -499,18 +499,22 @@ def main():
     )
 
     # Загрузка фото (обрабатывает и portfolio_photos и profile_photo)
+    # КРИТИЧНО: Группа -1 чтобы выполнялось РАНЬШЕ ConversationHandler
     application.add_handler(
-        MessageHandler(filters.PHOTO, handlers.worker_add_photos_upload)
+        MessageHandler(filters.PHOTO, handlers.worker_add_photos_upload),
+        group=-1
     )
 
     # Загрузка видео (для портфолио)
     application.add_handler(
-        MessageHandler(filters.VIDEO, handlers.worker_add_photos_upload)
+        MessageHandler(filters.VIDEO, handlers.worker_add_photos_upload),
+        group=-1
     )
 
     # Загрузка документов (когда пользователь перетягивает файл)
     application.add_handler(
-        MessageHandler(filters.Document.ALL, handlers.worker_add_photos_upload)
+        MessageHandler(filters.Document.ALL, handlers.worker_add_photos_upload),
+        group=-1
     )
 
     # --- Меню мастера и заказчика ---
