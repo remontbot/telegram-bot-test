@@ -2843,8 +2843,12 @@ def are_notifications_enabled(user_id):
         if not result:
             return True
 
-        # SQLite хранит boolean как INTEGER (1 или 0), PostgreSQL как BOOLEAN
-        return bool(result[0]) if result[0] is not None else True
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return bool(result.get('notifications_enabled', True))
+        else:
+            # SQLite хранит boolean как INTEGER (1 или 0)
+            return bool(result[0]) if result[0] is not None else True
 
 
 def set_notifications_enabled(user_id, enabled):
@@ -2898,8 +2902,12 @@ def are_client_notifications_enabled(user_id):
         if not result:
             return True
 
-        # SQLite хранит boolean как INTEGER (1 или 0), PostgreSQL как BOOLEAN
-        return bool(result[0]) if result[0] is not None else True
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return bool(result.get('notifications_enabled', True))
+        else:
+            # SQLite хранит boolean как INTEGER (1 или 0)
+            return bool(result[0]) if result[0] is not None else True
 
 
 def set_client_notifications_enabled(user_id, enabled):
