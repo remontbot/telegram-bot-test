@@ -408,9 +408,12 @@ class DBCursor:
         sql = convert_sql(sql)
 
         # Для PostgreSQL INSERT нужно добавить RETURNING id
+        # НО только если это не INSERT с ON CONFLICT (там может не быть колонки id)
+        should_return_id = False
         if USE_POSTGRES and sql.strip().upper().startswith('INSERT'):
-            if 'RETURNING' not in sql.upper():
+            if 'RETURNING' not in sql.upper() and 'ON CONFLICT' not in sql.upper():
                 sql = sql.rstrip().rstrip(';') + ' RETURNING id'
+                should_return_id = True
 
         if params:
             result = self.cursor.execute(sql, params)
@@ -418,7 +421,7 @@ class DBCursor:
             result = self.cursor.execute(sql)
 
         # Получаем lastrowid для PostgreSQL
-        if USE_POSTGRES and sql.strip().upper().startswith('INSERT'):
+        if should_return_id:
             row = self.cursor.fetchone()
             if row:
                 self._lastrowid = row['id'] if isinstance(row, dict) else row[0]
@@ -4575,7 +4578,13 @@ def migrate_add_worker_cities():
             workers = cursor.fetchall()
 
             for worker in workers:
-                worker_id, city = worker
+                # PostgreSQL возвращает dict, SQLite возвращает tuple
+                if isinstance(worker, dict):
+                    worker_id = worker['id']
+                    city = worker['city']
+                else:
+                    worker_id, city = worker
+
                 if USE_POSTGRES:
                     cursor.execute("""
                         INSERT INTO worker_cities (worker_id, city)
