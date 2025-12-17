@@ -2221,7 +2221,10 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
     # Подсчитываем текущие фото
     current_photos_list = [p for p in current_photos.split(",") if p] if current_photos else []
     current_count = len(current_photos_list)
-    max_photos = 30  # Увеличено с 10 до 30 для роста портфолио
+
+    # Динамический лимит на основе выполненных заказов
+    max_photos = db.calculate_photo_limit(user_id)
+    completed_orders = db.get_worker_completed_orders_count(user_id)
     available_slots = max_photos - current_count
 
     # Сохраняем в context - РЕЖИМ ДОБАВЛЕНИЯ ФОТО АКТИВЕН
@@ -2230,16 +2233,27 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
     context.user_data["new_photos"] = []
 
     logger.info(f"🔧 DEBUG: Флаг adding_photos установлен для user_id={user_id}, telegram_id={telegram_id}")
+    logger.info(f"📊 Лимит фото для мастера: {max_photos} (завершено заказов: {completed_orders})")
     logger.info(f"Запущен режим добавления фото для user_id={user_id}")
 
     if available_slots <= 0:
+        # Информация о том, как увеличить лимит
+        if max_photos < 30:
+            limit_info = f"\n\n💡 <b>Хотите больше фото?</b>\n" \
+                        f"Выполняйте заказы чтобы увеличить лимит до 30 фото!\n" \
+                        f"За каждые 5 заказов: +5 фото"
+        else:
+            limit_info = "\n\n✨ Вы достигли максимального лимита в 30 фото!"
+
         await query.edit_message_text(
             "📸 <b>Портфолио заполнено</b>\n\n"
             f"У вас уже загружено максимальное количество фото ({max_photos}).\n\n"
-            "⚠️ <b>Напоминание:</b> Первое фото должно быть с вашим лицом!\n\n"
-            "💡 <i>Функция удаления фото будет добавлена в следующем обновлении.</i>",
+            "🗑 <b>Чтобы добавить новые фото:</b>\n"
+            "Используйте кнопку «🗑 Управление фото работ» чтобы удалить старые фото и освободить место."
+            f"{limit_info}",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🗑 Управление фото работ", callback_data="manage_portfolio_photos")],
                 [InlineKeyboardButton("⬅️ Назад к профилю", callback_data="worker_profile")]
             ])
         )
@@ -2250,10 +2264,17 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
     if current_count == 0:
         hint_text = "🤵 <b>Первое фото должно быть с вашим лицом!</b>\n" \
                    "Это повышает доверие клиентов.\n\n" \
-                   "После можете добавить до 9 фотографий ваших работ и 1 видео."
+                   f"После можете добавить до {max_photos - 1} фотографий ваших работ и 1 видео."
     else:
-        hint_text = f"📊 Загружено: {current_count}/10\n" \
-                   f"Можно добавить ещё: {available_slots} фото/видео работ"
+        # Показываем прогресс и информацию о лимите
+        if max_photos > 10:
+            hint_text = f"📊 Загружено: {current_count}/{max_photos}\n" \
+                       f"Можно добавить ещё: {available_slots} фото/видео\n\n" \
+                       f"💡 Ваш лимит увеличен до {max_photos} фото за {completed_orders} выполненных заказов!"
+        else:
+            hint_text = f"📊 Загружено: {current_count}/{max_photos}\n" \
+                       f"Можно добавить ещё: {available_slots} фото/видео\n\n" \
+                       f"💡 Выполняйте заказы чтобы увеличить лимит до 30 фото!"
 
     await query.edit_message_text(
         f"📸 <b>Добавление фото в портфолио</b>\n\n"
@@ -2355,16 +2376,30 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
         )
         return
 
+    # Получаем user_id для расчета лимита
+    telegram_id = update.effective_user.id
+    user = db.get_user(telegram_id)
+    user_id = user['id'] if user else None
+
     existing_count = len(context.user_data.get("existing_photos", []))
     new_count = len(context.user_data.get("new_photos", []))
     total_count = existing_count + new_count
-    max_photos = 30  # Увеличено с 10 до 30 для роста портфолио
+
+    # Динамический лимит на основе выполненных заказов
+    max_photos = db.calculate_photo_limit(user_id) if user_id else 10
 
     if total_count >= max_photos:
         keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]
+
+        # Информация о том, как увеличить лимит
+        if max_photos < 30:
+            limit_info = f"\n\n💡 Выполняйте заказы чтобы увеличить лимит до 30 фото!"
+        else:
+            limit_info = ""
+
         await update.message.reply_text(
             f"⚠️ Достигнут лимит в {max_photos} фотографий.\n\n"
-            f"Нажмите кнопку ниже для завершения:",
+            f"Нажмите кнопку ниже для завершения:{limit_info}",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
