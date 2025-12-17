@@ -1982,7 +1982,6 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
         [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
         [InlineKeyboardButton("💳 Мои платежи", callback_data="client_my_payments")],
-        [InlineKeyboardButton("🔍 Найти мастера", callback_data="client_browse_workers")],
         [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_client_notifications")],
         [InlineKeyboardButton("🧰 Главное меню", callback_data="go_main_menu")],
     ]
@@ -2042,8 +2041,14 @@ async def client_my_payments(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         # Форматируем дату
         from datetime import datetime
-        created_at = datetime.fromisoformat(trans_dict['created_at'])
-        date_str = created_at.strftime("%d.%m.%Y %H:%M")
+        created_at_raw = trans_dict['created_at']
+        # PostgreSQL возвращает datetime объект, SQLite возвращает строку
+        if isinstance(created_at_raw, str):
+            created_at = datetime.fromisoformat(created_at_raw)
+            date_str = created_at.strftime("%d.%m.%Y %H:%M")
+        else:
+            # datetime объект - форматируем напрямую
+            date_str = created_at_raw.strftime("%d.%m.%Y %H:%M")
 
         # Получаем описание или тип транзакции
         description = trans_dict.get('description', '')
@@ -3843,10 +3848,10 @@ async def edit_description_save(update: Update, context: ContextTypes.DEFAULT_TY
 # ------- ЗАГЛУШКИ ДЛЯ ЗАКАЗЧИКА -------
 
 async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Просмотр заказов клиента"""
+    """Показывает выбор категории заказов (активные/завершённые)"""
     query = update.callback_query
     await query.answer()
-    
+
     try:
         # Получаем профиль клиента
         user = db.get_user(query.from_user.id)
@@ -3859,11 +3864,6 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        logger.info(f"User найден: id={user['id']}")
-
-        # Уведомление НЕ удаляется автоматически - оно висит и напоминает об откликах
-        # Клиент может отключить уведомления в настройках если захочет
-
         client_profile = db.get_client_profile(user["id"])
         if not client_profile:
             logger.error(f"Client profile не найден для user_id: {user['id']}")
@@ -3875,15 +3875,11 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML"
             )
             return
-        
-        logger.info(f"Client profile найден: id={client_profile['id']}")
-        
-        # Получаем заказы клиента (первые 10 с пагинацией)
-        orders, total_count, has_next_page = db.get_client_orders(client_profile["id"], page=1, per_page=10)
 
-        logger.info(f"Найдено заказов: {total_count} (показываем первые 10)")
-        
-        if not orders:
+        # Получаем все заказы для подсчета
+        all_orders, total_count, _ = db.get_client_orders(client_profile["id"], page=1, per_page=1000)
+
+        if not all_orders:
             keyboard = [
                 [InlineKeyboardButton("📝 Создать первый заказ", callback_data="client_create_order")],
                 [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")],
@@ -3899,101 +3895,30 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # Формируем список заказов
-        orders_text = "📂 <b>Мои заказы</b>\n\n"
+        # Подсчитываем активные и завершённые заказы
+        active_statuses = ['open', 'pending_choice', 'master_selected', 'contact_shared', 'waiting_master_confirmation']
+        completed_statuses = ['done', 'completed', 'canceled']
 
-        keyboard = []
+        active_count = sum(1 for o in all_orders if dict(o).get('status', 'open') in active_statuses)
+        completed_count = sum(1 for o in all_orders if dict(o).get('status', 'open') in completed_statuses)
 
-        for i, order in enumerate(orders[:5], 1):  # Показываем последние 5
-            order_dict = dict(order)
-            order_id = order_dict['id']
+        # Показываем меню выбора категории
+        text = "📂 <b>Мои заказы</b>\n\n"
+        text += f"Всего заказов: {total_count}\n"
+        text += f"🟢 Активные: {active_count}\n"
+        text += f"✅ Завершённые: {completed_count}\n\n"
+        text += "Выберите категорию:"
 
-            status_emoji = {
-                "open": "🟢",
-                "pending_choice": "🟡",
-                "master_selected": "🔵",
-                "contact_shared": "✅",
-                "completed": "✅",
-                "done": "✅",
-                "canceled": "❌"
-            }
-
-            status_text = {
-                "open": "Открыт",
-                "pending_choice": "Ожидает выбора",
-                "master_selected": "Мастер выбран",
-                "contact_shared": "Контакт передан",
-                "completed": "Завершён",
-                "done": "Выполнен",
-                "canceled": "Отменён"
-            }
-
-            emoji = status_emoji.get(order_dict.get("status", "open"), "⚪")
-            status = status_text.get(order_dict.get("status", "open"), "Неизвестно")
-
-            orders_text += f"{emoji} <b>Заказ #{order_dict['id']}</b> - {status}\n"
-            orders_text += f"📍 {order_dict.get('city', 'Не указан')}\n"
-            orders_text += f"🔧 {order_dict.get('category', 'Не указаны')}\n"
-
-            # Показываем начало описания
-            description = order_dict.get('description', '')
-            if len(description) > 50:
-                description = description[:50] + "..."
-            orders_text += f"📝 {description}\n"
-
-            # Количество фото
-            photos = order_dict.get('photos', '')
-            photos_count = len([p for p in photos.split(',') if p]) if photos else 0
-            if photos_count > 0:
-                orders_text += f"📸 {photos_count} фото\n"
-
-            # Количество откликов
-            bids_count = db.get_bids_count_for_order(order_id)
-            if bids_count > 0:
-                orders_text += f"💼 <b>{bids_count} {_get_bids_word(bids_count)}</b>\n"
-                # Добавляем кнопку для просмотра откликов
-                keyboard.append([InlineKeyboardButton(
-                    f"💼 Откликов на заказ #{order_id}: {bids_count}",
-                    callback_data=f"view_bids_{order_id}"
-                )])
-
-            # НОВОЕ: Кнопка отмены для открытых заказов
-            order_status = order_dict.get('status', '')
-            if order_status in ('open', 'waiting_master_confirmation'):
-                keyboard.append([InlineKeyboardButton(
-                    f"❌ Отменить заказ #{order_id}",
-                    callback_data=f"cancel_order_{order_id}"
-                )])
-
-            # НОВОЕ: Если мастер выбран, показываем кнопки чата и завершения
-            selected_worker_id = order_dict.get('selected_worker_id')
-            if selected_worker_id:
-                # Проверяем существует ли чат
-                chat = db.get_chat_by_order(order_id)
-                if chat:
-                    chat_dict = dict(chat)
-                    keyboard.append([InlineKeyboardButton(
-                        f"💬 Чат с мастером",
-                        callback_data=f"open_chat_{chat_dict['id']}"
-                    )])
-
-                # КРИТИЧНО: Кнопка завершения доступна СРАЗУ после выбора мастера
-                # Клиент НЕ зависит от подтверждения мастера!
-                if order_status not in ('done', 'completed', 'cancelled'):
-                    keyboard.append([InlineKeyboardButton(
-                        f"✅ Завершить заказ #{order_id}",
-                        callback_data=f"complete_order_{order_id}"
-                    )])
-
-            orders_text += f"📅 {order_dict.get('created_at', '')}\n"
-            orders_text += "\n"
-
-        keyboard.append([InlineKeyboardButton("📝 Создать новый заказ", callback_data="client_create_order")])
-        keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")])
+        keyboard = [
+            [InlineKeyboardButton(f"🟢 Активные заказы ({active_count})", callback_data="client_active_orders")],
+            [InlineKeyboardButton(f"✅ Завершённые заказы ({completed_count})", callback_data="client_completed_orders")],
+            [InlineKeyboardButton("📝 Создать новый заказ", callback_data="client_create_order")],
+            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")]
+        ]
 
         await safe_edit_message(
             query,
-            orders_text,
+            text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -4008,6 +3933,203 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+
+
+async def client_active_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает активные заказы клиента"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        user = db.get_user(query.from_user.id)
+        if not user:
+            await safe_edit_message(query, "❌ Пользователь не найден.")
+            return
+
+        client_profile = db.get_client_profile(user["id"])
+        if not client_profile:
+            await safe_edit_message(query, "❌ Профиль клиента не найден.")
+            return
+
+        # Получаем все заказы и фильтруем активные
+        all_orders, _, _ = db.get_client_orders(client_profile["id"], page=1, per_page=1000)
+        active_statuses = ['open', 'pending_choice', 'master_selected', 'contact_shared', 'waiting_master_confirmation']
+        orders = [o for o in all_orders if dict(o).get('status', 'open') in active_statuses]
+
+        if not orders:
+            keyboard = [
+                [InlineKeyboardButton("📝 Создать новый заказ", callback_data="client_create_order")],
+                [InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")]
+            ]
+            await safe_edit_message(
+                query,
+                "🟢 <b>Активные заказы</b>\n\nУ вас нет активных заказов.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+        # Формируем список заказов
+        text = f"🟢 <b>Активные заказы</b> ({len(orders)})\n\n"
+        keyboard = []
+
+        for order in orders[:10]:  # Показываем первые 10
+            order_dict = dict(order)
+            order_id = order_dict['id']
+
+            status_emoji = {
+                "open": "🟢",
+                "pending_choice": "🟡",
+                "master_selected": "🔵",
+                "contact_shared": "✅",
+                "waiting_master_confirmation": "⏳"
+            }
+            status_text = {
+                "open": "Открыт",
+                "pending_choice": "Ожидает выбора",
+                "master_selected": "Мастер выбран",
+                "contact_shared": "Контакт передан",
+                "waiting_master_confirmation": "Ожидает подтверждения"
+            }
+
+            emoji = status_emoji.get(order_dict.get("status", "open"), "⚪")
+            status = status_text.get(order_dict.get("status", "open"), "Неизвестно")
+
+            text += f"{emoji} <b>Заказ #{order_id}</b> - {status}\n"
+            text += f"🔧 {order_dict.get('category', 'Не указана')}\n"
+
+            description = order_dict.get('description', '')
+            if len(description) > 50:
+                description = description[:50] + "..."
+            text += f"📝 {description}\n"
+
+            # Количество откликов
+            bids_count = db.get_bids_count_for_order(order_id)
+            if bids_count > 0:
+                text += f"💼 {bids_count} {_get_bids_word(bids_count)}\n"
+                keyboard.append([InlineKeyboardButton(
+                    f"💼 Откликов на заказ #{order_id}: {bids_count}",
+                    callback_data=f"view_bids_{order_id}"
+                )])
+
+            # Кнопка отмены для открытых заказов
+            order_status = order_dict.get('status', '')
+            if order_status in ('open', 'waiting_master_confirmation'):
+                keyboard.append([InlineKeyboardButton(
+                    f"❌ Отменить заказ #{order_id}",
+                    callback_data=f"cancel_order_{order_id}"
+                )])
+
+            # Если мастер выбран, показываем кнопки чата и завершения
+            selected_worker_id = order_dict.get('selected_worker_id')
+            if selected_worker_id:
+                chat = db.get_chat_by_order(order_id)
+                if chat:
+                    chat_dict = dict(chat)
+                    keyboard.append([InlineKeyboardButton(
+                        f"💬 Чат (заказ #{order_id})",
+                        callback_data=f"open_chat_{chat_dict['id']}"
+                    )])
+
+                if order_status not in ('done', 'completed', 'cancelled'):
+                    keyboard.append([InlineKeyboardButton(
+                        f"✅ Завершить заказ #{order_id}",
+                        callback_data=f"complete_order_{order_id}"
+                    )])
+
+            text += "\n"
+
+        keyboard.append([InlineKeyboardButton("📝 Создать новый заказ", callback_data="client_create_order")])
+        keyboard.append([InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")])
+
+        await safe_edit_message(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    except Exception as e:
+        logger.error(f"Ошибка в client_active_orders: {e}", exc_info=True)
+        await safe_edit_message(query, f"❌ Ошибка: {str(e)}")
+
+
+async def client_completed_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает завершённые заказы клиента"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        user = db.get_user(query.from_user.id)
+        if not user:
+            await safe_edit_message(query, "❌ Пользователь не найден.")
+            return
+
+        client_profile = db.get_client_profile(user["id"])
+        if not client_profile:
+            await safe_edit_message(query, "❌ Профиль клиента не найден.")
+            return
+
+        # Получаем все заказы и фильтруем завершённые
+        all_orders, _, _ = db.get_client_orders(client_profile["id"], page=1, per_page=1000)
+        completed_statuses = ['done', 'completed', 'canceled']
+        orders = [o for o in all_orders if dict(o).get('status', 'open') in completed_statuses]
+
+        if not orders:
+            keyboard = [[InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")]]
+            await safe_edit_message(
+                query,
+                "✅ <b>Завершённые заказы</b>\n\nУ вас нет завершённых заказов.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+        # Формируем список заказов
+        text = f"✅ <b>Завершённые заказы</b> ({len(orders)})\n\n"
+        keyboard = []
+
+        for order in orders[:10]:  # Показываем первые 10
+            order_dict = dict(order)
+            order_id = order_dict['id']
+
+            status_emoji = {
+                "done": "✅",
+                "completed": "✅",
+                "canceled": "❌"
+            }
+            status_text = {
+                "done": "Выполнен",
+                "completed": "Завершён",
+                "canceled": "Отменён"
+            }
+
+            emoji = status_emoji.get(order_dict.get("status", "done"), "✅")
+            status = status_text.get(order_dict.get("status", "done"), "Завершён")
+
+            text += f"{emoji} <b>Заказ #{order_id}</b> - {status}\n"
+            text += f"🔧 {order_dict.get('category', 'Не указана')}\n"
+
+            description = order_dict.get('description', '')
+            if len(description) > 50:
+                description = description[:50] + "..."
+            text += f"📝 {description}\n"
+
+            # Показываем чат если есть
+            selected_worker_id = order_dict.get('selected_worker_id')
+            if selected_worker_id:
+                chat = db.get_chat_by_order(order_id)
+                if chat:
+                    chat_dict = dict(chat)
+                    keyboard.append([InlineKeyboardButton(
+                        f"💬 Посмотреть чат (заказ #{order_id})",
+                        callback_data=f"open_chat_{chat_dict['id']}"
+                    )])
+
+            text += "\n"
+
+        keyboard.append([InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")])
+
+        await safe_edit_message(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    except Exception as e:
+        logger.error(f"Ошибка в client_completed_orders: {e}", exc_info=True)
+        await safe_edit_message(query, f"❌ Ошибка: {str(e)}")
 
 
 async def cancel_order_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4340,12 +4462,18 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
                 notify_user_dict = dict(notify_user)
                 stars = "⭐" * rating
 
-                # Если клиент оценил мастера - предлагаем загрузить фото
+                # Проверяем, оставила ли противоположная сторона уже отзыв
+                opposite_review_exists = db.check_review_exists(order_id, notify_user_id)
+
+                # Если клиент оценил мастера - предлагаем мастеру загрузить фото И оценить клиента
                 if is_client:
-                    keyboard = [
-                        [InlineKeyboardButton("📸 Загрузить фото работы", callback_data=f"upload_work_photo_{order_id}")],
-                        [InlineKeyboardButton("➡️ Пропустить", callback_data=f"skip_work_photo_{order_id}")]
-                    ]
+                    keyboard = []
+                    # Если мастер еще не оценил клиента, добавляем кнопку оценки
+                    if not opposite_review_exists:
+                        keyboard.append([InlineKeyboardButton("⭐ Оценить клиента", callback_data=f"complete_order_{order_id}")])
+                    keyboard.append([InlineKeyboardButton("📸 Загрузить фото работы", callback_data=f"upload_work_photo_{order_id}")])
+                    keyboard.append([InlineKeyboardButton("➡️ Пропустить", callback_data=f"skip_work_photo_{order_id}")])
+
                     extra_text = (
                         f"\n\n📸 <b>Загрузите фото выполненной работы:</b>\n"
                         f"• Это повысит доверие будущих клиентов\n"
@@ -4354,8 +4482,11 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
                         f"• Подтверждённые фото получат специальный значок ✅"
                     )
                 else:
-                    keyboard = None
-                    extra_text = "\n\nСпасибо за ваш заказ!"
+                    # Мастер оценил клиента - предлагаем клиенту оценить мастера
+                    keyboard = []
+                    if not opposite_review_exists:
+                        keyboard.append([InlineKeyboardButton("⭐ Оценить мастера", callback_data=f"complete_order_{order_id}")])
+                    extra_text = "\n\nОцените работу мастера!"
 
                 await context.bot.send_message(
                     chat_id=notify_user_dict['telegram_id'],
@@ -4403,6 +4534,102 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"❌ Произошла ошибка при сохранении оценки:\n{str(e)}",
             parse_mode="HTML"
         )
+
+
+async def add_comment_to_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Оставить комментарий' после завершения заказа"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # Извлекаем order_id из callback_data
+        order_id = int(query.data.replace("add_comment_", ""))
+
+        # Получаем пользователя
+        user = db.get_user(query.from_user.id)
+        if not user:
+            await safe_edit_message(query, "❌ Пользователь не найден.")
+            return
+
+        user_dict = dict(user)
+
+        # Проверяем что отзыв существует
+        if not db.check_review_exists(order_id, user_dict['id']):
+            await safe_edit_message(
+                query,
+                "❌ Отзыв не найден. Сначала завершите заказ с оценкой.",
+                parse_mode="HTML"
+            )
+            return
+
+        # Сохраняем order_id в context для последующего использования
+        context.user_data['add_comment_order_id'] = order_id
+
+        # Просим пользователя ввести комментарий
+        await safe_edit_message(
+            query,
+            f"💬 <b>Добавление комментария к отзыву</b>\n\n"
+            f"Заказ #{order_id}\n\n"
+            f"Напишите ваш комментарий к отзыву (до 500 символов):",
+            parse_mode="HTML"
+        )
+
+        logger.info(f"Пользователь {user_dict['id']} начал добавление комментария к отзыву по заказу {order_id}")
+
+    except Exception as e:
+        logger.error(f"Ошибка при начале добавления комментария: {e}", exc_info=True)
+        await safe_edit_message(query, f"❌ Ошибка: {str(e)}")
+
+
+async def receive_review_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получает текст комментария от пользователя"""
+    # Проверяем что пользователь в процессе добавления комментария
+    if 'add_comment_order_id' not in context.user_data:
+        return  # Игнорируем сообщение если не ожидаем комментарий
+
+    order_id = context.user_data['add_comment_order_id']
+    comment = update.message.text.strip()
+
+    if len(comment) > 500:
+        await update.message.reply_text(
+            "❌ Комментарий слишком длинный. Максимум 500 символов.\n\n"
+            "Пожалуйста, отправьте более короткий комментарий:"
+        )
+        return
+
+    user = db.get_user(update.effective_user.id)
+    if not user:
+        await update.message.reply_text("❌ Пользователь не найден.")
+        del context.user_data['add_comment_order_id']
+        return
+
+    user_dict = dict(user)
+
+    # Обновляем комментарий в отзыве
+    success = db.update_review_comment(order_id, user_dict['id'], comment)
+
+    if success:
+        await update.message.reply_text(
+            f"✅ <b>Комментарий добавлен!</b>\n\n"
+            f"Ваш отзыв обновлён.\n\n"
+            f"💬 <i>\"{comment}\"</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")
+            ]])
+        )
+        logger.info(f"Пользователь {user_dict['id']} добавил комментарий к отзыву по заказу {order_id}")
+    else:
+        await update.message.reply_text(
+            "❌ Не удалось обновить комментарий.\n\n"
+            "Возможно отзыв не найден.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")
+            ]])
+        )
+
+    # Очищаем состояние
+    del context.user_data['add_comment_order_id']
 
 
 async def worker_upload_work_photo_start(update: Update, context: ContextTypes.DEFAULT_TYPE):

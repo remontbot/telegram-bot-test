@@ -1037,6 +1037,23 @@ def check_review_exists(order_id, from_user_id):
             return count[0] > 0
 
 
+def update_review_comment(order_id, from_user_id, comment):
+    """Обновляет комментарий существующего отзыва."""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        try:
+            cursor.execute("""
+                UPDATE reviews
+                SET comment = ?
+                WHERE order_id = ? AND from_user_id = ?
+            """, (comment, order_id, from_user_id))
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            print(f"⚠️ Ошибка при обновлении комментария отзыва: {e}")
+            return False
+
+
 def increment_verified_reviews(user_id):
     """
     Увеличивает счетчик проверенных отзывов для мастера.
