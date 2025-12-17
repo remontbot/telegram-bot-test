@@ -5460,12 +5460,28 @@ async def open_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Получаем информацию о собеседнике
         if is_client:
             worker = db.get_user_by_id(chat_dict['worker_user_id'])
-            worker_profile = db.get_worker_profile(worker['id']) if worker else None
-            other_name = worker_profile['name'] if worker_profile else "Мастер"
+            if worker:
+                worker = dict(worker)
+                worker_profile = db.get_worker_profile(worker['id'])
+                if worker_profile:
+                    worker_profile = dict(worker_profile)
+                    other_name = worker_profile['name']
+                else:
+                    other_name = "Мастер"
+            else:
+                other_name = "Мастер"
         else:
             client = db.get_user_by_id(chat_dict['client_user_id'])
-            client_profile = db.get_client_profile(client['id']) if client else None
-            other_name = client_profile['name'] if client_profile else "Клиент"
+            if client:
+                client = dict(client)
+                client_profile = db.get_client_profile(client['id'])
+                if client_profile:
+                    client_profile = dict(client_profile)
+                    other_name = client_profile['name']
+                else:
+                    other_name = "Клиент"
+            else:
+                other_name = "Клиент"
 
         # Получаем последние сообщения
         messages = db.get_chat_messages(chat_id, limit=10)
