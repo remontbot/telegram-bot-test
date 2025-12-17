@@ -571,7 +571,7 @@ def init_db():
                 order_id INTEGER NOT NULL,
                 worker_id INTEGER NOT NULL,
                 photo_id TEXT NOT NULL,
-                verified BOOLEAN DEFAULT 0,
+                verified BOOLEAN DEFAULT FALSE,
                 verified_at TEXT,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (order_id) REFERENCES orders(id),
@@ -584,8 +584,8 @@ def init_db():
             CREATE TABLE IF NOT EXISTS notification_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER UNIQUE NOT NULL,
-                new_orders_enabled BOOLEAN DEFAULT 1,      -- Уведомления о новых заказах (для мастеров)
-                new_bids_enabled BOOLEAN DEFAULT 1,        -- Уведомления о новых откликах (для заказчиков)
+                new_orders_enabled BOOLEAN DEFAULT TRUE,      -- Уведомления о новых заказах (для мастеров)
+                new_bids_enabled BOOLEAN DEFAULT TRUE,        -- Уведомления о новых откликах (для заказчиков)
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
@@ -4325,7 +4325,7 @@ def migrate_add_admin_and_ads():
                     button_url TEXT,
                     target_audience TEXT NOT NULL,
                     placement TEXT NOT NULL,
-                    active BOOLEAN DEFAULT 1,
+                    active BOOLEAN DEFAULT TRUE,
                     start_date TEXT,
                     end_date TEXT,
                     max_views_per_user_per_day INTEGER DEFAULT 1,
@@ -4357,7 +4357,7 @@ def migrate_add_admin_and_ads():
                     ad_id INTEGER NOT NULL,
                     user_id INTEGER NOT NULL,
                     viewed_at TEXT NOT NULL,
-                    clicked BOOLEAN DEFAULT 0,
+                    clicked BOOLEAN DEFAULT FALSE,
                     placement TEXT,
                     FOREIGN KEY (ad_id) REFERENCES ads(id) ON DELETE CASCADE,
                     FOREIGN KEY (user_id) REFERENCES users(id)
