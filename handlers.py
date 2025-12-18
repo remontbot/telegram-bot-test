@@ -391,11 +391,8 @@ def is_valid_phone(phone: str) -> bool:
     return bool(re.fullmatch(r"\+?\d[\d\s\-()]{6,20}", phone))
 
 
-def get_persistent_menu(user_id):
-    """
-    Создает постоянное меню внизу экрана (ReplyKeyboardMarkup)
-    Меню зависит от ролей пользователя
-    """
+def get_main_menu(user_id):
+    """Главное меню - стартовое меню внизу"""
     worker_profile = db.get_worker_profile(user_id)
     client_profile = db.get_client_profile(user_id)
 
@@ -428,11 +425,43 @@ def get_persistent_menu(user_id):
         KeyboardButton("ℹ️ Помощь")
     ])
 
-    return ReplyKeyboardMarkup(
-        keyboard,
-        resize_keyboard=True,  # Адаптировать размер кнопок
-        is_persistent=True,    # Меню не исчезает
-    )
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
+
+
+def get_worker_menu_buttons(user_id):
+    """Меню мастера - кнопки внизу"""
+    notifications_enabled = db.are_notifications_enabled(user_id)
+    notification_text = "🔔 Уведомления" if notifications_enabled else "🔕 Уведомления"
+
+    keyboard = [
+        [KeyboardButton("📋 Доступные заказы")],
+        [KeyboardButton("💼 Мои отклики")],
+        [KeyboardButton("📦 Мои заказы (мастер)")],
+        [KeyboardButton("👤 Мой профиль"), KeyboardButton(notification_text)],
+        [KeyboardButton("💡 Предложения"), KeyboardButton("ℹ️ Помощь")],
+        [KeyboardButton("⬅️ Главное меню")],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
+
+
+def get_client_menu_buttons(user_id):
+    """Меню заказчика - кнопки внизу"""
+    notifications_enabled = db.are_client_notifications_enabled(user_id)
+    notification_text = "🔔 Уведомления" if notifications_enabled else "🔕 Уведомления"
+
+    keyboard = [
+        [KeyboardButton("📝 Создать заказ")],
+        [KeyboardButton("📂 Мои заказы")],
+        [KeyboardButton(notification_text)],
+        [KeyboardButton("💡 Предложения"), KeyboardButton("ℹ️ Помощь")],
+        [KeyboardButton("⬅️ Главное меню")],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
+
+
+def get_persistent_menu(user_id):
+    """Алиас для get_main_menu для совместимости"""
+    return get_main_menu(user_id)
 
 
 # /start
@@ -9066,52 +9095,41 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_dict = dict(user)
     user_id = user_dict['id']
 
-    # Определяем какую кнопку нажали
-    if text == "🧰 Меню мастера":
-        # Показываем меню мастера
-        notifications_enabled = db.are_notifications_enabled(user_id)
-        notification_status = "🔔 Вкл" if notifications_enabled else "🔕 Выкл"
+    # === НАВИГАЦИЯ ПО МЕНЮ ===
 
-        keyboard = [
-            [InlineKeyboardButton("📋 Доступные заказы", callback_data="worker_view_orders")],
-            [InlineKeyboardButton("💼 Мои отклики", callback_data="worker_my_bids")],
-            [InlineKeyboardButton("📦 Мои заказы", callback_data="worker_my_orders")],
-            [InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
-            [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_notifications")],
-            [InlineKeyboardButton("💡 Предложения", callback_data="send_suggestion")],
-            [InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")],
-        ]
-
+    if text == "⬅️ Главное меню":
+        # Возвращаемся в главное меню
+        main_menu = get_main_menu(user_id)
         await update.message.reply_text(
-            "🧰 <b>Меню мастера</b>\n\n"
-            "Выберите действие:",
+            "🏠 <b>Главное меню</b>\n\nВыберите раздел:",
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_markup=main_menu
         )
+        return
+
+    elif text == "🧰 Меню мастера":
+        # Меняем кнопки внизу на меню мастера
+        worker_menu = get_worker_menu_buttons(user_id)
+        await update.message.reply_text(
+            "🧰 <b>Меню мастера</b>\n\nВыберите действие:",
+            parse_mode="HTML",
+            reply_markup=worker_menu
+        )
+        return
 
     elif text == "🏠 Меню заказчика":
-        # Показываем меню заказчика
-        notifications_enabled = db.are_client_notifications_enabled(user_id)
-        notification_status = "🔔 Вкл" if notifications_enabled else "🔕 Выкл"
-
-        keyboard = [
-            [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
-            [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
-            [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_client_notifications")],
-            [InlineKeyboardButton("💡 Предложения", callback_data="send_suggestion")],
-            [InlineKeyboardButton("🧰 Главное меню", callback_data="go_main_menu")],
-        ]
-
+        # Меняем кнопки внизу на меню заказчика
+        client_menu = get_client_menu_buttons(user_id)
         await update.message.reply_text(
             "🏠 <b>Меню заказчика</b>\n\n"
-            "Создайте заказ - мастера увидят его и откликнутся!\n"
-            "Или найдите мастера самостоятельно.",
+            "Создайте заказ - мастера увидят его и откликнутся!",
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_markup=client_menu
         )
+        return
 
     elif text == "👤 Мой профиль":
-        # Показываем профиль мастера
+        # Показываем профиль мастера (БЕЗ inline кнопок - всё через кнопки внизу)
         worker_profile = db.get_worker_profile(user_id)
 
         if not worker_profile:
@@ -9159,20 +9177,6 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"📸 <b>Фото работ:</b> {photos_count}"
         )
 
-        keyboard = [
-            [InlineKeyboardButton("✏️ Редактировать", callback_data="edit_profile")],
-        ]
-
-        # Добавляем кнопку просмотра работ если они есть
-        if photos_count > 0:
-            keyboard.append([InlineKeyboardButton("📸 Посмотреть все работы", callback_data="view_portfolio")])
-
-        # Добавляем кнопку отзывов если они есть
-        if rating_count > 0:
-            keyboard.append([InlineKeyboardButton("💬 Мои отзывы", callback_data="worker_view_reviews")])
-
-        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")])
-
         # Показываем фото профиля (лицо), если есть. Иначе - первое из портфолио
         photo_to_show = profile_photo if profile_photo else (portfolio_photos.split(",")[0] if portfolio_photos else None)
 
@@ -9181,26 +9185,18 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await update.message.reply_photo(
                     photo=photo_to_show,
                     caption=text,
-                    parse_mode="HTML",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
+                    parse_mode="HTML"
                 )
             except Exception as e:
                 # Если фото не загружается - отправляем без фото
                 logger.warning(f"Не удалось отправить фото профиля: {e}")
-                await update.message.reply_text(
-                    text,
-                    parse_mode="HTML",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
+                await update.message.reply_text(text, parse_mode="HTML")
         else:
-            await update.message.reply_text(
-                text,
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+            await update.message.reply_text(text, parse_mode="HTML")
+        return
 
     elif text == "📂 Мои заказы":
-        # Показываем заказы клиента
+        # Показываем заказы клиента (БЕЗ inline кнопок)
         client_profile = db.get_client_profile(user_id)
 
         if not client_profile:
@@ -9214,16 +9210,11 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
         orders = db.get_orders_by_client(client_dict["id"])
 
         if not orders:
-            keyboard = [
-                [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
-                [InlineKeyboardButton("⬅️ Назад", callback_data="show_client_menu")],
-            ]
             await update.message.reply_text(
                 "📂 <b>Мои заказы</b>\n\n"
                 "У вас пока нет заказов.\n\n"
-                "Создайте первый заказ, и мастера начнут на него откликаться!",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(keyboard)
+                "Создайте первый заказ через кнопку '📝 Создать заказ', и мастера начнут на него откликаться!",
+                parse_mode="HTML"
             )
             return
 
@@ -9238,26 +9229,13 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
         text += f"🆕 Открытых: {len(open_orders)}\n"
         text += f"🔄 Активных: {len(active_orders)}\n"
         text += f"✅ Завершённых: {len(completed_orders)}\n"
-        text += f"❌ Отменённых: {len(cancelled_orders)}\n\n"
-        text += "Выберите категорию:"
+        text += f"❌ Отменённых: {len(cancelled_orders)}"
 
-        keyboard = [
-            [InlineKeyboardButton(f"🆕 Открытые ({len(open_orders)})", callback_data="client_orders_open")],
-            [InlineKeyboardButton(f"🔄 Активные ({len(active_orders)})", callback_data="client_orders_active")],
-            [InlineKeyboardButton(f"✅ Завершённые ({len(completed_orders)})", callback_data="client_orders_completed")],
-            [InlineKeyboardButton(f"❌ Отменённые ({len(cancelled_orders)})", callback_data="client_orders_cancelled")],
-            [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="show_client_menu")],
-        ]
-
-        await update.message.reply_text(
-            text,
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await update.message.reply_text(text, parse_mode="HTML")
+        return
 
     elif text == "💡 Предложения":
-        # Открываем форму предложений
+        # Открываем форму предложений (БЕЗ inline кнопки отмены)
         await update.message.reply_text(
             "💡 <b>Отправить предложение</b>\n\n"
             "Здесь вы можете отправить свои предложения по улучшению платформы:\n"
@@ -9265,10 +9243,7 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             "• Что исправить\n"
             "• Как сделать удобнее\n\n"
             "📝 Просто напишите ваше предложение текстом (до 1000 символов):",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("❌ Отмена", callback_data="cancel_suggestion")
-            ]])
+            parse_mode="HTML"
         )
         # Переходим в режим ожидания предложения
         return SUGGESTION_TEXT
@@ -9290,10 +9265,109 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             "💡 Есть вопросы или предложения? Используйте кнопку 'Предложения'\n\n"
             "📞 Техподдержка: отправьте /start и выберите нужное меню"
         )
+        await update.message.reply_text(help_text, parse_mode="HTML")
+        return
+
+    # === КНОПКИ ИЗ МЕНЮ МАСТЕРА ===
+
+    elif text == "📋 Доступные заказы":
+        # Вызываем существующую функцию через фейковый callback
+        fake_query = type('obj', (object,), {
+            'answer': lambda: None,
+            'message': update.message,
+            'from_user': update.effective_user,
+            'data': 'worker_view_orders'
+        })()
+        fake_update = type('obj', (object,), {
+            'callback_query': fake_query,
+            'effective_user': update.effective_user,
+            'message': update.message
+        })()
+        await worker_view_orders(fake_update, context)
+        return
+
+    elif text == "💼 Мои отклики":
+        # Вызываем существующую функцию
+        fake_query = type('obj', (object,), {
+            'answer': lambda: None,
+            'message': update.message,
+            'from_user': update.effective_user,
+            'data': 'worker_my_bids'
+        })()
+        fake_update = type('obj', (object,), {
+            'callback_query': fake_query,
+            'effective_user': update.effective_user,
+            'message': update.message
+        })()
+        await worker_my_bids(fake_update, context)
+        return
+
+    elif text == "📦 Мои заказы (мастер)":
+        # Вызываем существующую функцию
+        fake_query = type('obj', (object,), {
+            'answer': lambda: None,
+            'message': update.message,
+            'from_user': update.effective_user,
+            'data': 'worker_my_orders'
+        })()
+        fake_update = type('obj', (object,), {
+            'callback_query': fake_query,
+            'effective_user': update.effective_user,
+            'message': update.message
+        })()
+        await worker_my_orders(fake_update, context)
+        return
+
+    elif text in ["🔔 Уведомления", "🔕 Уведомления"]:
+        # Переключаем уведомления
+        # Проверяем в каком меню мы находимся (мастер или заказчик)
+        worker_profile = db.get_worker_profile(user_id)
+        client_profile = db.get_client_profile(user_id)
+
+        # Если есть профиль мастера - переключаем уведомления мастера
+        if worker_profile:
+            current_status = db.are_notifications_enabled(user_id)
+            db.toggle_notifications(user_id)
+            new_status = not current_status
+
+            # Обновляем кнопки меню
+            worker_menu = get_worker_menu_buttons(user_id)
+
+            status_text = "включены" if new_status else "выключены"
+            await update.message.reply_text(
+                f"{'🔔' if new_status else '🔕'} Уведомления {status_text}",
+                reply_markup=worker_menu
+            )
+        # Если есть только профиль заказчика - переключаем уведомления заказчика
+        elif client_profile:
+            current_status = db.are_client_notifications_enabled(user_id)
+            db.toggle_client_notifications(user_id)
+            new_status = not current_status
+
+            # Обновляем кнопки меню
+            client_menu = get_client_menu_buttons(user_id)
+
+            status_text = "включены" if new_status else "выключены"
+            await update.message.reply_text(
+                f"{'🔔' if new_status else '🔕'} Уведомления {status_text}",
+                reply_markup=client_menu
+            )
+        return
+
+    # === КНОПКИ ИЗ МЕНЮ ЗАКАЗЧИКА ===
+
+    elif text == "📝 Создать заказ":
+        # Начинаем ConversationHandler создания заказа
         await update.message.reply_text(
-            help_text,
+            "📝 <b>Создание заказа</b>\n\n"
+            "Сейчас я помогу вам создать заказ.\n\n"
+            "Отправьте /cancel чтобы отменить.",
             parse_mode="HTML"
         )
+        # Запускаем процесс создания заказа
+        # Это должно перейти в ConversationHandler для create_order
+        # Пока просто отправляем сообщение
+        return
 
 
 # ============================================
