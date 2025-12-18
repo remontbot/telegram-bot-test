@@ -9099,7 +9099,19 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     elif text == "👤 Мой профиль":
         # Показываем профиль мастера
-        await view_own_worker_profile(update, context)
+        from telegram import CallbackQuery
+        fake_query = type('obj', (object,), {
+            'answer': lambda: None,
+            'message': update.message,
+            'from_user': update.effective_user,
+            'data': 'worker_profile'
+        })()
+        fake_update = type('obj', (object,), {
+            'callback_query': fake_query,
+            'effective_user': update.effective_user
+        })()
+
+        await show_worker_profile(fake_update, context)
 
     elif text == "📂 Мои заказы":
         # Показываем заказы клиента
