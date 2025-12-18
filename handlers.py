@@ -9024,6 +9024,8 @@ async def send_suggestion_start(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
 
+    logger.info(f"🔍 send_suggestion_start вызван пользователем {update.effective_user.id}")
+
     await query.edit_message_text(
         "💡 <b>Отправить предложение</b>\n\n"
         "Здесь вы можете отправить свои предложения по улучшению платформы:\n"
@@ -9037,6 +9039,7 @@ async def send_suggestion_start(update: Update, context: ContextTypes.DEFAULT_TY
         ]])
     )
 
+    logger.info(f"✅ Переход в состояние SUGGESTION_TEXT")
     return SUGGESTION_TEXT
 
 
@@ -9044,6 +9047,8 @@ async def receive_suggestion_text(update: Update, context: ContextTypes.DEFAULT_
     """Получение текста предложения"""
     message = update.message
     text = message.text
+
+    logger.info(f"🔍 receive_suggestion_text вызван. Текст: '{text[:50]}...'")
 
     # Проверка длины
     if len(text) > 1000:
