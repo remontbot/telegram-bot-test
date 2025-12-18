@@ -981,6 +981,20 @@ def main():
 
     application.add_handler(suggestion_conv_handler)
 
+    # --- Обработчик кнопок постоянного меню ---
+    menu_buttons = [
+        "🧰 Меню мастера",
+        "🏠 Меню заказчика",
+        "👤 Мой профиль",
+        "📂 Мои заказы",
+        "💡 Предложения",
+        "ℹ️ Помощь"
+    ]
+    menu_filter = filters.TEXT & filters.Regex(f"^({'|'.join(menu_buttons)})$")
+    application.add_handler(
+        MessageHandler(menu_filter, handlers.handle_menu_buttons)
+    )
+
     # Обработчик неизвестных команд
     application.add_handler(
         MessageHandler(filters.COMMAND, handlers.unknown_command)
