@@ -155,7 +155,7 @@ WORK_CATEGORIES = {
 
 # ===== HELPER FUNCTIONS =====
 
-async def safe_edit_message(query, text, **kwargs):
+async def safe_edit_message(query, text, context=None, **kwargs):
     """
     КРИТИЧЕСКИ ВАЖНО: Безопасное редактирование сообщения.
 
@@ -184,6 +184,22 @@ async def safe_edit_message(query, text, **kwargs):
         if "message is not modified" in error_msg:
             # Текст не изменился, ничего не делаем
             logger.debug("Message not modified, skipping")
+            return
+
+        if "message to edit not found" in error_msg or "message can't be deleted" in error_msg:
+            # Сообщение уже удалено или не существует, отправляем новое
+            logger.warning("Message not found, sending new message")
+            try:
+                if context:
+                    await context.bot.send_message(
+                        chat_id=query.message.chat_id,
+                        text=text,
+                        **kwargs
+                    )
+                else:
+                    await query.message.reply_text(text, **kwargs)
+            except Exception as send_error:
+                logger.error(f"Failed to send new message: {send_error}")
             return
 
         if "query is too old" in error_msg or "message can't be edited" in error_msg:
@@ -1765,7 +1781,7 @@ async def toggle_client_notifications(update: Update, context: ContextTypes.DEFA
 
 
 async def worker_my_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает все отклики мастера с их статусами"""
+    """Показывает только АКТИВНЫЕ отклики мастера (где мастера ещё не выбрали)"""
     query = update.callback_query
     await query.answer()
 
@@ -1786,9 +1802,9 @@ async def worker_my_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
     worker_dict = dict(worker)
 
     # Получаем все отклики мастера
-    bids = db.get_bids_for_worker(worker_dict['id'])
+    all_bids = db.get_bids_for_worker(worker_dict['id'])
 
-    if not bids:
+    if not all_bids:
         keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")]]
         await query.edit_message_text(
             "💼 <b>Мои отклики</b>\n\n"
@@ -1799,48 +1815,56 @@ async def worker_my_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Группируем отклики по статусам
-    pending_bids = []
-    selected_bids = []
-    rejected_bids = []
+    # Фильтруем только АКТИВНЫЕ отклики (pending - ждём ответа клиента)
+    pending_bids = [dict(bid) for bid in all_bids if dict(bid)['status'] == 'pending']
 
-    for bid in bids:
-        bid_dict = dict(bid)
-        if bid_dict['status'] == 'pending':
-            pending_bids.append(bid_dict)
-        elif bid_dict['status'] == 'selected':
-            selected_bids.append(bid_dict)
-        elif bid_dict['status'] == 'rejected':
-            rejected_bids.append(bid_dict)
+    if not pending_bids:
+        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")]]
+        await query.edit_message_text(
+            "💼 <b>Активные отклики</b>\n\n"
+            "У вас нет активных откликов, ожидающих ответа клиента.\n\n"
+            "Все ваши отклики либо были приняты (см. \"Мои заказы\"), либо отклонены.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
 
-    # Формируем текст с откликами
-    text = "💼 <b>Мои отклики</b>\n\n"
+    # Формируем текст с активными откликами
+    text = f"💼 <b>Активные отклики</b> ({len(pending_bids)})\n\n"
+    text += "⏳ Ожидают ответа клиента:\n\n"
 
-    if selected_bids:
-        text += "✅ <b>Выбраны клиентом:</b>\n"
-        for bid in selected_bids[:5]:  # Показываем до 5 выбранных
-            order_title = bid.get('order_title') or 'Без названия'
-            order_title_short = order_title[:30] + '...' if len(order_title) > 30 else order_title
-            text += f"  • {order_title_short} - {bid['proposed_price']} {bid['currency']}\n"
-            text += f"    Статус заказа: {_get_order_status_text(bid['order_status'])}\n"
-        text += "\n"
+    keyboard = []
 
-    if pending_bids:
-        text += "⏳ <b>Ожидают ответа клиента:</b>\n"
-        for bid in pending_bids[:5]:  # Показываем до 5 ожидающих
-            order_title = bid.get('order_title') or 'Без названия'
-            order_title_short = order_title[:30] + '...' if len(order_title) > 30 else order_title
-            text += f"  • {order_title_short} - {bid['proposed_price']} {bid['currency']}\n"
-        if len(pending_bids) > 5:
-            text += f"  ... и ещё {len(pending_bids) - 5}\n"
-        text += "\n"
+    for i, bid in enumerate(pending_bids[:10], 1):  # Показываем до 10 активных
+        order_id = bid['order_id']
+        order = db.get_order_by_id(order_id)
 
-    if rejected_bids:
-        text += f"❌ <b>Отклонены:</b> {len(rejected_bids)}\n"
+        if order:
+            order_dict = dict(order)
+            category = order_dict.get('category', 'Без категории')
+            description = order_dict.get('description', '')
+            if len(description) > 40:
+                description = description[:40] + "..."
 
-    text += f"\n📊 <b>Всего откликов:</b> {len(bids)}"
+            text += f"{i}. <b>Заказ #{order_id}</b>\n"
+            text += f"🔧 {category}\n"
+            text += f"📝 {description}\n"
+            text += f"💰 Ваша цена: {bid['proposed_price']} {bid['currency']}\n"
 
-    keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")]]
+            # Добавляем кнопку для просмотра заказа
+            keyboard.append([InlineKeyboardButton(
+                f"📋 Заказ #{order_id}",
+                callback_data=f"order_{order_id}"
+            )])
+
+            text += "\n"
+
+    if len(pending_bids) > 10:
+        text += f"... и ещё {len(pending_bids) - 10}\n\n"
+
+    text += f"📊 <b>Всего активных откликов:</b> {len(pending_bids)}"
+
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")])
 
     await query.edit_message_text(
         text,
@@ -1850,9 +1874,7 @@ async def worker_my_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def worker_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    НОВОЕ: Показывает мастеру его заказы в работе (подтвержденные заказы).
-    """
+    """Показывает выбор категории заказов мастера (в работе/завершённые)"""
     query = update.callback_query
     await query.answer()
 
@@ -1880,62 +1902,45 @@ async def worker_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Получаем все отклики мастера
         bids = db.get_bids_for_worker(worker_dict['id'])
 
-        # Фильтруем только выбранные отклики (заказы в работе)
-        active_orders = []
+        # Подсчитываем заказы по статусам
+        active_count = 0
+        completed_count = 0
+
         for bid in bids:
             bid_dict = dict(bid)
             if bid_dict['status'] == 'selected':
-                # Получаем актуальный статус заказа
                 order = db.get_order_by_id(bid_dict['order_id'])
                 if order:
                     order_dict = dict(order)
-                    # Показываем только заказы в работе (не завершенные)
-                    if order_dict['status'] in ('master_selected', 'contact_shared', 'master_confirmed'):
-                        bid_dict['order_status'] = order_dict['status']
-                        bid_dict['order_city'] = order_dict.get('city', 'Не указан')
-                        bid_dict['order_description'] = order_dict.get('description', '')
-                        active_orders.append(bid_dict)
+                    if order_dict['status'] in ('master_selected', 'contact_shared', 'master_confirmed', 'waiting_master_confirmation'):
+                        active_count += 1
+                    elif order_dict['status'] in ('done', 'completed', 'canceled'):
+                        completed_count += 1
 
-        # Формируем текст и кнопки
-        text = "📦 <b>Мои заказы в работе</b>\n\n"
-        keyboard = []
+        if active_count == 0 and completed_count == 0:
+            keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")]]
+            await safe_edit_message(
+                query,
+                "📦 <b>Мои заказы</b>\n\n"
+                "У вас пока нет заказов.\n\n"
+                "Когда клиент выберет ваш отклик, заказ появится здесь.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
 
-        if active_orders:
-            for i, order in enumerate(active_orders[:10], 1):  # Показываем до 10
-                order_title = order.get('order_title') or 'Без названия'
-                order_title_short = order_title[:40] + '...' if len(order_title) > 40 else order_title
+        # Показываем меню выбора категории
+        text = "📦 <b>Мои заказы</b>\n\n"
+        text += f"Всего заказов: {active_count + completed_count}\n"
+        text += f"🔧 В работе: {active_count}\n"
+        text += f"✅ Завершённые: {completed_count}\n\n"
+        text += "Выберите категорию:"
 
-                text += f"{i}. <b>{order_title_short}</b>\n"
-                text += f"   📍 {order.get('order_city', 'Не указан')}\n"
-                text += f"   💰 {order['proposed_price']} {order['currency']}\n"
-                text += f"   📊 Статус: {_get_order_status_text(order.get('order_status', 'unknown'))}\n"
-                text += "\n"
-
-                # Добавляем кнопку для открытия чата с клиентом
-                chat = db.get_chat_by_order(order['order_id'])
-                if chat:
-                    chat_dict = dict(chat)
-                    keyboard.append([InlineKeyboardButton(
-                        f"💬 Чат по заказу #{order['order_id']}",
-                        callback_data=f"open_chat_{chat_dict['id']}"
-                    )])
-
-                # КРИТИЧНО: Мастер тоже может завершить заказ независимо!
-                # Защита от недобросовестных клиентов, которые не завершают заказ
-                keyboard.append([InlineKeyboardButton(
-                    f"✅ Завершить заказ #{order['order_id']}",
-                    callback_data=f"complete_order_{order['order_id']}"
-                )])
-
-            if len(active_orders) > 10:
-                text += f"... и ещё {len(active_orders) - 10} заказов\n\n"
-
-            text += f"<b>Всего активных заказов:</b> {len(active_orders)}"
-        else:
-            text += "У вас пока нет заказов в работе.\n\n"
-            text += "Когда клиент выберет ваш отклик, заказ появится здесь."
-
-        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")])
+        keyboard = [
+            [InlineKeyboardButton(f"🔧 Заказы в работе ({active_count})", callback_data="worker_active_orders")],
+            [InlineKeyboardButton(f"✅ Завершённые заказы ({completed_count})", callback_data="worker_completed_orders")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")]
+        ]
 
         await safe_edit_message(
             query,
@@ -1954,6 +1959,175 @@ async def worker_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")
             ]])
         )
+
+
+async def worker_active_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает активные заказы мастера (в работе)"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        user = db.get_user(query.from_user.id)
+        if not user:
+            await safe_edit_message(query, "❌ Пользователь не найден.")
+            return
+
+        user_dict = dict(user)
+        worker_profile = db.get_worker_profile(user_dict["id"])
+        if not worker_profile:
+            await safe_edit_message(query, "❌ Профиль мастера не найден.")
+            return
+
+        worker_dict = dict(worker_profile)
+
+        # Получаем все отклики и фильтруем активные заказы
+        bids = db.get_bids_for_worker(worker_dict['id'])
+        active_orders = []
+
+        for bid in bids:
+            bid_dict = dict(bid)
+            if bid_dict['status'] == 'selected':
+                order = db.get_order_by_id(bid_dict['order_id'])
+                if order:
+                    order_dict = dict(order)
+                    if order_dict['status'] in ('master_selected', 'contact_shared', 'master_confirmed', 'waiting_master_confirmation'):
+                        bid_dict['order_status'] = order_dict['status']
+                        bid_dict['order_city'] = order_dict.get('city', 'Не указан')
+                        bid_dict['order_category'] = order_dict.get('category', 'Без категории')
+                        bid_dict['order_description'] = order_dict.get('description', '')
+                        active_orders.append(bid_dict)
+
+        if not active_orders:
+            keyboard = [[InlineKeyboardButton("⬅️ Назад к заказам", callback_data="worker_my_orders")]]
+            await safe_edit_message(
+                query,
+                "🔧 <b>Заказы в работе</b>\n\nУ вас нет активных заказов.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+        # Формируем текст и кнопки
+        text = f"🔧 <b>Заказы в работе</b> ({len(active_orders)})\n\n"
+        keyboard = []
+
+        for i, order in enumerate(active_orders[:10], 1):
+            text += f"{i}. <b>Заказ #{order['order_id']}</b>\n"
+            text += f"🔧 {order.get('order_category', 'Без категории')}\n"
+
+            description = order.get('order_description', '')
+            if len(description) > 50:
+                description = description[:50] + "..."
+            text += f"📝 {description}\n"
+            text += f"💰 {order['proposed_price']} {order['currency']}\n"
+
+            # Кнопка чата
+            chat = db.get_chat_by_order(order['order_id'])
+            if chat:
+                chat_dict = dict(chat)
+                keyboard.append([InlineKeyboardButton(
+                    f"💬 Чат (заказ #{order['order_id']})",
+                    callback_data=f"open_chat_{chat_dict['id']}"
+                )])
+
+            # Кнопка завершения
+            keyboard.append([InlineKeyboardButton(
+                f"✅ Завершить заказ #{order['order_id']}",
+                callback_data=f"complete_order_{order['order_id']}"
+            )])
+
+            text += "\n"
+
+        keyboard.append([InlineKeyboardButton("⬅️ Назад к заказам", callback_data="worker_my_orders")])
+
+        await safe_edit_message(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    except Exception as e:
+        logger.error(f"Ошибка в worker_active_orders: {e}", exc_info=True)
+        await safe_edit_message(query, f"❌ Ошибка: {str(e)}")
+
+
+async def worker_completed_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает завершённые заказы мастера"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        user = db.get_user(query.from_user.id)
+        if not user:
+            await safe_edit_message(query, "❌ Пользователь не найден.")
+            return
+
+        user_dict = dict(user)
+        worker_profile = db.get_worker_profile(user_dict["id"])
+        if not worker_profile:
+            await safe_edit_message(query, "❌ Профиль мастера не найден.")
+            return
+
+        worker_dict = dict(worker_profile)
+
+        # Получаем все отклики и фильтруем завершённые заказы
+        bids = db.get_bids_for_worker(worker_dict['id'])
+        completed_orders = []
+
+        for bid in bids:
+            bid_dict = dict(bid)
+            if bid_dict['status'] == 'selected':
+                order = db.get_order_by_id(bid_dict['order_id'])
+                if order:
+                    order_dict = dict(order)
+                    if order_dict['status'] in ('done', 'completed', 'canceled'):
+                        bid_dict['order_status'] = order_dict['status']
+                        bid_dict['order_city'] = order_dict.get('city', 'Не указан')
+                        bid_dict['order_category'] = order_dict.get('category', 'Без категории')
+                        bid_dict['order_description'] = order_dict.get('description', '')
+                        completed_orders.append(bid_dict)
+
+        if not completed_orders:
+            keyboard = [[InlineKeyboardButton("⬅️ Назад к заказам", callback_data="worker_my_orders")]]
+            await safe_edit_message(
+                query,
+                "✅ <b>Завершённые заказы</b>\n\nУ вас нет завершённых заказов.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+        # Формируем текст и кнопки
+        text = f"✅ <b>Завершённые заказы</b> ({len(completed_orders)})\n\n"
+        keyboard = []
+
+        for i, order in enumerate(completed_orders[:10], 1):
+            status_emoji = {"done": "✅", "completed": "✅", "canceled": "❌"}
+            emoji = status_emoji.get(order.get('order_status', 'done'), "✅")
+
+            text += f"{i}. {emoji} <b>Заказ #{order['order_id']}</b>\n"
+            text += f"🔧 {order.get('order_category', 'Без категории')}\n"
+
+            description = order.get('order_description', '')
+            if len(description) > 50:
+                description = description[:50] + "..."
+            text += f"📝 {description}\n"
+            text += f"💰 {order['proposed_price']} {order['currency']}\n"
+
+            # Кнопка чата для просмотра истории
+            chat = db.get_chat_by_order(order['order_id'])
+            if chat:
+                chat_dict = dict(chat)
+                keyboard.append([InlineKeyboardButton(
+                    f"💬 Посмотреть чат (заказ #{order['order_id']})",
+                    callback_data=f"open_chat_{chat_dict['id']}"
+                )])
+
+            text += "\n"
+
+        keyboard.append([InlineKeyboardButton("⬅️ Назад к заказам", callback_data="worker_my_orders")])
+
+        await safe_edit_message(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    except Exception as e:
+        logger.error(f"Ошибка в worker_completed_orders: {e}", exc_info=True)
+        await safe_edit_message(query, f"❌ Ошибка: {str(e)}")
 
 
 def _get_order_status_text(status):
