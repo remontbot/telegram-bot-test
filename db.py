@@ -3153,6 +3153,172 @@ def get_banned_users():
         return cursor.fetchall()
 
 
+def search_users(query, limit=20):
+    """Ищет пользователей по telegram_id, имени или username"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        # Ищем по telegram_id (точное совпадение) или имени/username (LIKE)
+        if USE_POSTGRES:
+            cursor.execute("""
+                SELECT u.*,
+                       w.id as worker_id,
+                       c.id as client_id
+                FROM users u
+                LEFT JOIN workers w ON u.id = w.user_id
+                LEFT JOIN clients c ON u.id = c.user_id
+                WHERE u.telegram_id::text LIKE %s
+                   OR LOWER(u.full_name) LIKE LOWER(%s)
+                   OR LOWER(u.username) LIKE LOWER(%s)
+                ORDER BY u.created_at DESC
+                LIMIT %s
+            """, (f'%{query}%', f'%{query}%', f'%{query}%', limit))
+        else:
+            cursor.execute("""
+                SELECT u.*,
+                       w.id as worker_id,
+                       c.id as client_id
+                FROM users u
+                LEFT JOIN workers w ON u.id = w.user_id
+                LEFT JOIN clients c ON u.id = c.user_id
+                WHERE CAST(u.telegram_id AS TEXT) LIKE ?
+                   OR LOWER(u.full_name) LIKE LOWER(?)
+                   OR LOWER(u.username) LIKE LOWER(?)
+                ORDER BY u.created_at DESC
+                LIMIT ?
+            """, (f'%{query}%', f'%{query}%', f'%{query}%', limit))
+        return cursor.fetchall()
+
+
+def get_users_filtered(filter_type='all', page=1, per_page=20):
+    """
+    Получает пользователей с фильтром
+    filter_type: 'all', 'workers', 'clients', 'banned', 'dual'
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        offset = (page - 1) * per_page
+
+        if filter_type == 'banned':
+            cursor.execute("""
+                SELECT u.*, w.id as worker_id, c.id as client_id
+                FROM users u
+                LEFT JOIN workers w ON u.id = w.user_id
+                LEFT JOIN clients c ON u.id = c.user_id
+                WHERE u.is_banned = TRUE
+                ORDER BY u.created_at DESC
+                LIMIT ? OFFSET ?
+            """, (per_page, offset))
+        elif filter_type == 'workers':
+            cursor.execute("""
+                SELECT u.*, w.id as worker_id, c.id as client_id
+                FROM users u
+                INNER JOIN workers w ON u.id = w.user_id
+                LEFT JOIN clients c ON u.id = c.user_id
+                WHERE u.is_banned = FALSE
+                ORDER BY u.created_at DESC
+                LIMIT ? OFFSET ?
+            """, (per_page, offset))
+        elif filter_type == 'clients':
+            cursor.execute("""
+                SELECT u.*, w.id as worker_id, c.id as client_id
+                FROM users u
+                LEFT JOIN workers w ON u.id = w.user_id
+                INNER JOIN clients c ON u.id = c.user_id
+                WHERE u.is_banned = FALSE
+                ORDER BY u.created_at DESC
+                LIMIT ? OFFSET ?
+            """, (per_page, offset))
+        elif filter_type == 'dual':
+            cursor.execute("""
+                SELECT u.*, w.id as worker_id, c.id as client_id
+                FROM users u
+                INNER JOIN workers w ON u.id = w.user_id
+                INNER JOIN clients c ON u.id = c.user_id
+                WHERE u.is_banned = FALSE
+                ORDER BY u.created_at DESC
+                LIMIT ? OFFSET ?
+            """, (per_page, offset))
+        else:  # 'all'
+            cursor.execute("""
+                SELECT u.*, w.id as worker_id, c.id as client_id
+                FROM users u
+                LEFT JOIN workers w ON u.id = w.user_id
+                LEFT JOIN clients c ON u.id = c.user_id
+                ORDER BY u.created_at DESC
+                LIMIT ? OFFSET ?
+            """, (per_page, offset))
+
+        return cursor.fetchall()
+
+
+def get_user_details_for_admin(telegram_id):
+    """Получает подробную информацию о пользователе для админ-панели"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Основная информация
+        user = get_user(telegram_id)
+        if not user:
+            return None
+
+        user_dict = dict(user)
+        details = {
+            'user': user_dict,
+            'worker_profile': None,
+            'client_profile': None,
+            'stats': {}
+        }
+
+        # Профили
+        worker = get_worker_profile_by_user_id(user_dict['id'])
+        if worker:
+            details['worker_profile'] = dict(worker)
+
+        client = get_client_profile_by_user_id(user_dict['id'])
+        if client:
+            details['client_profile'] = dict(client)
+
+        # Статистика как мастера
+        if worker:
+            worker_dict = dict(worker)
+            cursor.execute("""
+                SELECT COUNT(*) FROM bids WHERE worker_id = ?
+            """, (worker_dict['id'],))
+            details['stats']['total_bids'] = _get_count_from_result(cursor.fetchone())
+
+            cursor.execute("""
+                SELECT COUNT(*) FROM bids
+                WHERE worker_id = ? AND status = 'selected'
+            """, (worker_dict['id'],))
+            details['stats']['accepted_bids'] = _get_count_from_result(cursor.fetchone())
+
+            cursor.execute("""
+                SELECT AVG(rating) FROM reviews WHERE to_user_id = ?
+            """, (user_dict['id'],))
+            result = cursor.fetchone()
+            if result:
+                avg_rating = result['avg'] if isinstance(result, dict) else result[0]
+                details['stats']['worker_rating'] = float(avg_rating) if avg_rating else 0.0
+            else:
+                details['stats']['worker_rating'] = 0.0
+
+        # Статистика как клиента
+        if client:
+            client_dict = dict(client)
+            cursor.execute("""
+                SELECT COUNT(*) FROM orders WHERE client_id = ?
+            """, (client_dict['id'],))
+            details['stats']['total_orders'] = _get_count_from_result(cursor.fetchone())
+
+            cursor.execute("""
+                SELECT COUNT(*) FROM orders
+                WHERE client_id = ? AND status = 'completed'
+            """, (client_dict['id'],))
+            details['stats']['completed_orders'] = _get_count_from_result(cursor.fetchone())
+
+        return details
+
+
 # === ANALYTICS HELPERS ===
 
 def _get_count_from_result(result):
@@ -3166,51 +3332,98 @@ def _get_count_from_result(result):
         return result[0]
 
 def get_analytics_stats():
-    """Получает основную статистику для аналитики"""
+    """Получает подробную статистику для админ-панели"""
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
         stats = {}
 
-        # Всего пользователей
+        # === ПОЛЬЗОВАТЕЛИ ===
         cursor.execute("SELECT COUNT(*) FROM users")
         stats['total_users'] = _get_count_from_result(cursor.fetchone())
 
-        # Забаненных пользователей
         cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = TRUE")
         stats['banned_users'] = _get_count_from_result(cursor.fetchone())
 
-        # Мастеров
         cursor.execute("SELECT COUNT(*) FROM workers")
         stats['total_workers'] = _get_count_from_result(cursor.fetchone())
 
-        # Клиентов
         cursor.execute("SELECT COUNT(*) FROM clients")
         stats['total_clients'] = _get_count_from_result(cursor.fetchone())
 
-        # Заказов (всего)
+        # Пользователи с двумя профилями (и мастер и клиент)
+        cursor.execute("""
+            SELECT COUNT(DISTINCT w.user_id)
+            FROM workers w
+            INNER JOIN clients c ON w.user_id = c.user_id
+        """)
+        stats['dual_profile_users'] = _get_count_from_result(cursor.fetchone())
+
+        # === ЗАКАЗЫ ===
         cursor.execute("SELECT COUNT(*) FROM orders")
         stats['total_orders'] = _get_count_from_result(cursor.fetchone())
 
-        # Активных заказов
         cursor.execute("SELECT COUNT(*) FROM orders WHERE status = 'open'")
+        stats['open_orders'] = _get_count_from_result(cursor.fetchone())
+
+        cursor.execute("""
+            SELECT COUNT(*) FROM orders
+            WHERE status IN ('master_selected', 'contact_shared', 'master_confirmed', 'waiting_master_confirmation')
+        """)
         stats['active_orders'] = _get_count_from_result(cursor.fetchone())
 
-        # Завершённых заказов
-        cursor.execute("SELECT COUNT(*) FROM orders WHERE status = 'completed'")
+        cursor.execute("SELECT COUNT(*) FROM orders WHERE status IN ('done', 'completed')")
         stats['completed_orders'] = _get_count_from_result(cursor.fetchone())
 
-        # Откликов (всего)
+        cursor.execute("SELECT COUNT(*) FROM orders WHERE status = 'canceled'")
+        stats['canceled_orders'] = _get_count_from_result(cursor.fetchone())
+
+        # === ОТКЛИКИ ===
         cursor.execute("SELECT COUNT(*) FROM bids")
         stats['total_bids'] = _get_count_from_result(cursor.fetchone())
 
-        # Активных откликов
-        cursor.execute("SELECT COUNT(*) FROM bids WHERE status = 'active'")
-        stats['active_bids'] = _get_count_from_result(cursor.fetchone())
+        cursor.execute("SELECT COUNT(*) FROM bids WHERE status = 'pending'")
+        stats['pending_bids'] = _get_count_from_result(cursor.fetchone())
 
-        # Отзывов
+        cursor.execute("SELECT COUNT(*) FROM bids WHERE status = 'selected'")
+        stats['selected_bids'] = _get_count_from_result(cursor.fetchone())
+
+        cursor.execute("SELECT COUNT(*) FROM bids WHERE status = 'rejected'")
+        stats['rejected_bids'] = _get_count_from_result(cursor.fetchone())
+
+        # === ЧАТЫ И СООБЩЕНИЯ ===
+        cursor.execute("SELECT COUNT(*) FROM chats")
+        stats['total_chats'] = _get_count_from_result(cursor.fetchone())
+
+        cursor.execute("SELECT COUNT(*) FROM messages")
+        stats['total_messages'] = _get_count_from_result(cursor.fetchone())
+
+        # === ОТЗЫВЫ ===
         cursor.execute("SELECT COUNT(*) FROM reviews")
         stats['total_reviews'] = _get_count_from_result(cursor.fetchone())
+
+        cursor.execute("SELECT AVG(rating) FROM reviews")
+        result = cursor.fetchone()
+        if result:
+            avg_rating = result['avg'] if isinstance(result, dict) else result[0]
+            stats['average_rating'] = float(avg_rating) if avg_rating else 0.0
+        else:
+            stats['average_rating'] = 0.0
+
+        # === АКТИВНОСТЬ ===
+        # Заказов за последние 24 часа
+        cursor.execute("""
+            SELECT COUNT(*) FROM orders
+            WHERE created_at >= datetime('now', '-1 day')
+        """)
+        stats['orders_last_24h'] = _get_count_from_result(cursor.fetchone())
+
+        # Новых пользователей за 7 дней
+        cursor.execute("""
+            SELECT COUNT(*) FROM users
+            WHERE created_at >= datetime('now', '-7 days')
+        """)
+        stats['users_last_7days'] = _get_count_from_result(cursor.fetchone())
 
         # Premium статус
         stats['premium_enabled'] = is_premium_enabled()
@@ -4800,6 +5013,147 @@ def get_all_users():
         cursor = get_cursor(conn)
         cursor.execute("SELECT * FROM users")
         return cursor.fetchall()
+
+
+def get_all_orders_for_export():
+    """Получает все заказы для экспорта"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT * FROM orders ORDER BY created_at DESC")
+        return cursor.fetchall()
+
+
+def get_all_bids_for_export():
+    """Получает все отклики для экспорта"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT * FROM bids ORDER BY created_at DESC")
+        return cursor.fetchall()
+
+
+def get_all_reviews_for_export():
+    """Получает все отзывы для экспорта"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT * FROM reviews ORDER BY created_at DESC")
+        return cursor.fetchall()
+
+
+def get_category_reports():
+    """
+    Получает подробные отчеты по категориям работ, городам и специализациям
+    для аналитики в админ-панели
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        reports = {}
+
+        # === ТОП КАТЕГОРИЙ ЗАКАЗОВ ===
+        cursor.execute("""
+            SELECT category, COUNT(*) as count
+            FROM orders
+            GROUP BY category
+            ORDER BY count DESC
+            LIMIT 10
+        """)
+        reports['top_categories'] = cursor.fetchall()
+
+        # === ТОП ГОРОДОВ ПО ЗАКАЗАМ ===
+        cursor.execute("""
+            SELECT city, COUNT(*) as count
+            FROM orders
+            WHERE city IS NOT NULL AND city != ''
+            GROUP BY city
+            ORDER BY count DESC
+            LIMIT 10
+        """)
+        reports['top_cities_orders'] = cursor.fetchall()
+
+        # === ТОП СПЕЦИАЛИЗАЦИЙ МАСТЕРОВ ===
+        cursor.execute("""
+            SELECT specialization, COUNT(*) as count
+            FROM workers
+            WHERE specialization IS NOT NULL AND specialization != ''
+            GROUP BY specialization
+            ORDER BY count DESC
+            LIMIT 10
+        """)
+        reports['top_specializations'] = cursor.fetchall()
+
+        # === СТАТИСТИКА ПО СТАТУСАМ ЗАКАЗОВ В КАТЕГОРИЯХ ===
+        cursor.execute("""
+            SELECT
+                category,
+                SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) as open_count,
+                SUM(CASE WHEN status IN ('master_selected', 'contact_shared', 'master_confirmed') THEN 1 ELSE 0 END) as active_count,
+                SUM(CASE WHEN status IN ('done', 'completed') THEN 1 ELSE 0 END) as completed_count,
+                COUNT(*) as total_count
+            FROM orders
+            GROUP BY category
+            ORDER BY total_count DESC
+            LIMIT 15
+        """)
+        reports['category_statuses'] = cursor.fetchall()
+
+        # === АКТИВНОСТЬ ПО ГОРОДАМ (заказы + мастера) ===
+        cursor.execute("""
+            SELECT
+                city,
+                COUNT(*) as order_count
+            FROM orders
+            WHERE city IS NOT NULL AND city != ''
+            GROUP BY city
+            ORDER BY order_count DESC
+            LIMIT 10
+        """)
+        city_orders = {dict(row)['city']: dict(row)['order_count'] for row in cursor.fetchall()}
+
+        # Получаем количество мастеров по городам
+        cursor.execute("""
+            SELECT
+                wc.city,
+                COUNT(DISTINCT wc.worker_id) as worker_count
+            FROM worker_cities wc
+            GROUP BY wc.city
+            ORDER BY worker_count DESC
+            LIMIT 15
+        """)
+        city_workers = {dict(row)['city']: dict(row)['worker_count'] for row in cursor.fetchall()}
+
+        # Объединяем данные
+        all_cities = set(city_orders.keys()) | set(city_workers.keys())
+        city_activity = []
+        for city in all_cities:
+            city_activity.append({
+                'city': city,
+                'orders': city_orders.get(city, 0),
+                'workers': city_workers.get(city, 0),
+                'total': city_orders.get(city, 0) + city_workers.get(city, 0)
+            })
+
+        # Сортируем по общей активности
+        city_activity.sort(key=lambda x: x['total'], reverse=True)
+        reports['city_activity'] = city_activity[:10]
+
+        # === СРЕДНЯЯ ЦЕНА ПО КАТЕГОРИЯМ (из откликов) ===
+        cursor.execute("""
+            SELECT
+                o.category,
+                AVG(CAST(b.proposed_price AS REAL)) as avg_price,
+                COUNT(b.id) as bid_count
+            FROM bids b
+            INNER JOIN orders o ON b.order_id = o.id
+            WHERE b.proposed_price IS NOT NULL
+              AND b.proposed_price != ''
+              AND b.currency = 'BYN'
+            GROUP BY o.category
+            HAVING bid_count >= 3
+            ORDER BY avg_price DESC
+            LIMIT 10
+        """)
+        reports['avg_prices_by_category'] = cursor.fetchall()
+
+        return reports
 
 
 # ------- ФУНКЦИИ ДЛЯ РАБОТЫ С ГОРОДАМИ МАСТЕРА -------

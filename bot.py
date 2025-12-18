@@ -799,6 +799,14 @@ def main():
         )
     )
 
+    # --- Обработчик кнопки "Сказать спасибо платформе" ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.thank_platform,
+            pattern="^thank_platform_"
+        )
+    )
+
     application.add_handler(
         CallbackQueryHandler(
             handlers.test_payment_success,
@@ -912,6 +920,18 @@ def main():
                 CallbackQueryHandler(handlers.admin_broadcast_start, pattern="^admin_broadcast$"),
                 CallbackQueryHandler(handlers.admin_create_ad_start, pattern="^admin_create_ad$"),
                 CallbackQueryHandler(handlers.admin_stats, pattern="^admin_stats$"),
+                CallbackQueryHandler(handlers.admin_category_reports, pattern="^admin_category_reports$"),
+                CallbackQueryHandler(handlers.admin_city_activity, pattern="^admin_city_activity$"),
+                CallbackQueryHandler(handlers.admin_avg_prices, pattern="^admin_avg_prices$"),
+                CallbackQueryHandler(handlers.admin_category_statuses, pattern="^admin_category_statuses$"),
+                CallbackQueryHandler(handlers.admin_export_menu, pattern="^admin_export_menu$"),
+                CallbackQueryHandler(handlers.admin_export_data, pattern="^admin_export_"),
+                CallbackQueryHandler(handlers.admin_users_menu, pattern="^admin_users$"),
+                CallbackQueryHandler(handlers.admin_users_list, pattern="^admin_users_list_"),
+                CallbackQueryHandler(handlers.admin_user_view, pattern="^admin_user_view_"),
+                CallbackQueryHandler(handlers.admin_user_ban_start, pattern="^admin_user_ban_start_"),
+                CallbackQueryHandler(handlers.admin_user_unban, pattern="^admin_user_unban_"),
+                CallbackQueryHandler(handlers.admin_user_search_start, pattern="^admin_user_search_start$"),
                 CallbackQueryHandler(handlers.admin_close, pattern="^admin_close$"),
                 CallbackQueryHandler(handlers.admin_panel, pattern="^admin_back$"),  # Возврат в меню
             ],
@@ -921,6 +941,15 @@ def main():
             ],
             handlers.BROADCAST_ENTER_MESSAGE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_broadcast_send),
+            ],
+            handlers.ADMIN_BAN_REASON: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_user_ban_execute),
+                CallbackQueryHandler(handlers.admin_user_view, pattern="^admin_user_view_"),
+            ],
+            handlers.ADMIN_SEARCH: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_user_search_execute),
+                CallbackQueryHandler(handlers.admin_users_menu, pattern="^admin_users$"),
+                CallbackQueryHandler(handlers.admin_user_search_start, pattern="^admin_user_search_start$"),
             ],
         },
         fallbacks=[

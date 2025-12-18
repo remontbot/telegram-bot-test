@@ -369,7 +369,9 @@ def _get_bids_word(count):
     ADMIN_MENU,
     BROADCAST_SELECT_AUDIENCE,
     BROADCAST_ENTER_MESSAGE,
-) = range(48)
+    ADMIN_BAN_REASON,
+    ADMIN_SEARCH,
+) = range(50)
 
 
 def is_valid_name(name: str) -> bool:
@@ -5511,23 +5513,21 @@ async def select_master(update: Update, context: ContextTypes.DEFAULT_TYPE):
         price = selected_bid['proposed_price']
         currency = selected_bid['currency']
 
-        # Показываем окно подтверждения с оплатой
+        # 💝 БЕСПЛАТНАЯ БЛАГОДАРНОСТЬ: Приучаем пользователей к действию "поблагодарить платформу"
+        # Позже (при 10-20k пользователей) эта кнопка превратится в реальную оплату через Stars
         text = (
             f"✅ <b>Вы выбрали мастера:</b>\n\n"
             f"👤 {worker_name}\n"
-            f"💰 Цена: {price} {currency}\n\n"
-            f"📞 <b>Для получения контакта мастера необходима оплата:</b>\n"
-            f"💳 Стоимость доступа: <b>1 BYN</b> (или 10 Telegram Stars)\n\n"
-            f"После оплаты вы получите:\n"
-            f"• Контактный телефон мастера\n"
-            f"• Возможность напрямую связаться с ним\n"
-            f"• Мастер получит уведомление о вашем выборе\n\n"
-            f"💡 <i>Выберите удобный способ оплаты:</i>"
+            f"💰 Цена работы: {price} {currency}\n\n"
+            f"🎉 <b>Получите контакт мастера:</b>\n\n"
+            f"Наша платформа помогает мастерам находить клиентов, а клиентам - надёжных специалистов.\n\n"
+            f"<i>В будущем мы введём символическую плату за подключение к мастеру, "
+            f"но пока платформа работает БЕСПЛАТНО!</i>\n\n"
+            f"💝 Нажмите кнопку ниже, чтобы продолжить:"
         )
 
         keyboard = [
-            [InlineKeyboardButton("⭐ Оплатить Telegram Stars", callback_data=f"pay_stars_{bid_id}")],
-            [InlineKeyboardButton("💳 Оплатить картой", callback_data=f"pay_card_{bid_id}")],
+            [InlineKeyboardButton("💝 Сказать спасибо и получить контакт", callback_data=f"thank_platform_{bid_id}")],
             [InlineKeyboardButton("⬅️ Назад к откликам", callback_data=f"view_bids_{order_id}")],
         ]
 
@@ -5679,10 +5679,44 @@ async def confirm_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def test_payment_success(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Тестовая функция для имитации успешной оплаты - создаёт чат вместо выдачи контакта"""
+async def thank_platform(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    💝 Обработчик кнопки "Сказать спасибо платформе"
+
+    На данный момент работает бесплатно - просто создаёт чат между клиентом и мастером.
+    В будущем (при 10-20k пользователей) здесь будет реальная оплата через Telegram Stars.
+    Цель: приучить пользователей к действию "поблагодарить/оплатить" перед получением контакта.
+    """
     query = update.callback_query
-    await query.answer()
+    await query.answer("💝 Спасибо за поддержку!")
+
+    try:
+        bid_id = int(query.data.replace("thank_platform_", ""))
+
+        # Подменяем callback_data для вызова существующей логики
+        query.data = f"test_payment_success_{bid_id}"
+        await test_payment_success(update, context)
+
+    except Exception as e:
+        logger.error(f"Ошибка в thank_platform: {e}", exc_info=True)
+        await safe_edit_message(
+            query,
+            "❌ Произошла ошибка. Попробуйте ещё раз.",
+            parse_mode="HTML"
+        )
+
+
+async def test_payment_success(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    🆓 БЕСПЛАТНЫЙ РЕЖИМ: Обрабатывает выбор мастера БЕЗ оплаты (до достижения 10-20k пользователей)
+
+    Раньше была тестовой функцией для имитации оплаты, теперь используется как основной обработчик
+    в бесплатном режиме. Создаёт чат между клиентом и мастером напрямую без платежей.
+    """
+    query = update.callback_query
+    # Не вызываем answer() здесь, т.к. уже вызван в thank_platform
+    if not query.message:
+        await query.answer()
 
     try:
         bid_id = int(query.data.replace("test_payment_success_", ""))
@@ -8964,9 +8998,11 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     keyboard = [
+        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton("📈 Отчеты по категориям", callback_data="admin_category_reports")],
         [InlineKeyboardButton("📢 Отправить Broadcast", callback_data="admin_broadcast")],
         [InlineKeyboardButton("📺 Создать рекламу", callback_data="admin_create_ad")],
-        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton("👥 Управление пользователями", callback_data="admin_users")],
         [InlineKeyboardButton("❌ Закрыть", callback_data="admin_close")],
     ]
 
@@ -9115,44 +9151,802 @@ async def admin_create_ad_start(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Статистика по broadcast и рекламе"""
+    """Подробная статистика системы"""
     query = update.callback_query
     await query.answer()
 
     # Получаем статистику из БД
-    with db.get_db_connection() as conn:
-        cursor = db.get_cursor(conn)
+    stats = db.get_analytics_stats()
 
-        # Broadcasts
-        cursor.execute("SELECT COUNT(*), SUM(sent_count), SUM(failed_count) FROM broadcasts")
-        broadcast_stats = cursor.fetchone()
+    text = "📊 <b>СТАТИСТИКА ПЛАТФОРМЫ</b>\n\n"
 
-        # Ads
-        cursor.execute("SELECT COUNT(*), SUM(view_count), SUM(click_count) FROM ads WHERE active = 1")
-        ad_stats = cursor.fetchone()
+    # Пользователи
+    text += "👥 <b>ПОЛЬЗОВАТЕЛИ:</b>\n"
+    text += f"• Всего: {stats['total_users']}\n"
+    text += f"• Мастеров: {stats['total_workers']}\n"
+    text += f"• Клиентов: {stats['total_clients']}\n"
+    text += f"• С двумя профилями: {stats['dual_profile_users']}\n"
+    text += f"• Забанено: {stats['banned_users']}\n\n"
 
-    broadcast_count = broadcast_stats[0] if broadcast_stats else 0
-    total_sent = broadcast_stats[1] if broadcast_stats and broadcast_stats[1] else 0
-    total_failed = broadcast_stats[2] if broadcast_stats and broadcast_stats[2] else 0
+    # Заказы
+    text += "📦 <b>ЗАКАЗЫ:</b>\n"
+    text += f"• Всего создано: {stats['total_orders']}\n"
+    text += f"• Открытые: {stats['open_orders']}\n"
+    text += f"• В работе: {stats['active_orders']}\n"
+    text += f"• Завершённые: {stats['completed_orders']}\n"
+    text += f"• Отменённые: {stats['canceled_orders']}\n\n"
 
-    ad_count = ad_stats[0] if ad_stats else 0
-    total_views = ad_stats[1] if ad_stats and ad_stats[1] else 0
-    total_clicks = ad_stats[2] if ad_stats and ad_stats[2] else 0
+    # Отклики
+    text += "💼 <b>ОТКЛИКИ:</b>\n"
+    text += f"• Всего откликов: {stats['total_bids']}\n"
+    text += f"• Ожидают ответа: {stats['pending_bids']}\n"
+    text += f"• Приняты: {stats['selected_bids']}\n"
+    text += f"• Отклонены: {stats['rejected_bids']}\n\n"
+
+    # Чаты и отзывы
+    text += "💬 <b>ЧАТЫ И ОТЗЫВЫ:</b>\n"
+    text += f"• Активных чатов: {stats['total_chats']}\n"
+    text += f"• Всего сообщений: {stats['total_messages']}\n"
+    text += f"• Оставлено отзывов: {stats['total_reviews']}\n"
+    text += f"• Средний рейтинг: {stats['average_rating']:.1f} ⭐\n\n"
+
+    # Активность
+    text += "📈 <b>АКТИВНОСТЬ:</b>\n"
+    text += f"• Заказов за последние 24ч: {stats['orders_last_24h']}\n"
+    text += f"• Новых пользователей за 7 дней: {stats['users_last_7days']}"
+
+    keyboard = [
+        [InlineKeyboardButton("📥 Экспорт данных", callback_data="admin_export_menu")],
+        [InlineKeyboardButton("🔄 Обновить", callback_data="admin_stats")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
+    ]
 
     await query.edit_message_text(
-        "📊 <b>СТАТИСТИКА</b>\n\n"
-        "📢 <b>Broadcasts:</b>\n"
-        f"• Всего отправлено: {broadcast_count}\n"
-        f"• Доставлено сообщений: {total_sent}\n"
-        f"• Ошибок: {total_failed}\n\n"
-        "📺 <b>Реклама:</b>\n"
-        f"• Активных объявлений: {ad_count}\n"
-        f"• Просмотров: {total_views}\n"
-        f"• Кликов: {total_clicks}",
+        text,
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")
-        ]])
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_export_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню экспорта данных"""
+    query = update.callback_query
+    await query.answer()
+
+    text = "📥 <b>ЭКСПОРТ ДАННЫХ</b>\n\n"
+    text += "Выберите, какие данные экспортировать в CSV:"
+
+    keyboard = [
+        [InlineKeyboardButton("👥 Экспорт пользователей", callback_data="admin_export_users")],
+        [InlineKeyboardButton("📦 Экспорт заказов", callback_data="admin_export_orders")],
+        [InlineKeyboardButton("💼 Экспорт откликов", callback_data="admin_export_bids")],
+        [InlineKeyboardButton("⭐ Экспорт отзывов", callback_data="admin_export_reviews")],
+        [InlineKeyboardButton("📊 Сводная статистика", callback_data="admin_export_stats")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_stats")]
+    ]
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Экспортирует выбранные данные в CSV"""
+    query = update.callback_query
+    await query.answer("Подготовка данных...")
+
+    export_type = query.data.replace("admin_export_", "")
+
+    try:
+        import csv
+        import io
+        from datetime import datetime
+
+        # Создаем CSV в памяти
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        if export_type == "users":
+            users = db.get_all_users()
+            # Заголовки
+            writer.writerow(["ID", "Telegram ID", "Имя", "Username", "Дата регистрации", "Забанен", "Причина бана"])
+            # Данные
+            for user in users:
+                user_dict = dict(user)
+                created_at = user_dict.get('created_at', '')
+                if isinstance(created_at, datetime):
+                    created_at = created_at.strftime('%Y-%m-%d %H:%M:%S')
+                writer.writerow([
+                    user_dict.get('id', ''),
+                    user_dict.get('telegram_id', ''),
+                    user_dict.get('full_name', ''),
+                    user_dict.get('username', ''),
+                    created_at,
+                    'Да' if user_dict.get('is_banned') else 'Нет',
+                    user_dict.get('ban_reason', '')
+                ])
+            filename = f"users_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            caption = f"📊 Экспорт пользователей ({len(users)} записей)"
+
+        elif export_type == "orders":
+            orders = db.get_all_orders_for_export()
+            writer.writerow(["ID заказа", "Клиент ID", "Название", "Категория", "Город", "Статус", "Дата создания", "Описание"])
+            for order in orders:
+                order_dict = dict(order)
+                created_at = order_dict.get('created_at', '')
+                if isinstance(created_at, datetime):
+                    created_at = created_at.strftime('%Y-%m-%d %H:%M:%S')
+                writer.writerow([
+                    order_dict.get('id', ''),
+                    order_dict.get('client_id', ''),
+                    order_dict.get('title', ''),
+                    order_dict.get('category', ''),
+                    order_dict.get('city', ''),
+                    order_dict.get('status', ''),
+                    created_at,
+                    order_dict.get('description', '')[:100]
+                ])
+            filename = f"orders_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            caption = f"📦 Экспорт заказов ({len(orders)} записей)"
+
+        elif export_type == "bids":
+            bids = db.get_all_bids_for_export()
+            writer.writerow(["ID отклика", "Заказ ID", "Мастер ID", "Цена", "Валюта", "Дней до готовности", "Статус", "Дата создания"])
+            for bid in bids:
+                bid_dict = dict(bid)
+                created_at = bid_dict.get('created_at', '')
+                if isinstance(created_at, datetime):
+                    created_at = created_at.strftime('%Y-%m-%d %H:%M:%S')
+                writer.writerow([
+                    bid_dict.get('id', ''),
+                    bid_dict.get('order_id', ''),
+                    bid_dict.get('worker_id', ''),
+                    bid_dict.get('price', ''),
+                    bid_dict.get('currency', ''),
+                    bid_dict.get('ready_days', ''),
+                    bid_dict.get('status', ''),
+                    created_at
+                ])
+            filename = f"bids_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            caption = f"💼 Экспорт откликов ({len(bids)} записей)"
+
+        elif export_type == "reviews":
+            reviews = db.get_all_reviews_for_export()
+            writer.writerow(["ID отзыва", "Заказ ID", "От пользователя", "К пользователю", "Рейтинг", "Комментарий", "Дата"])
+            for review in reviews:
+                review_dict = dict(review)
+                created_at = review_dict.get('created_at', '')
+                if isinstance(created_at, datetime):
+                    created_at = created_at.strftime('%Y-%m-%d %H:%M:%S')
+                writer.writerow([
+                    review_dict.get('id', ''),
+                    review_dict.get('order_id', ''),
+                    review_dict.get('from_user_id', ''),
+                    review_dict.get('to_user_id', ''),
+                    review_dict.get('rating', ''),
+                    review_dict.get('comment', '')[:100],
+                    created_at
+                ])
+            filename = f"reviews_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            caption = f"⭐ Экспорт отзывов ({len(reviews)} записей)"
+
+        elif export_type == "stats":
+            stats = db.get_analytics_stats()
+            writer.writerow(["Метрика", "Значение"])
+            writer.writerow(["Всего пользователей", stats['total_users']])
+            writer.writerow(["Мастеров", stats['total_workers']])
+            writer.writerow(["Клиентов", stats['total_clients']])
+            writer.writerow(["С двумя профилями", stats['dual_profile_users']])
+            writer.writerow(["Забанено", stats['banned_users']])
+            writer.writerow(["Всего заказов", stats['total_orders']])
+            writer.writerow(["Открытые заказы", stats['open_orders']])
+            writer.writerow(["Активные заказы", stats['active_orders']])
+            writer.writerow(["Завершённые заказы", stats['completed_orders']])
+            writer.writerow(["Отменённые заказы", stats['canceled_orders']])
+            writer.writerow(["Всего откликов", stats['total_bids']])
+            writer.writerow(["Ожидают ответа", stats['pending_bids']])
+            writer.writerow(["Приняты", stats['selected_bids']])
+            writer.writerow(["Отклонены", stats['rejected_bids']])
+            writer.writerow(["Активных чатов", stats['total_chats']])
+            writer.writerow(["Всего сообщений", stats['total_messages']])
+            writer.writerow(["Всего отзывов", stats['total_reviews']])
+            writer.writerow(["Средний рейтинг", f"{stats['average_rating']:.2f}"])
+            writer.writerow(["Заказов за 24ч", stats['orders_last_24h']])
+            writer.writerow(["Новых пользователей за 7 дней", stats['users_last_7days']])
+            filename = f"stats_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            caption = "📊 Сводная статистика платформы"
+
+        # Конвертируем в байты
+        csv_data = output.getvalue().encode('utf-8-sig')  # utf-8-sig для правильного отображения в Excel
+        csv_file = io.BytesIO(csv_data)
+        csv_file.name = filename
+
+        # Отправляем файл
+        await context.bot.send_document(
+            chat_id=query.message.chat_id,
+            document=csv_file,
+            filename=filename,
+            caption=caption
+        )
+
+        # Возвращаемся в меню экспорта
+        text = "✅ Данные успешно экспортированы!\n\n"
+        text += "Файл отправлен выше. Выберите другой тип данных для экспорта или вернитесь назад."
+
+        keyboard = [
+            [InlineKeyboardButton("📥 Экспортировать еще", callback_data="admin_export_menu")],
+            [InlineKeyboardButton("⬅️ К статистике", callback_data="admin_stats")]
+        ]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка экспорта данных: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка при экспорте данных: {str(e)}\n\n"
+            "Попробуйте еще раз или обратитесь к разработчику.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="admin_export_menu")
+            ]])
+        )
+
+    return ADMIN_MENU
+
+
+async def admin_category_reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает подробные отчеты по категориям, городам и специализациям"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        reports = db.get_category_reports()
+
+        text = "📈 <b>ОТЧЕТЫ ПО КАТЕГОРИЯМ</b>\n\n"
+
+        # ТОП КАТЕГОРИЙ ЗАКАЗОВ
+        text += "🏆 <b>ТОП-10 КАТЕГОРИЙ ЗАКАЗОВ:</b>\n"
+        if reports['top_categories']:
+            for i, row in enumerate(reports['top_categories'][:10], 1):
+                row_dict = dict(row)
+                category = row_dict.get('category', 'Неизвестно')
+                count = row_dict.get('count', 0)
+                text += f"{i}. {category}: <b>{count}</b>\n"
+        else:
+            text += "Нет данных\n"
+
+        text += "\n"
+
+        # ТОП ГОРОДОВ
+        text += "🏙 <b>ТОП-10 ГОРОДОВ ПО ЗАКАЗАМ:</b>\n"
+        if reports['top_cities_orders']:
+            for i, row in enumerate(reports['top_cities_orders'][:10], 1):
+                row_dict = dict(row)
+                city = row_dict.get('city', 'Неизвестно')
+                count = row_dict.get('count', 0)
+                text += f"{i}. {city}: <b>{count}</b>\n"
+        else:
+            text += "Нет данных\n"
+
+        text += "\n"
+
+        # ТОП СПЕЦИАЛИЗАЦИЙ МАСТЕРОВ
+        text += "👷 <b>ТОП-10 СПЕЦИАЛИЗАЦИЙ:</b>\n"
+        if reports['top_specializations']:
+            for i, row in enumerate(reports['top_specializations'][:10], 1):
+                row_dict = dict(row)
+                spec = row_dict.get('specialization', 'Неизвестно')
+                count = row_dict.get('count', 0)
+                text += f"{i}. {spec}: <b>{count}</b>\n"
+        else:
+            text += "Нет данных\n"
+
+        keyboard = [
+            [InlineKeyboardButton("🌍 Активность по городам", callback_data="admin_city_activity")],
+            [InlineKeyboardButton("💰 Средние цены", callback_data="admin_avg_prices")],
+            [InlineKeyboardButton("📊 Статусы по категориям", callback_data="admin_category_statuses")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
+        ]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в admin_category_reports: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка при получении отчетов: {str(e)}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="admin_back")
+            ]])
+        )
+
+    return ADMIN_MENU
+
+
+async def admin_city_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Детальная активность по городам"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        reports = db.get_category_reports()
+
+        text = "🌍 <b>АКТИВНОСТЬ ПО ГОРОДАМ</b>\n\n"
+
+        if reports['city_activity']:
+            for i, city_data in enumerate(reports['city_activity'][:10], 1):
+                city = city_data['city']
+                orders = city_data['orders']
+                workers = city_data['workers']
+                total = city_data['total']
+                text += f"{i}. <b>{city}</b>\n"
+                text += f"   📦 Заказов: {orders}\n"
+                text += f"   👷 Мастеров: {workers}\n"
+                text += f"   📊 Всего активности: {total}\n\n"
+        else:
+            text += "Нет данных\n"
+
+        keyboard = [[InlineKeyboardButton("⬅️ Назад к отчетам", callback_data="admin_category_reports")]]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в admin_city_activity: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Ошибка при получении данных",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="admin_category_reports")
+            ]])
+        )
+
+    return ADMIN_MENU
+
+
+async def admin_avg_prices(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Средние цены по категориям"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        reports = db.get_category_reports()
+
+        text = "💰 <b>СРЕДНИЕ ЦЕНЫ ПО КАТЕГОРИЯМ</b>\n\n"
+        text += "<i>(Только для категорий с минимум 3 откликами в BYN)</i>\n\n"
+
+        if reports['avg_prices_by_category']:
+            for i, row in enumerate(reports['avg_prices_by_category'][:10], 1):
+                row_dict = dict(row)
+                category = row_dict.get('category', 'Неизвестно')
+                avg_price = row_dict.get('avg_price', 0)
+                bid_count = row_dict.get('bid_count', 0)
+                text += f"{i}. <b>{category}</b>\n"
+                text += f"   Средняя цена: {avg_price:.2f} BYN\n"
+                text += f"   Откликов: {bid_count}\n\n"
+        else:
+            text += "Недостаточно данных для анализа\n"
+
+        keyboard = [[InlineKeyboardButton("⬅️ Назад к отчетам", callback_data="admin_category_reports")]]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в admin_avg_prices: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Ошибка при получении данных",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="admin_category_reports")
+            ]])
+        )
+
+    return ADMIN_MENU
+
+
+async def admin_category_statuses(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Статусы заказов по категориям"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        reports = db.get_category_reports()
+
+        text = "📊 <b>СТАТУСЫ ЗАКАЗОВ ПО КАТЕГОРИЯМ</b>\n\n"
+
+        if reports['category_statuses']:
+            for row in reports['category_statuses'][:10]:
+                row_dict = dict(row)
+                category = row_dict.get('category', 'Неизвестно')
+                open_count = row_dict.get('open_count', 0)
+                active_count = row_dict.get('active_count', 0)
+                completed_count = row_dict.get('completed_count', 0)
+                total_count = row_dict.get('total_count', 0)
+
+                text += f"<b>{category}</b> (всего: {total_count})\n"
+                text += f"  🟢 Открытые: {open_count}\n"
+                text += f"  🔵 В работе: {active_count}\n"
+                text += f"  ✅ Завершённые: {completed_count}\n\n"
+        else:
+            text += "Нет данных\n"
+
+        keyboard = [[InlineKeyboardButton("⬅️ Назад к отчетам", callback_data="admin_category_reports")]]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в admin_category_statuses: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Ошибка при получении данных",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="admin_category_reports")
+            ]])
+        )
+
+    return ADMIN_MENU
+
+
+async def admin_users_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню управления пользователями"""
+    query = update.callback_query
+    await query.answer()
+
+    stats = db.get_analytics_stats()
+
+    text = "👥 <b>УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ</b>\n\n"
+    text += f"Всего пользователей: {stats['total_users']}\n"
+    text += f"Мастеров: {stats['total_workers']}\n"
+    text += f"Клиентов: {stats['total_clients']}\n"
+    text += f"Забанено: {stats['banned_users']}\n\n"
+    text += "Выберите фильтр или воспользуйтесь поиском:"
+
+    keyboard = [
+        [InlineKeyboardButton("👤 Все пользователи", callback_data="admin_users_list_all")],
+        [InlineKeyboardButton("👷 Только мастера", callback_data="admin_users_list_workers")],
+        [InlineKeyboardButton("📋 Только клиенты", callback_data="admin_users_list_clients")],
+        [InlineKeyboardButton("🔄 Оба профиля", callback_data="admin_users_list_dual")],
+        [InlineKeyboardButton("🚫 Забаненные", callback_data="admin_users_list_banned")],
+        [InlineKeyboardButton("🔍 Поиск пользователя", callback_data="admin_user_search_start")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
+    ]
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает список пользователей с выбранным фильтром"""
+    query = update.callback_query
+    await query.answer()
+
+    # Парсим фильтр из callback_data
+    filter_type = query.data.replace("admin_users_list_", "")
+    page = context.user_data.get('admin_users_page', 1)
+
+    users = db.get_users_filtered(filter_type, page=page, per_page=10)
+
+    if not users:
+        text = "👥 <b>Пользователи не найдены</b>\n\n"
+        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="admin_users")]]
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return ADMIN_MENU
+
+    filter_names = {
+        'all': 'Все пользователи',
+        'workers': 'Мастера',
+        'clients': 'Клиенты',
+        'dual': 'С двумя профилями',
+        'banned': 'Забаненные'
+    }
+
+    text = f"👥 <b>{filter_names.get(filter_type, 'Пользователи')}</b>\n"
+    text += f"Страница {page}\n\n"
+
+    keyboard = []
+    for user in users:
+        user_dict = dict(user)
+        name = user_dict.get('full_name', 'Без имени')
+        telegram_id = user_dict['telegram_id']
+
+        # Эмодзи статуса
+        status_emoji = "🚫" if user_dict.get('is_banned') else ""
+
+        # Тип профиля
+        profile_type = ""
+        if user_dict.get('worker_id') and user_dict.get('client_id'):
+            profile_type = "👷📋"
+        elif user_dict.get('worker_id'):
+            profile_type = "👷"
+        elif user_dict.get('client_id'):
+            profile_type = "📋"
+
+        button_text = f"{status_emoji}{profile_type} {name[:25]}"
+        keyboard.append([InlineKeyboardButton(
+            button_text,
+            callback_data=f"admin_user_view_{telegram_id}"
+        )])
+
+    # Навигация
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton("⬅️ Предыдущая", callback_data=f"admin_users_page_{filter_type}_{page-1}"))
+    if len(users) == 10:  # Полная страница = возможно есть следующая
+        nav_row.append(InlineKeyboardButton("➡️ Следующая", callback_data=f"admin_users_page_{filter_type}_{page+1}"))
+    if nav_row:
+        keyboard.append(nav_row)
+
+    keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="admin_users")])
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_user_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает детальную информацию о пользователе"""
+    query = update.callback_query
+    await query.answer()
+
+    telegram_id = int(query.data.replace("admin_user_view_", ""))
+    details = db.get_user_details_for_admin(telegram_id)
+
+    if not details:
+        await query.edit_message_text("❌ Пользователь не найден.")
+        return ADMIN_MENU
+
+    user = details['user']
+    worker = details['worker_profile']
+    client = details['client_profile']
+    stats = details['stats']
+
+    # Форматируем информацию
+    text = "👤 <b>ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ</b>\n\n"
+
+    # Основная информация
+    text += f"<b>Имя:</b> {user.get('full_name', 'Не указано')}\n"
+    text += f"<b>Username:</b> @{user.get('username', 'нет')}\n"
+    text += f"<b>Telegram ID:</b> <code>{user['telegram_id']}</code>\n"
+    text += f"<b>Статус:</b> {'🚫 Забанен' if user.get('is_banned') else '✅ Активен'}\n"
+
+    if user.get('is_banned'):
+        text += f"<b>Причина бана:</b> {user.get('ban_reason', 'Не указана')}\n"
+
+    from datetime import datetime
+    created_at = user.get('created_at')
+    if isinstance(created_at, str):
+        created_at = datetime.fromisoformat(created_at)
+    if created_at:
+        text += f"<b>Регистрация:</b> {created_at.strftime('%d.%m.%Y %H:%M')}\n"
+
+    # Профили
+    text += f"\n<b>ПРОФИЛИ:</b>\n"
+    if worker:
+        text += f"👷 <b>Мастер</b>\n"
+        text += f"  • Специализация: {worker.get('specialization', 'Не указана')}\n"
+        if stats.get('total_bids'):
+            text += f"  • Откликов: {stats['total_bids']} (принято: {stats.get('accepted_bids', 0)})\n"
+        if stats.get('worker_rating'):
+            text += f"  • Рейтинг: {stats['worker_rating']:.1f} ⭐\n"
+
+    if client:
+        text += f"📋 <b>Клиент</b>\n"
+        if stats.get('total_orders'):
+            text += f"  • Заказов создано: {stats['total_orders']}\n"
+            text += f"  • Завершено: {stats.get('completed_orders', 0)}\n"
+
+    if not worker and not client:
+        text += "❌ Нет активных профилей\n"
+
+    # Кнопки действий
+    keyboard = []
+    if user.get('is_banned'):
+        keyboard.append([InlineKeyboardButton("✅ Разбанить", callback_data=f"admin_user_unban_{telegram_id}")])
+    else:
+        keyboard.append([InlineKeyboardButton("🚫 Забанить", callback_data=f"admin_user_ban_start_{telegram_id}")])
+
+    keyboard.append([InlineKeyboardButton("⬅️ Назад к списку", callback_data="admin_users")])
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_user_ban_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало процесса бана пользователя"""
+    query = update.callback_query
+    await query.answer()
+
+    telegram_id = int(query.data.replace("admin_user_ban_start_", ""))
+    context.user_data['admin_ban_user_id'] = telegram_id
+
+    text = "🚫 <b>БАН ПОЛЬЗОВАТЕЛЯ</b>\n\n"
+    text += f"Telegram ID: <code>{telegram_id}</code>\n\n"
+    text += "Отправьте причину бана или нажмите \"Отмена\":"
+
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=f"admin_user_view_{telegram_id}")]]
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_BAN_REASON
+
+
+async def admin_user_ban_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выполняет бан пользователя с указанной причиной"""
+    telegram_id = context.user_data.get('admin_ban_user_id')
+    if not telegram_id:
+        await update.message.reply_text("❌ Ошибка: пользователь не выбран.")
+        return ConversationHandler.END
+
+    reason = update.message.text.strip()
+    admin_telegram_id = update.effective_user.id
+
+    success = db.ban_user(telegram_id, reason, admin_telegram_id)
+
+    if success:
+        text = f"✅ Пользователь <code>{telegram_id}</code> забанен.\n"
+        text += f"Причина: {reason}"
+    else:
+        text = "❌ Ошибка при бане пользователя."
+
+    keyboard = [[InlineKeyboardButton("⬅️ К управлению пользователями", callback_data="admin_users")]]
+
+    await update.message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    context.user_data.pop('admin_ban_user_id', None)
+    return ADMIN_MENU
+
+
+async def admin_user_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Разбанивает пользователя"""
+    query = update.callback_query
+    await query.answer()
+
+    telegram_id = int(query.data.replace("admin_user_unban_", ""))
+
+    success = db.unban_user(telegram_id)
+
+    if success:
+        text = f"✅ Пользователь <code>{telegram_id}</code> разбанен."
+    else:
+        text = "❌ Ошибка при разбане пользователя."
+
+    keyboard = [
+        [InlineKeyboardButton("👤 Посмотреть профиль", callback_data=f"admin_user_view_{telegram_id}")],
+        [InlineKeyboardButton("⬅️ К управлению пользователями", callback_data="admin_users")]
+    ]
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_user_search_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало поиска пользователя"""
+    query = update.callback_query
+    await query.answer()
+
+    text = "🔍 <b>ПОИСК ПОЛЬЗОВАТЕЛЯ</b>\n\n"
+    text += "Введите для поиска:\n"
+    text += "• Telegram ID\n"
+    text += "• Имя пользователя\n"
+    text += "• Username (без @)\n\n"
+    text += "Или нажмите \"Отмена\":"
+
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="admin_users")]]
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_SEARCH
+
+
+async def admin_user_search_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выполняет поиск пользователя"""
+    query_text = update.message.text.strip()
+
+    users = db.search_users(query_text, limit=10)
+
+    if not users:
+        text = f"🔍 По запросу '<code>{query_text}</code>' ничего не найдено."
+        keyboard = [[InlineKeyboardButton("🔍 Новый поиск", callback_data="admin_user_search_start")],
+                    [InlineKeyboardButton("⬅️ Назад", callback_data="admin_users")]]
+
+        await update.message.reply_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return ADMIN_MENU
+
+    text = f"🔍 <b>Результаты поиска:</b> '<code>{query_text}</code>'\n\n"
+    text += f"Найдено пользователей: {len(users)}\n\n"
+
+    keyboard = []
+    for user in users:
+        user_dict = dict(user)
+        name = user_dict.get('full_name', 'Без имени')
+        telegram_id = user_dict['telegram_id']
+
+        # Эмодзи статуса
+        status_emoji = "🚫" if user_dict.get('is_banned') else ""
+
+        # Тип профиля
+        profile_type = ""
+        if user_dict.get('worker_id') and user_dict.get('client_id'):
+            profile_type = "👷📋"
+        elif user_dict.get('worker_id'):
+            profile_type = "👷"
+        elif user_dict.get('client_id'):
+            profile_type = "📋"
+
+        button_text = f"{status_emoji}{profile_type} {name[:25]} (ID: {telegram_id})"
+        keyboard.append([InlineKeyboardButton(
+            button_text,
+            callback_data=f"admin_user_view_{telegram_id}"
+        )])
+
+    keyboard.append([InlineKeyboardButton("🔍 Новый поиск", callback_data="admin_user_search_start")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="admin_users")])
+
+    await update.message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
     return ADMIN_MENU
