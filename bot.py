@@ -393,7 +393,7 @@ def main():
         )
     )
 
-    # --- Обработчики категорий заказов ---
+    # --- Обработчики категорий заказов КЛИЕНТА ---
     application.add_handler(
         CallbackQueryHandler(
             handlers.client_active_orders,
@@ -405,6 +405,21 @@ def main():
         CallbackQueryHandler(
             handlers.client_completed_orders,
             pattern="^client_completed_orders$",
+        )
+    )
+
+    # --- Обработчики категорий заказов МАСТЕРА ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_active_orders,
+            pattern="^worker_active_orders$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_completed_orders,
+            pattern="^worker_completed_orders$",
         )
     )
 
