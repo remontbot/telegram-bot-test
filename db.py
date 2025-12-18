@@ -3412,17 +3412,29 @@ def get_analytics_stats():
 
         # === АКТИВНОСТЬ ===
         # Заказов за последние 24 часа
-        cursor.execute("""
-            SELECT COUNT(*) FROM orders
-            WHERE created_at >= datetime('now', '-1 day')
-        """)
+        if USE_POSTGRES:
+            cursor.execute("""
+                SELECT COUNT(*) FROM orders
+                WHERE created_at >= NOW() - INTERVAL '1 day'
+            """)
+        else:
+            cursor.execute("""
+                SELECT COUNT(*) FROM orders
+                WHERE created_at >= datetime('now', '-1 day')
+            """)
         stats['orders_last_24h'] = _get_count_from_result(cursor.fetchone())
 
         # Новых пользователей за 7 дней
-        cursor.execute("""
-            SELECT COUNT(*) FROM users
-            WHERE created_at >= datetime('now', '-7 days')
-        """)
+        if USE_POSTGRES:
+            cursor.execute("""
+                SELECT COUNT(*) FROM users
+                WHERE created_at >= NOW() - INTERVAL '7 days'
+            """)
+        else:
+            cursor.execute("""
+                SELECT COUNT(*) FROM users
+                WHERE created_at >= datetime('now', '-7 days')
+            """)
         stats['users_last_7days'] = _get_count_from_result(cursor.fetchone())
 
         # Premium статус

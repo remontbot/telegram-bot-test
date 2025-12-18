@@ -4627,9 +4627,13 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             return
 
-        # Обновляем статус заказа на "done" (только если ещё не done)
-        if order_dict['status'] != 'done':
+        # Проверяем, оставила ли противоположная сторона уже отзыв
+        opposite_review_exists = db.check_review_exists(order_id, notify_user_id)
+
+        # Обновляем статус заказа на "done" ТОЛЬКО если обе стороны оценили
+        if opposite_review_exists and order_dict['status'] != 'done':
             db.update_order_status(order_id, 'done')
+            logger.info(f"✅ Заказ {order_id} помечен как 'done' - обе стороны оценили")
 
         # Уведомляем противоположную сторону
         try:
@@ -4637,9 +4641,6 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
             if notify_user:
                 notify_user_dict = dict(notify_user)
                 stars = "⭐" * rating
-
-                # Проверяем, оставила ли противоположная сторона уже отзыв
-                opposite_review_exists = db.check_review_exists(order_id, notify_user_id)
 
                 # Если клиент оценил мастера - предлагаем мастеру загрузить фото И оценить клиента
                 if is_client:
@@ -9000,7 +9001,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton("📈 Отчеты по категориям", callback_data="admin_category_reports")],
-        [InlineKeyboardButton("📢 Отправить Broadcast", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("📢 Рассылка сообщений", callback_data="admin_broadcast")],
         [InlineKeyboardButton("📺 Создать рекламу", callback_data="admin_create_ad")],
         [InlineKeyboardButton("👥 Управление пользователями", callback_data="admin_users")],
         [InlineKeyboardButton("❌ Закрыть", callback_data="admin_close")],
@@ -9029,7 +9030,7 @@ async def admin_broadcast_start(update: Update, context: ContextTypes.DEFAULT_TY
     ]
 
     await query.edit_message_text(
-        "📢 <b>СОЗДАНИЕ BROADCAST</b>\n\n"
+        "📢 <b>РАССЫЛКА СООБЩЕНИЙ</b>\n\n"
         "Кому отправить сообщение?",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -9053,7 +9054,7 @@ async def admin_broadcast_select_audience(update: Update, context: ContextTypes.
     }.get(audience, 'Неизвестно')
 
     await query.edit_message_text(
-        f"📢 <b>СОЗДАНИЕ BROADCAST</b>\n\n"
+        f"📢 <b>РАССЫЛКА СООБЩЕНИЙ</b>\n\n"
         f"Аудитория: {audience_text}\n\n"
         f"Теперь введите текст сообщения:\n"
         f"(Поддерживается HTML: &lt;b&gt;жирный&lt;/b&gt;, &lt;i&gt;курсив&lt;/i&gt;)\n\n"
@@ -9132,6 +9133,10 @@ async def admin_create_ad_start(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
 
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
+    ]
+
     await query.edit_message_text(
         "📺 <b>СОЗДАНИЕ РЕКЛАМЫ</b>\n\n"
         "Для создания рекламы используйте команду:\n\n"
@@ -9144,10 +9149,11 @@ async def admin_create_ad_start(update: Update, context: ContextTypes.DEFAULT_TY
         "• Placement (menu_banner/morning_digest)\n\n"
         "Или отправьте фото с описанием в виде:\n"
         "Заголовок | Описание | URL | Текст кнопки | Placement",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-    return ConversationHandler.END
+    return ADMIN_MENU
 
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
