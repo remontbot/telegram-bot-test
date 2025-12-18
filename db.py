@@ -3985,6 +3985,57 @@ def check_worker_bid_exists(order_id, worker_id):
             return result[0] > 0
 
 
+def get_bid_by_id(bid_id):
+    """Получает отклик по ID с полной информацией о мастере"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        if USE_POSTGRES:
+            cursor.execute("""
+                SELECT
+                    b.*,
+                    w.name as worker_name,
+                    w.rating as worker_rating,
+                    w.rating_count as worker_rating_count,
+                    w.experience as worker_experience,
+                    w.phone as worker_phone,
+                    w.profile_photo as worker_profile_photo,
+                    w.portfolio_photos as worker_portfolio_photos,
+                    w.description as worker_description,
+                    w.city as worker_city,
+                    w.categories as worker_categories,
+                    w.verified_reviews as worker_verified_reviews,
+                    u.telegram_id as worker_telegram_id
+                FROM bids b
+                JOIN workers w ON b.worker_id = w.id
+                JOIN users u ON w.user_id = u.id
+                WHERE b.id = %s
+            """, (bid_id,))
+        else:
+            cursor.execute("""
+                SELECT
+                    b.*,
+                    w.name as worker_name,
+                    w.rating as worker_rating,
+                    w.rating_count as worker_rating_count,
+                    w.experience as worker_experience,
+                    w.phone as worker_phone,
+                    w.profile_photo as worker_profile_photo,
+                    w.portfolio_photos as worker_portfolio_photos,
+                    w.description as worker_description,
+                    w.city as worker_city,
+                    w.categories as worker_categories,
+                    w.verified_reviews as worker_verified_reviews,
+                    u.telegram_id as worker_telegram_id
+                FROM bids b
+                JOIN workers w ON b.worker_id = w.id
+                JOIN users u ON w.user_id = u.id
+                WHERE b.id = ?
+            """, (bid_id,))
+
+        return cursor.fetchone()
+
+
 def get_bids_count_for_order(order_id):
     """Получает количество активных откликов для заказа"""
     with get_db_connection() as conn:
