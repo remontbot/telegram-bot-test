@@ -2157,7 +2157,7 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
         [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
-        [InlineKeyboardButton("💳 Мои платежи", callback_data="client_my_payments")],
+        # TEMPORARILY HIDDEN UNTIL 10-20k USERS: [InlineKeyboardButton("💳 Мои платежи", callback_data="client_my_payments")],
         [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_client_notifications")],
         [InlineKeyboardButton("🧰 Главное меню", callback_data="go_main_menu")],
     ]
@@ -5513,32 +5513,33 @@ async def select_master(update: Update, context: ContextTypes.DEFAULT_TYPE):
         price = selected_bid['proposed_price']
         currency = selected_bid['currency']
 
-        # Показываем окно подтверждения с оплатой
-        text = (
-            f"✅ <b>Вы выбрали мастера:</b>\n\n"
-            f"👤 {worker_name}\n"
-            f"💰 Цена: {price} {currency}\n\n"
-            f"📞 <b>Для получения контакта мастера необходима оплата:</b>\n"
-            f"💳 Стоимость доступа: <b>1 BYN</b> (или 10 Telegram Stars)\n\n"
-            f"После оплаты вы получите:\n"
-            f"• Контактный телефон мастера\n"
-            f"• Возможность напрямую связаться с ним\n"
-            f"• Мастер получит уведомление о вашем выборе\n\n"
-            f"💡 <i>Выберите удобный способ оплаты:</i>"
-        )
+        # 🆓 ВРЕМЕННО БЕСПЛАТНО: Пропускаем оплату до достижения 10-20k пользователей
+        # Вместо показа окна оплаты, сразу вызываем логику успешной "оплаты"
+        #
+        # ЗАКОММЕНТИРОВАННЫЙ КОД ДЛЯ БУДУЩЕГО ИСПОЛЬЗОВАНИЯ:
+        # # Показываем окно подтверждения с оплатой
+        # text = (
+        #     f"✅ <b>Вы выбрали мастера:</b>\n\n"
+        #     f"👤 {worker_name}\n"
+        #     f"💰 Цена: {price} {currency}\n\n"
+        #     f"📞 <b>Для получения контакта мастера необходима оплата:</b>\n"
+        #     f"💳 Стоимость доступа: <b>1 BYN</b> (или 10 Telegram Stars)\n\n"
+        #     f"После оплаты вы получите:\n"
+        #     f"• Контактный телефон мастера\n"
+        #     f"• Возможность напрямую связаться с ним\n"
+        #     f"• Мастер получит уведомление о вашем выборе\n\n"
+        #     f"💡 <i>Выберите удобный способ оплаты:</i>"
+        # )
+        # keyboard = [
+        #     [InlineKeyboardButton("⭐ Оплатить Telegram Stars", callback_data=f"pay_stars_{bid_id}")],
+        #     [InlineKeyboardButton("💳 Оплатить картой", callback_data=f"pay_card_{bid_id}")],
+        #     [InlineKeyboardButton("⬅️ Назад к откликам", callback_data=f"view_bids_{order_id}")],
+        # ]
+        # await safe_edit_message(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-        keyboard = [
-            [InlineKeyboardButton("⭐ Оплатить Telegram Stars", callback_data=f"pay_stars_{bid_id}")],
-            [InlineKeyboardButton("💳 Оплатить картой", callback_data=f"pay_card_{bid_id}")],
-            [InlineKeyboardButton("⬅️ Назад к откликам", callback_data=f"view_bids_{order_id}")],
-        ]
-
-        await safe_edit_message(
-            query,
-            text,
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        # 🆓 БЕСПЛАТНЫЙ РЕЖИМ: Подменяем callback_data для прямого вызова успешной обработки
+        query.data = f"test_payment_success_{bid_id}"
+        await test_payment_success(update, context)
 
     except Exception as e:
         logger.error(f"Ошибка в select_master: {e}", exc_info=True)
@@ -5682,7 +5683,12 @@ async def confirm_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def test_payment_success(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Тестовая функция для имитации успешной оплаты - создаёт чат вместо выдачи контакта"""
+    """
+    🆓 БЕСПЛАТНЫЙ РЕЖИМ: Обрабатывает выбор мастера БЕЗ оплаты (до достижения 10-20k пользователей)
+
+    Раньше была тестовой функцией для имитации оплаты, теперь используется как основной обработчик
+    в бесплатном режиме. Создаёт чат между клиентом и мастером напрямую без платежей.
+    """
     query = update.callback_query
     await query.answer()
 
