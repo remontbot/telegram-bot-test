@@ -607,6 +607,20 @@ def init_db():
             );
         """)
 
+        # Таблица предложений от пользователей
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS suggestions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                user_role TEXT NOT NULL,           -- 'worker', 'client' или 'both'
+                message TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                status TEXT DEFAULT 'new',         -- 'new', 'viewed', 'resolved'
+                admin_notes TEXT,                  -- Заметки админа
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+        """)
+
         conn.commit()
 
 
@@ -5534,3 +5548,117 @@ def get_workers_for_new_order_notification(order_city, order_category):
         ))
 
         return [dict(row) for row in cursor.fetchall()]
+        return [dict(row) for row in cursor.fetchall()]
+
+
+# ============================================
+# СИСТЕМА ПРЕДЛОЖЕНИЙ
+# ============================================
+
+def create_suggestion(user_id, user_role, message):
+    """Создает предложение от пользователя"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO suggestions (user_id, user_role, message, created_at, status)
+                VALUES (%s, %s, %s, NOW(), 'new')
+            """, (user_id, user_role, message))
+        else:
+            cursor.execute("""
+                INSERT INTO suggestions (user_id, user_role, message, created_at, status)
+                VALUES (?, ?, ?, datetime('now'), 'new')
+            """, (user_id, user_role, message))
+        
+        conn.commit()
+        return cursor.lastrowid
+
+
+def get_all_suggestions(status=None):
+    """Получает все предложения (опционально фильтрует по статусу)"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        
+        if status:
+            if USE_POSTGRES:
+                cursor.execute("""
+                    SELECT s.*, u.telegram_id
+                    FROM suggestions s
+                    JOIN users u ON s.user_id = u.id
+                    WHERE s.status = %s
+                    ORDER BY s.created_at DESC
+                """, (status,))
+            else:
+                cursor.execute("""
+                    SELECT s.*, u.telegram_id
+                    FROM suggestions s
+                    JOIN users u ON s.user_id = u.id
+                    WHERE s.status = ?
+                    ORDER BY s.created_at DESC
+                """, (status,))
+        else:
+            cursor.execute("""
+                SELECT s.*, u.telegram_id
+                FROM suggestions s
+                JOIN users u ON s.user_id = u.id
+                ORDER BY s.created_at DESC
+            """)
+        
+        return cursor.fetchall()
+
+
+def update_suggestion_status(suggestion_id, status, admin_notes=None):
+    """Обновляет статус предложения"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        
+        if admin_notes:
+            if USE_POSTGRES:
+                cursor.execute("""
+                    UPDATE suggestions
+                    SET status = %s, admin_notes = %s
+                    WHERE id = %s
+                """, (status, admin_notes, suggestion_id))
+            else:
+                cursor.execute("""
+                    UPDATE suggestions
+                    SET status = ?, admin_notes = ?
+                    WHERE id = ?
+                """, (status, admin_notes, suggestion_id))
+        else:
+            if USE_POSTGRES:
+                cursor.execute("""
+                    UPDATE suggestions
+                    SET status = %s
+                    WHERE id = %s
+                """, (status, suggestion_id))
+            else:
+                cursor.execute("""
+                    UPDATE suggestions
+                    SET status = ?
+                    WHERE id = ?
+                """, (status, suggestion_id))
+        
+        conn.commit()
+
+
+def get_suggestions_count(status='new'):
+    """Получает количество предложений по статусу"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        
+        if USE_POSTGRES:
+            cursor.execute("""
+                SELECT COUNT(*) as count FROM suggestions WHERE status = %s
+            """, (status,))
+        else:
+            cursor.execute("""
+                SELECT COUNT(*) as count FROM suggestions WHERE status = ?
+            """, (status,))
+        
+        result = cursor.fetchone()
+        if isinstance(result, dict):
+            return result.get('count', 0)
+        else:
+            return result[0] if result else 0

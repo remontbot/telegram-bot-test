@@ -932,6 +932,7 @@ def main():
                 CallbackQueryHandler(handlers.admin_user_ban_start, pattern="^admin_user_ban_start_"),
                 CallbackQueryHandler(handlers.admin_user_unban, pattern="^admin_user_unban_"),
                 CallbackQueryHandler(handlers.admin_user_search_start, pattern="^admin_user_search_start$"),
+                CallbackQueryHandler(handlers.admin_suggestions, pattern="^admin_suggestions$"),
                 CallbackQueryHandler(handlers.admin_close, pattern="^admin_close$"),
                 CallbackQueryHandler(handlers.admin_panel, pattern="^admin_back$"),  # Возврат в меню
             ],
@@ -959,6 +960,40 @@ def main():
     )
 
     application.add_handler(admin_conv_handler)
+
+    # --- ConversationHandler для предложений ---
+    suggestion_conv_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(handlers.send_suggestion_start, pattern="^send_suggestion$")
+        ],
+        states={
+            handlers.SUGGESTION_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.receive_suggestion_text),
+                CallbackQueryHandler(handlers.cancel_suggestion, pattern="^cancel_suggestion$"),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(handlers.cancel_suggestion, pattern="^cancel_suggestion$"),
+            CommandHandler("cancel", handlers.cancel_from_command),
+        ],
+        allow_reentry=True,
+    )
+
+    application.add_handler(suggestion_conv_handler)
+
+    # --- Обработчик кнопок постоянного меню ---
+    menu_buttons = [
+        "🧰 Меню мастера",
+        "🏠 Меню заказчика",
+        "👤 Мой профиль",
+        "📂 Мои заказы",
+        "💡 Предложения",
+        "ℹ️ Помощь"
+    ]
+    menu_filter = filters.TEXT & filters.Regex(f"^({'|'.join(menu_buttons)})$")
+    application.add_handler(
+        MessageHandler(menu_filter, handlers.handle_menu_buttons)
+    )
 
     # Обработчик неизвестных команд
     application.add_handler(

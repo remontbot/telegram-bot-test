@@ -5,6 +5,8 @@ from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
     InputMediaPhoto,
 )
@@ -389,6 +391,50 @@ def is_valid_phone(phone: str) -> bool:
     return bool(re.fullmatch(r"\+?\d[\d\s\-()]{6,20}", phone))
 
 
+def get_persistent_menu(user_id):
+    """
+    Создает постоянное меню внизу экрана (ReplyKeyboardMarkup)
+    Меню зависит от ролей пользователя
+    """
+    worker_profile = db.get_worker_profile(user_id)
+    client_profile = db.get_client_profile(user_id)
+
+    has_worker = worker_profile is not None
+    has_client = client_profile is not None
+
+    keyboard = []
+
+    # Первая строка - основные меню
+    row1 = []
+    if has_worker:
+        row1.append(KeyboardButton("🧰 Меню мастера"))
+    if has_client:
+        row1.append(KeyboardButton("🏠 Меню заказчика"))
+    if row1:
+        keyboard.append(row1)
+
+    # Вторая строка - дополнительные функции
+    row2 = []
+    if has_worker:
+        row2.append(KeyboardButton("👤 Мой профиль"))
+    if has_client:
+        row2.append(KeyboardButton("📂 Мои заказы"))
+    if row2:
+        keyboard.append(row2)
+
+    # Третья строка - общие функции
+    keyboard.append([
+        KeyboardButton("💡 Предложения"),
+        KeyboardButton("ℹ️ Помощь")
+    ])
+
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True,  # Адаптировать размер кнопок
+        persistent=True,        # Меню не исчезает
+    )
+
+
 # /start
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_telegram_id = update.effective_user.id
@@ -434,17 +480,26 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton("➕ Стать заказчиком", callback_data="role_client")])
         
         message = "👋 Добро пожаловать!\n\n"
-        
+
         if has_worker and has_client:
             message += "У вас есть оба профиля.\nВыберите какой использовать:"
         elif has_worker:
             message += "Вы зарегистрированы как мастер.\n\nХотите также стать заказчиком?"
         elif has_client:
             message += "Вы зарегистрированы как заказчик.\n\nХотите также стать мастером?"
-        
+
+        # Показываем постоянное меню внизу
+        persistent_menu = get_persistent_menu(user_id)
+
         await update.message.reply_text(
             message,
             reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+        # Отправляем еще одно сообщение с постоянным меню
+        await update.message.reply_text(
+            "📱 Используйте меню внизу для быстрого доступа к функциям",
+            reply_markup=persistent_menu,
         )
     else:
         # Новый пользователь - выбор первой роли
@@ -1694,6 +1749,7 @@ async def show_worker_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📦 Мои заказы", callback_data="worker_my_orders")],
         [InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
         [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_notifications")],
+        [InlineKeyboardButton("💡 Предложения", callback_data="send_suggestion")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")],
     ]
 
@@ -2159,6 +2215,7 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
         # [InlineKeyboardButton("💳 Мои платежи", callback_data="client_my_payments")],  # Скрыто до внедрения платной версии
         [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_client_notifications")],
+        [InlineKeyboardButton("💡 Предложения", callback_data="send_suggestion")],
         [InlineKeyboardButton("🧰 Главное меню", callback_data="go_main_menu")],
     ]
 
@@ -8988,8 +9045,233 @@ async def check_expired_chats_command(update: Update, context: ContextTypes.DEFA
 
 
 # ============================================
+# ОБРАБОТЧИК ПОСТОЯННОГО МЕНЮ
+# ============================================
+
+async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопок из постоянного меню внизу экрана"""
+    text = update.message.text
+
+    # Получаем пользователя
+    user = db.get_user_by_telegram_id(update.effective_user.id)
+    if not user:
+        await update.message.reply_text(
+            "❌ Пользователь не найден. Отправьте /start для регистрации."
+        )
+        return
+
+    user_dict = dict(user)
+    user_id = user_dict['id']
+
+    # Определяем какую кнопку нажали
+    if text == "🧰 Меню мастера":
+        # Эмулируем callback query для show_worker_menu
+        # Создаем фейковый Update с CallbackQuery
+        from telegram import CallbackQuery
+        fake_query = type('obj', (object,), {
+            'answer': lambda: None,
+            'message': update.message,
+            'from_user': update.effective_user,
+            'data': 'show_worker_menu'
+        })()
+        fake_update = type('obj', (object,), {
+            'callback_query': fake_query,
+            'effective_user': update.effective_user
+        })()
+
+        await show_worker_menu(fake_update, context)
+
+    elif text == "🏠 Меню заказчика":
+        # Эмулируем callback query для show_client_menu
+        from telegram import CallbackQuery
+        fake_query = type('obj', (object,), {
+            'answer': lambda: None,
+            'message': update.message,
+            'from_user': update.effective_user,
+            'data': 'show_client_menu'
+        })()
+        fake_update = type('obj', (object,), {
+            'callback_query': fake_query,
+            'effective_user': update.effective_user
+        })()
+
+        await show_client_menu(fake_update, context)
+
+    elif text == "👤 Мой профиль":
+        # Показываем профиль мастера
+        await view_own_worker_profile(update, context)
+
+    elif text == "📂 Мои заказы":
+        # Показываем заказы клиента
+        from telegram import CallbackQuery
+        fake_query = type('obj', (object,), {
+            'answer': lambda: None,
+            'message': update.message,
+            'from_user': update.effective_user,
+            'data': 'client_my_orders'
+        })()
+        fake_update = type('obj', (object,), {
+            'callback_query': fake_query,
+            'effective_user': update.effective_user
+        })()
+
+        await client_my_orders(fake_update, context)
+
+    elif text == "💡 Предложения":
+        # Открываем форму предложений
+        await update.message.reply_text(
+            "💡 <b>Отправить предложение</b>\n\n"
+            "Здесь вы можете отправить свои предложения по улучшению платформы:\n"
+            "• Какие функции добавить\n"
+            "• Что исправить\n"
+            "• Как сделать удобнее\n\n"
+            "📝 Просто напишите ваше предложение текстом (до 1000 символов):",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_suggestion")
+            ]])
+        )
+        # Переходим в режим ожидания предложения
+        return SUGGESTION_TEXT
+
+    elif text == "ℹ️ Помощь":
+        # Показываем справку
+        help_text = (
+            "ℹ️ <b>Помощь по боту</b>\n\n"
+            "🏠 <b>Для заказчиков:</b>\n"
+            "• Создайте заказ с описанием работы\n"
+            "• Мастера откликнутся на ваш заказ\n"
+            "• Выберите подходящего мастера\n"
+            "• Получите контакт и договоритесь о деталях\n\n"
+            "🧰 <b>Для мастеров:</b>\n"
+            "• Просматривайте доступные заказы\n"
+            "• Откликайтесь с вашей ценой и сроками\n"
+            "• Ждите выбора от заказчика\n"
+            "• Выполняйте работу и получайте отзывы\n\n"
+            "💡 Есть вопросы или предложения? Используйте кнопку 'Предложения'\n\n"
+            "📞 Техподдержка: отправьте /start и выберите нужное меню"
+        )
+        await update.message.reply_text(
+            help_text,
+            parse_mode="HTML"
+        )
+
+
+# ============================================
 # КОНЕЦ СИСТЕМЫ УВЕДОМЛЕНИЙ
 # ============================================
+
+
+# ============================================
+# СИСТЕМА ПРЕДЛОЖЕНИЙ
+# ============================================
+
+# Состояния для ConversationHandler
+SUGGESTION_TEXT = 1
+
+
+async def send_suggestion_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало процесса отправки предложения"""
+    query = update.callback_query
+    await query.answer()
+
+    await query.edit_message_text(
+        "💡 <b>Отправить предложение</b>\n\n"
+        "Здесь вы можете отправить свои предложения по улучшению платформы:\n"
+        "• Какие функции добавить\n"
+        "• Что исправить\n"
+        "• Как сделать удобнее\n\n"
+        "📝 Просто напишите ваше предложение текстом (до 1000 символов):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Отмена", callback_data="cancel_suggestion")
+        ]])
+    )
+
+    return SUGGESTION_TEXT
+
+
+async def receive_suggestion_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение текста предложения"""
+    message = update.message
+    text = message.text
+
+    # Проверка длины
+    if len(text) > 1000:
+        await message.reply_text(
+            "❌ Слишком длинное сообщение. Максимум 1000 символов.\n\n"
+            "Попробуйте сократить ваше предложение:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_suggestion")
+            ]])
+        )
+        return SUGGESTION_TEXT
+
+    # Получаем информацию о пользователе
+    user = db.get_user_by_telegram_id(update.effective_user.id)
+    if not user:
+        await message.reply_text("❌ Ошибка: пользователь не найден.")
+        return ConversationHandler.END
+
+    user_dict = dict(user)
+
+    # Определяем роль пользователя
+    worker_profile = db.get_worker_profile(user_dict['id'])
+    client_profile = db.get_client_profile(user_dict['id'])
+
+    if worker_profile and client_profile:
+        user_role = 'both'
+    elif worker_profile:
+        user_role = 'worker'
+    elif client_profile:
+        user_role = 'client'
+    else:
+        user_role = 'unknown'
+
+    # Сохраняем предложение
+    try:
+        suggestion_id = db.create_suggestion(user_dict['id'], user_role, text)
+        logger.info(f"✅ Предложение #{suggestion_id} создано пользователем {user_dict['id']}")
+
+        await message.reply_text(
+            "✅ <b>Спасибо за ваше предложение!</b>\n\n"
+            "Мы обязательно рассмотрим его и постараемся сделать платформу лучше!\n\n"
+            "💡 Вы можете отправить еще предложения в любое время через меню.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 В меню", callback_data="go_main_menu")
+            ]])
+        )
+
+        return ConversationHandler.END
+
+    except Exception as e:
+        logger.error(f"Ошибка при создании предложения: {e}", exc_info=True)
+        await message.reply_text(
+            "❌ Произошла ошибка при отправке предложения.\n\n"
+            "Попробуйте позже.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 В меню", callback_data="go_main_menu")
+            ]])
+        )
+        return ConversationHandler.END
+
+
+async def cancel_suggestion(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена отправки предложения"""
+    query = update.callback_query
+    await query.answer()
+
+    await query.edit_message_text(
+        "❌ Отправка предложения отменена.\n\n"
+        "Вы можете вернуться к ней в любое время через меню.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏠 В меню", callback_data="go_main_menu")
+        ]])
+    )
+
+    return ConversationHandler.END
 
 
 # ============================================
@@ -9010,6 +9292,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📢 Рассылка сообщений", callback_data="admin_broadcast")],
         [InlineKeyboardButton("📺 Создать рекламу", callback_data="admin_create_ad")],
         [InlineKeyboardButton("👥 Управление пользователями", callback_data="admin_users")],
+        [InlineKeyboardButton("💡 Предложения", callback_data="admin_suggestions")],
         [InlineKeyboardButton("❌ Закрыть", callback_data="admin_close")],
     ]
 
@@ -9956,6 +10239,68 @@ async def admin_user_search_execute(update: Update, context: ContextTypes.DEFAUL
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="admin_users")])
 
     await update.message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_suggestions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Просмотр предложений пользователей"""
+    query = update.callback_query
+    await query.answer()
+
+    # Получаем предложения
+    suggestions = db.get_all_suggestions()
+    new_count = db.get_suggestions_count('new')
+    viewed_count = db.get_suggestions_count('viewed')
+    resolved_count = db.get_suggestions_count('resolved')
+
+    if not suggestions:
+        await query.edit_message_text(
+            "💡 <b>Предложения пользователей</b>\n\n"
+            "Пока нет предложений.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")
+            ]])
+        )
+        return ADMIN_MENU
+
+    # Формируем текст
+    text = (
+        f"💡 <b>Предложения пользователей</b>\n\n"
+        f"📊 Статистика:\n"
+        f"🆕 Новых: {new_count}\n"
+        f"👁 Просмотренных: {viewed_count}\n"
+        f"✅ Решенных: {resolved_count}\n\n"
+        f"Всего предложений: {len(suggestions)}\n\n"
+        f"📝 Последние 10 предложений:\n\n"
+    )
+
+    for i, suggestion in enumerate(suggestions[:10], 1):
+        suggestion_dict = dict(suggestion)
+        status_emoji = {"new": "🆕", "viewed": "👁", "resolved": "✅"}.get(suggestion_dict['status'], "")
+        role_emoji = {"worker": "🔧", "client": "👤", "both": "🔧👤"}.get(suggestion_dict['user_role'], "")
+
+        message_preview = suggestion_dict['message'][:50] + "..." if len(suggestion_dict['message']) > 50 else suggestion_dict['message']
+
+        text += (
+            f"{status_emoji} <b>#{suggestion_dict['id']}</b> {role_emoji}\n"
+            f"<code>{message_preview}</code>\n"
+            f"📅 {suggestion_dict['created_at']}\n\n"
+        )
+
+    keyboard = [
+        [InlineKeyboardButton("🆕 Новые", callback_data="admin_suggestions_new")],
+        [InlineKeyboardButton("👁 Просмотренные", callback_data="admin_suggestions_viewed")],
+        [InlineKeyboardButton("✅ Решенные", callback_data="admin_suggestions_resolved")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")],
+    ]
+
+    await query.edit_message_text(
         text,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
