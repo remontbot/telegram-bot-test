@@ -408,9 +408,12 @@ class DBCursor:
         sql = convert_sql(sql)
 
         # Для PostgreSQL INSERT нужно добавить RETURNING id
+        # НО только если это не INSERT с ON CONFLICT (там может не быть колонки id)
+        should_return_id = False
         if USE_POSTGRES and sql.strip().upper().startswith('INSERT'):
-            if 'RETURNING' not in sql.upper():
+            if 'RETURNING' not in sql.upper() and 'ON CONFLICT' not in sql.upper():
                 sql = sql.rstrip().rstrip(';') + ' RETURNING id'
+                should_return_id = True
 
         if params:
             result = self.cursor.execute(sql, params)
@@ -418,7 +421,7 @@ class DBCursor:
             result = self.cursor.execute(sql)
 
         # Получаем lastrowid для PostgreSQL
-        if USE_POSTGRES and sql.strip().upper().startswith('INSERT'):
+        if should_return_id:
             row = self.cursor.fetchone()
             if row:
                 self._lastrowid = row['id'] if isinstance(row, dict) else row[0]
@@ -571,11 +574,36 @@ def init_db():
                 order_id INTEGER NOT NULL,
                 worker_id INTEGER NOT NULL,
                 photo_id TEXT NOT NULL,
-                verified BOOLEAN DEFAULT 0,
+                verified BOOLEAN DEFAULT FALSE,
                 verified_at TEXT,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (order_id) REFERENCES orders(id),
                 FOREIGN KEY (worker_id) REFERENCES workers(id)
+            );
+        """)
+
+        # НОВОЕ: Таблица настроек уведомлений пользователей
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS notification_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER UNIQUE NOT NULL,
+                new_orders_enabled BOOLEAN DEFAULT TRUE,      -- Уведомления о новых заказах (для мастеров)
+                new_bids_enabled BOOLEAN DEFAULT TRUE,        -- Уведомления о новых откликах (для заказчиков)
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+        """)
+
+        # НОВОЕ: Таблица отправленных уведомлений (для предотвращения дубликатов)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sent_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                notification_type TEXT NOT NULL,           -- 'new_orders', 'new_bids'
+                message_id INTEGER,                        -- ID сообщения для удаления
+                sent_at TEXT NOT NULL,
+                cleared_at TEXT,                           -- Когда уведомление было просмотрено/удалено
+                FOREIGN KEY (user_id) REFERENCES users(id)
             );
         """)
 
@@ -711,10 +739,7 @@ def create_worker_profile(user_id, name, phone, city, regions, categories, exper
         validated_photos = validate_photo_list(portfolio_photos, "portfolio_photos")
         portfolio_photos = ",".join(validated_photos)
 
-    # Валидация profile_photo
-    if profile_photo and not validate_file_id(profile_photo):
-        logger.warning(f"⚠️ Невалидный profile_photo: {profile_photo}, сбрасываем в пустую строку")
-        profile_photo = ""
+    # NOTE: profile_photo уже валидируется в handlers.py перед вызовом этой функции
 
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
@@ -789,6 +814,75 @@ def get_worker_profile(user_id):
 def get_worker_by_user_id(user_id):
     """Алиас для get_worker_profile() - возвращает профиль мастера по user_id"""
     return get_worker_profile(user_id)
+
+
+def get_worker_profile_by_id(worker_id):
+    """Возвращает профиль мастера по id записи в таблице workers"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT w.*, u.telegram_id
+            FROM workers w
+            JOIN users u ON w.user_id = u.id
+            WHERE w.id = ?
+        """, (worker_id,))
+        return cursor.fetchone()
+
+
+def get_worker_completed_orders_count(worker_user_id):
+    """
+    Подсчитывает количество завершенных заказов мастера (status='completed').
+
+    Args:
+        worker_user_id: ID пользователя-мастера
+
+    Returns:
+        int: Количество завершенных заказов
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM orders
+            WHERE selected_worker_id = ? AND status = 'completed'
+        """, (worker_user_id,))
+        result = cursor.fetchone()
+        if not result:
+            return 0
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return result.get('count', 0)
+        else:
+            return result[0]
+
+
+def calculate_photo_limit(worker_user_id):
+    """
+    Рассчитывает максимальное количество фото для мастера на основе выполненных заказов.
+
+    Логика:
+    - Начальный лимит: 10 фото (при регистрации)
+    - За каждые 5 завершенных заказов: +5 фото
+    - Максимум: 30 фото
+
+    Args:
+        worker_user_id: ID пользователя-мастера
+
+    Returns:
+        int: Максимальное количество фото (от 10 до 30)
+    """
+    completed_orders = get_worker_completed_orders_count(worker_user_id)
+
+    # Базовый лимит: 10 фото
+    base_limit = 10
+
+    # За каждые 5 заказов добавляем 5 фото
+    bonus_photos = (completed_orders // 5) * 5
+
+    # Итоговый лимит (не больше 30)
+    total_limit = min(base_limit + bonus_photos, 30)
+
+    return total_limit
 
 
 def get_client_profile(user_id):
@@ -943,6 +1037,23 @@ def check_review_exists(order_id, from_user_id):
             return count[0] > 0
 
 
+def update_review_comment(order_id, from_user_id, comment):
+    """Обновляет комментарий существующего отзыва."""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        try:
+            cursor.execute("""
+                UPDATE reviews
+                SET comment = ?
+                WHERE order_id = ? AND from_user_id = ?
+            """, (comment, order_id, from_user_id))
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            print(f"⚠️ Ошибка при обновлении комментария отзыва: {e}")
+            return False
+
+
 def increment_verified_reviews(user_id):
     """
     Увеличивает счетчик проверенных отзывов для мастера.
@@ -988,7 +1099,13 @@ def add_completed_work_photo(order_id, worker_id, photo_id):
                 cursor.execute("SELECT last_insert_rowid()")
 
             result = cursor.fetchone()
-            return result[0] if result else None
+            if not result:
+                return None
+            # PostgreSQL возвращает dict, SQLite может вернуть tuple
+            if isinstance(result, dict):
+                return result.get('lastval') or result.get('last_insert_rowid()')
+            else:
+                return result[0]
         except Exception as e:
             logger.error(f"Ошибка при добавлении фото завершённой работы: {e}")
             return None
@@ -1906,10 +2023,17 @@ def migrate_add_premium_features():
                 """)
 
             # Устанавливаем premium_enabled = false по умолчанию
-            cursor.execute("""
-                INSERT OR IGNORE INTO settings (key, value)
-                VALUES ('premium_enabled', 'false')
-            """)
+            if USE_POSTGRES:
+                cursor.execute("""
+                    INSERT INTO settings (key, value)
+                    VALUES ('premium_enabled', 'false')
+                    ON CONFLICT (key) DO NOTHING
+                """)
+            else:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO settings (key, value)
+                    VALUES ('premium_enabled', 'false')
+                """)
 
             # Добавляем поля для premium в orders
             if USE_POSTGRES:
@@ -2119,7 +2243,7 @@ def migrate_add_transactions():
 
 def migrate_add_notification_settings():
     """
-    Добавляет поле для управления уведомлениями мастеров:
+    Добавляет поле для управления уведомлениями мастеров и клиентов:
     - notifications_enabled (по умолчанию TRUE - уведомления включены)
     """
     with get_db_connection() as conn:
@@ -2127,6 +2251,7 @@ def migrate_add_notification_settings():
 
         try:
             if USE_POSTGRES:
+                # Миграция для workers
                 cursor.execute("""
                     DO $$
                     BEGIN
@@ -2138,12 +2263,33 @@ def migrate_add_notification_settings():
                         END IF;
                     END $$;
                 """)
+
+                # Миграция для clients
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'clients' AND column_name = 'notifications_enabled'
+                        ) THEN
+                            ALTER TABLE clients ADD COLUMN notifications_enabled BOOLEAN DEFAULT TRUE;
+                        END IF;
+                    END $$;
+                """)
             else:
+                # SQLite - миграция для workers
                 cursor.execute("PRAGMA table_info(workers)")
                 worker_columns = [column[1] for column in cursor.fetchall()]
 
                 if 'notifications_enabled' not in worker_columns:
                     cursor.execute("ALTER TABLE workers ADD COLUMN notifications_enabled INTEGER DEFAULT 1")
+
+                # SQLite - миграция для clients
+                cursor.execute("PRAGMA table_info(clients)")
+                client_columns = [column[1] for column in cursor.fetchall()]
+
+                if 'notifications_enabled' not in client_columns:
+                    cursor.execute("ALTER TABLE clients ADD COLUMN notifications_enabled INTEGER DEFAULT 1")
 
             conn.commit()
             print("✅ Notification settings migration completed successfully!")
@@ -2178,7 +2324,12 @@ def migrate_normalize_categories():
                         WHERE table_name = 'worker_categories'
                     )
                 """)
-                table_exists = cursor.fetchone()[0]
+                result = cursor.fetchone()
+                # PostgreSQL возвращает dict, SQLite может вернуть tuple
+                if isinstance(result, dict):
+                    table_exists = bool(result.get('exists', False))
+                else:
+                    table_exists = bool(result[0]) if result else False
             else:
                 cursor.execute("""
                     SELECT name FROM sqlite_master
@@ -2218,8 +2369,13 @@ def migrate_normalize_categories():
 
             migrated_count = 0
             for worker in workers:
-                worker_id = worker[0]
-                categories_str = worker[1]
+                # PostgreSQL возвращает dict, SQLite может вернуть tuple
+                if isinstance(worker, dict):
+                    worker_id = worker['id']
+                    categories_str = worker['categories']
+                else:
+                    worker_id = worker[0]
+                    categories_str = worker[1]
 
                 if not categories_str:
                     continue
@@ -2284,7 +2440,12 @@ def migrate_normalize_order_categories():
 
             # 2. Проверяем есть ли уже данные в order_categories
             cursor.execute("SELECT COUNT(*) FROM order_categories")
-            existing_count = cursor.fetchone()[0] if not USE_POSTGRES else cursor.fetchone()['count']
+            result = cursor.fetchone()
+            # PostgreSQL возвращает dict, SQLite может вернуть tuple
+            if isinstance(result, dict):
+                existing_count = result.get('count', 0)
+            else:
+                existing_count = result[0] if result else 0
 
             if existing_count > 0:
                 logger.info(f"✅ Категории заказов уже мигрированы ({existing_count} записей)")
@@ -2296,7 +2457,8 @@ def migrate_normalize_order_categories():
 
             migrated_count = 0
             for order in orders:
-                if USE_POSTGRES:
+                # PostgreSQL возвращает dict, SQLite может вернуть tuple
+                if isinstance(order, dict):
                     order_id = order['id']
                     categories_str = order['category']
                 else:
@@ -2589,7 +2751,7 @@ def mark_messages_as_read(chat_id, user_id):
         cursor = get_cursor(conn)
         cursor.execute("""
             UPDATE messages
-            SET is_read = 1
+            SET is_read = TRUE
             WHERE chat_id = ? AND sender_user_id != ?
         """, (chat_id, user_id))
         conn.commit()
@@ -2601,9 +2763,16 @@ def get_unread_messages_count(chat_id, user_id):
         cursor = get_cursor(conn)
         cursor.execute("""
             SELECT COUNT(*) FROM messages
-            WHERE chat_id = ? AND sender_user_id != ? AND is_read = 0
+            WHERE chat_id = ? AND sender_user_id != ? AND is_read = FALSE
         """, (chat_id, user_id))
-        return cursor.fetchone()[0]
+        result = cursor.fetchone()
+        if not result:
+            return 0
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return result.get('count', 0)
+        else:
+            return result[0]
 
 
 def confirm_worker_in_chat(chat_id):
@@ -2614,7 +2783,7 @@ def confirm_worker_in_chat(chat_id):
         cursor = get_cursor(conn)
         cursor.execute("""
             UPDATE chats
-            SET worker_confirmed = 1, worker_confirmed_at = ?
+            SET worker_confirmed = TRUE, worker_confirmed_at = ?
             WHERE id = ?
         """, (datetime.now().isoformat(), chat_id))
         conn.commit()
@@ -2626,7 +2795,13 @@ def is_worker_confirmed(chat_id):
         cursor = get_cursor(conn)
         cursor.execute("SELECT worker_confirmed FROM chats WHERE id = ?", (chat_id,))
         result = cursor.fetchone()
-        return bool(result[0]) if result else False
+        if not result:
+            return False
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return bool(result.get('worker_confirmed', False))
+        else:
+            return bool(result[0])
 
 
 # === TRANSACTION HELPERS ===
@@ -2687,7 +2862,7 @@ def get_expired_chats(hours=24):
 
         cursor.execute("""
             SELECT * FROM chats
-            WHERE worker_confirmed = 0
+            WHERE worker_confirmed = FALSE
             AND created_at < ?
         """, (expiration_time.isoformat(),))
 
@@ -2729,8 +2904,12 @@ def are_notifications_enabled(user_id):
         if not result:
             return True
 
-        # SQLite хранит boolean как INTEGER (1 или 0), PostgreSQL как BOOLEAN
-        return bool(result[0]) if result[0] is not None else True
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return bool(result.get('notifications_enabled', True))
+        else:
+            # SQLite хранит boolean как INTEGER (1 или 0)
+            return bool(result[0]) if result[0] is not None else True
 
 
 def set_notifications_enabled(user_id, enabled):
@@ -2747,14 +2926,89 @@ def set_notifications_enabled(user_id, enabled):
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
-        # Для совместимости с SQLite и PostgreSQL
-        value = 1 if enabled else 0 if not USE_POSTGRES else enabled
+        if USE_POSTGRES:
+            # PostgreSQL: используем TRUE/FALSE напрямую
+            value_str = 'TRUE' if enabled else 'FALSE'
+            cursor.execute(f"""
+                UPDATE workers
+                SET notifications_enabled = {value_str}
+                WHERE user_id = %s
+            """, (user_id,))
+        else:
+            # SQLite: используем 1/0
+            value = 1 if enabled else 0
+            cursor.execute("""
+                UPDATE workers
+                SET notifications_enabled = ?
+                WHERE user_id = ?
+            """, (value, user_id))
 
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def are_client_notifications_enabled(user_id):
+    """
+    Проверяет включены ли уведомления для клиента.
+
+    Args:
+        user_id: ID пользователя в таблице users
+
+    Returns:
+        True если уведомления включены или настройка не найдена (по умолчанию включены)
+        False если уведомления отключены
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
         cursor.execute("""
-            UPDATE workers
-            SET notifications_enabled = ?
+            SELECT notifications_enabled
+            FROM clients
             WHERE user_id = ?
-        """, (value, user_id))
+        """, (user_id,))
+        result = cursor.fetchone()
+
+        # Если запись не найдена или поле не существует - по умолчанию включены
+        if not result:
+            return True
+
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return bool(result.get('notifications_enabled', True))
+        else:
+            # SQLite хранит boolean как INTEGER (1 или 0)
+            return bool(result[0]) if result[0] is not None else True
+
+
+def set_client_notifications_enabled(user_id, enabled):
+    """
+    Включает или отключает уведомления для клиента.
+
+    Args:
+        user_id: ID пользователя в таблице users
+        enabled: True для включения, False для отключения
+
+    Returns:
+        True если обновление успешно, False если клиент не найден
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        if USE_POSTGRES:
+            # PostgreSQL: используем TRUE/FALSE напрямую
+            value_str = 'TRUE' if enabled else 'FALSE'
+            cursor.execute(f"""
+                UPDATE clients
+                SET notifications_enabled = {value_str}
+                WHERE user_id = %s
+            """, (user_id,))
+        else:
+            # SQLite: используем 1/0
+            value = 1 if enabled else 0
+            cursor.execute("""
+                UPDATE clients
+                SET notifications_enabled = ?
+                WHERE user_id = ?
+            """, (value, user_id))
 
         conn.commit()
         return cursor.rowcount > 0
@@ -2768,7 +3022,13 @@ def is_premium_enabled():
         cursor = get_cursor(conn)
         cursor.execute("SELECT value FROM settings WHERE key = 'premium_enabled'")
         result = cursor.fetchone()
-        return result and result[0] == 'true'
+        if not result:
+            return False
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return result.get('value') == 'true'
+        else:
+            return result[0] == 'true'
 
 
 def set_premium_enabled(enabled):
@@ -2776,10 +3036,19 @@ def set_premium_enabled(enabled):
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
         value = 'true' if enabled else 'false'
-        cursor.execute("""
-            INSERT OR REPLACE INTO settings (key, value, updated_at)
-            VALUES ('premium_enabled', ?, datetime('now'))
-        """, (value,))
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO settings (key, value, updated_at)
+                VALUES ('premium_enabled', %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (key) DO UPDATE SET
+                    value = EXCLUDED.value,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (value,))
+        else:
+            cursor.execute("""
+                INSERT OR REPLACE INTO settings (key, value, updated_at)
+                VALUES ('premium_enabled', ?, datetime('now'))
+            """, (value,))
         conn.commit()
 
 
@@ -2789,17 +3058,32 @@ def get_setting(key, default=None):
         cursor = get_cursor(conn)
         cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
         result = cursor.fetchone()
-        return result[0] if result else default
+        if not result:
+            return default
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return result.get('value', default)
+        else:
+            return result[0]
 
 
 def set_setting(key, value):
     """Устанавливает значение настройки"""
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
-        cursor.execute("""
-            INSERT OR REPLACE INTO settings (key, value, updated_at)
-            VALUES (?, ?, datetime('now'))
-        """, (key, value))
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO settings (key, value, updated_at)
+                VALUES (%s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (key) DO UPDATE SET
+                    value = EXCLUDED.value,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (key, value))
+        else:
+            cursor.execute("""
+                INSERT OR REPLACE INTO settings (key, value, updated_at)
+                VALUES (?, ?, datetime('now'))
+            """, (key, value))
         conn.commit()
 
 
@@ -2814,7 +3098,11 @@ def is_user_banned(telegram_id):
         """, (telegram_id,))
         result = cursor.fetchone()
         if result:
-            return bool(result[0])
+            # PostgreSQL возвращает dict, SQLite может вернуть tuple
+            if isinstance(result, dict):
+                return bool(result.get('is_banned', False))
+            else:
+                return bool(result[0])
         return False
 
 
@@ -2826,7 +3114,7 @@ def ban_user(telegram_id, reason, banned_by):
         cursor = get_cursor(conn)
         cursor.execute("""
             UPDATE users
-            SET is_banned = 1,
+            SET is_banned = TRUE,
                 ban_reason = ?,
                 banned_at = ?,
                 banned_by = ?
@@ -2842,7 +3130,7 @@ def unban_user(telegram_id):
         cursor = get_cursor(conn)
         cursor.execute("""
             UPDATE users
-            SET is_banned = 0,
+            SET is_banned = FALSE,
                 ban_reason = NULL,
                 banned_at = NULL,
                 banned_by = NULL
@@ -2859,60 +3147,295 @@ def get_banned_users():
         cursor.execute("""
             SELECT telegram_id, ban_reason, banned_at, banned_by
             FROM users
-            WHERE is_banned = 1
+            WHERE is_banned = TRUE
             ORDER BY banned_at DESC
         """)
         return cursor.fetchall()
 
 
+def search_users(query, limit=20):
+    """Ищет пользователей по telegram_id, имени или username"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        # Ищем по telegram_id (точное совпадение) или имени/username (LIKE)
+        if USE_POSTGRES:
+            cursor.execute("""
+                SELECT u.*,
+                       w.id as worker_id,
+                       c.id as client_id
+                FROM users u
+                LEFT JOIN workers w ON u.id = w.user_id
+                LEFT JOIN clients c ON u.id = c.user_id
+                WHERE u.telegram_id::text LIKE %s
+                   OR LOWER(u.full_name) LIKE LOWER(%s)
+                   OR LOWER(u.username) LIKE LOWER(%s)
+                ORDER BY u.created_at DESC
+                LIMIT %s
+            """, (f'%{query}%', f'%{query}%', f'%{query}%', limit))
+        else:
+            cursor.execute("""
+                SELECT u.*,
+                       w.id as worker_id,
+                       c.id as client_id
+                FROM users u
+                LEFT JOIN workers w ON u.id = w.user_id
+                LEFT JOIN clients c ON u.id = c.user_id
+                WHERE CAST(u.telegram_id AS TEXT) LIKE ?
+                   OR LOWER(u.full_name) LIKE LOWER(?)
+                   OR LOWER(u.username) LIKE LOWER(?)
+                ORDER BY u.created_at DESC
+                LIMIT ?
+            """, (f'%{query}%', f'%{query}%', f'%{query}%', limit))
+        return cursor.fetchall()
+
+
+def get_users_filtered(filter_type='all', page=1, per_page=20):
+    """
+    Получает пользователей с фильтром
+    filter_type: 'all', 'workers', 'clients', 'banned', 'dual'
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        offset = (page - 1) * per_page
+
+        if filter_type == 'banned':
+            cursor.execute("""
+                SELECT u.*, w.id as worker_id, c.id as client_id
+                FROM users u
+                LEFT JOIN workers w ON u.id = w.user_id
+                LEFT JOIN clients c ON u.id = c.user_id
+                WHERE u.is_banned = TRUE
+                ORDER BY u.created_at DESC
+                LIMIT ? OFFSET ?
+            """, (per_page, offset))
+        elif filter_type == 'workers':
+            cursor.execute("""
+                SELECT u.*, w.id as worker_id, c.id as client_id
+                FROM users u
+                INNER JOIN workers w ON u.id = w.user_id
+                LEFT JOIN clients c ON u.id = c.user_id
+                WHERE u.is_banned = FALSE
+                ORDER BY u.created_at DESC
+                LIMIT ? OFFSET ?
+            """, (per_page, offset))
+        elif filter_type == 'clients':
+            cursor.execute("""
+                SELECT u.*, w.id as worker_id, c.id as client_id
+                FROM users u
+                LEFT JOIN workers w ON u.id = w.user_id
+                INNER JOIN clients c ON u.id = c.user_id
+                WHERE u.is_banned = FALSE
+                ORDER BY u.created_at DESC
+                LIMIT ? OFFSET ?
+            """, (per_page, offset))
+        elif filter_type == 'dual':
+            cursor.execute("""
+                SELECT u.*, w.id as worker_id, c.id as client_id
+                FROM users u
+                INNER JOIN workers w ON u.id = w.user_id
+                INNER JOIN clients c ON u.id = c.user_id
+                WHERE u.is_banned = FALSE
+                ORDER BY u.created_at DESC
+                LIMIT ? OFFSET ?
+            """, (per_page, offset))
+        else:  # 'all'
+            cursor.execute("""
+                SELECT u.*, w.id as worker_id, c.id as client_id
+                FROM users u
+                LEFT JOIN workers w ON u.id = w.user_id
+                LEFT JOIN clients c ON u.id = c.user_id
+                ORDER BY u.created_at DESC
+                LIMIT ? OFFSET ?
+            """, (per_page, offset))
+
+        return cursor.fetchall()
+
+
+def get_user_details_for_admin(telegram_id):
+    """Получает подробную информацию о пользователе для админ-панели"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Основная информация
+        user = get_user(telegram_id)
+        if not user:
+            return None
+
+        user_dict = dict(user)
+        details = {
+            'user': user_dict,
+            'worker_profile': None,
+            'client_profile': None,
+            'stats': {}
+        }
+
+        # Профили
+        worker = get_worker_profile_by_user_id(user_dict['id'])
+        if worker:
+            details['worker_profile'] = dict(worker)
+
+        client = get_client_profile_by_user_id(user_dict['id'])
+        if client:
+            details['client_profile'] = dict(client)
+
+        # Статистика как мастера
+        if worker:
+            worker_dict = dict(worker)
+            cursor.execute("""
+                SELECT COUNT(*) FROM bids WHERE worker_id = ?
+            """, (worker_dict['id'],))
+            details['stats']['total_bids'] = _get_count_from_result(cursor.fetchone())
+
+            cursor.execute("""
+                SELECT COUNT(*) FROM bids
+                WHERE worker_id = ? AND status = 'selected'
+            """, (worker_dict['id'],))
+            details['stats']['accepted_bids'] = _get_count_from_result(cursor.fetchone())
+
+            cursor.execute("""
+                SELECT AVG(rating) FROM reviews WHERE to_user_id = ?
+            """, (user_dict['id'],))
+            result = cursor.fetchone()
+            if result:
+                avg_rating = result['avg'] if isinstance(result, dict) else result[0]
+                details['stats']['worker_rating'] = float(avg_rating) if avg_rating else 0.0
+            else:
+                details['stats']['worker_rating'] = 0.0
+
+        # Статистика как клиента
+        if client:
+            client_dict = dict(client)
+            cursor.execute("""
+                SELECT COUNT(*) FROM orders WHERE client_id = ?
+            """, (client_dict['id'],))
+            details['stats']['total_orders'] = _get_count_from_result(cursor.fetchone())
+
+            cursor.execute("""
+                SELECT COUNT(*) FROM orders
+                WHERE client_id = ? AND status = 'completed'
+            """, (client_dict['id'],))
+            details['stats']['completed_orders'] = _get_count_from_result(cursor.fetchone())
+
+        return details
+
+
 # === ANALYTICS HELPERS ===
 
+def _get_count_from_result(result):
+    """Helper для извлечения значения COUNT(*) из результата fetchone()"""
+    if not result:
+        return 0
+    # PostgreSQL возвращает dict, SQLite может вернуть tuple
+    if isinstance(result, dict):
+        return result.get('count', 0)
+    else:
+        return result[0]
+
 def get_analytics_stats():
-    """Получает основную статистику для аналитики"""
+    """Получает подробную статистику для админ-панели"""
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
         stats = {}
 
-        # Всего пользователей
+        # === ПОЛЬЗОВАТЕЛИ ===
         cursor.execute("SELECT COUNT(*) FROM users")
-        stats['total_users'] = cursor.fetchone()[0]
+        stats['total_users'] = _get_count_from_result(cursor.fetchone())
 
-        # Забаненных пользователей
-        cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
-        stats['banned_users'] = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = TRUE")
+        stats['banned_users'] = _get_count_from_result(cursor.fetchone())
 
-        # Мастеров
         cursor.execute("SELECT COUNT(*) FROM workers")
-        stats['total_workers'] = cursor.fetchone()[0]
+        stats['total_workers'] = _get_count_from_result(cursor.fetchone())
 
-        # Клиентов
         cursor.execute("SELECT COUNT(*) FROM clients")
-        stats['total_clients'] = cursor.fetchone()[0]
+        stats['total_clients'] = _get_count_from_result(cursor.fetchone())
 
-        # Заказов (всего)
+        # Пользователи с двумя профилями (и мастер и клиент)
+        cursor.execute("""
+            SELECT COUNT(DISTINCT w.user_id)
+            FROM workers w
+            INNER JOIN clients c ON w.user_id = c.user_id
+        """)
+        stats['dual_profile_users'] = _get_count_from_result(cursor.fetchone())
+
+        # === ЗАКАЗЫ ===
         cursor.execute("SELECT COUNT(*) FROM orders")
-        stats['total_orders'] = cursor.fetchone()[0]
+        stats['total_orders'] = _get_count_from_result(cursor.fetchone())
 
-        # Активных заказов
         cursor.execute("SELECT COUNT(*) FROM orders WHERE status = 'open'")
-        stats['active_orders'] = cursor.fetchone()[0]
+        stats['open_orders'] = _get_count_from_result(cursor.fetchone())
 
-        # Завершённых заказов
-        cursor.execute("SELECT COUNT(*) FROM orders WHERE status = 'completed'")
-        stats['completed_orders'] = cursor.fetchone()[0]
+        cursor.execute("""
+            SELECT COUNT(*) FROM orders
+            WHERE status IN ('master_selected', 'contact_shared', 'master_confirmed', 'waiting_master_confirmation')
+        """)
+        stats['active_orders'] = _get_count_from_result(cursor.fetchone())
 
-        # Откликов (всего)
+        cursor.execute("SELECT COUNT(*) FROM orders WHERE status IN ('done', 'completed')")
+        stats['completed_orders'] = _get_count_from_result(cursor.fetchone())
+
+        cursor.execute("SELECT COUNT(*) FROM orders WHERE status = 'canceled'")
+        stats['canceled_orders'] = _get_count_from_result(cursor.fetchone())
+
+        # === ОТКЛИКИ ===
         cursor.execute("SELECT COUNT(*) FROM bids")
-        stats['total_bids'] = cursor.fetchone()[0]
+        stats['total_bids'] = _get_count_from_result(cursor.fetchone())
 
-        # Активных откликов
-        cursor.execute("SELECT COUNT(*) FROM bids WHERE status = 'active'")
-        stats['active_bids'] = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM bids WHERE status = 'pending'")
+        stats['pending_bids'] = _get_count_from_result(cursor.fetchone())
 
-        # Отзывов
+        cursor.execute("SELECT COUNT(*) FROM bids WHERE status = 'selected'")
+        stats['selected_bids'] = _get_count_from_result(cursor.fetchone())
+
+        cursor.execute("SELECT COUNT(*) FROM bids WHERE status = 'rejected'")
+        stats['rejected_bids'] = _get_count_from_result(cursor.fetchone())
+
+        # === ЧАТЫ И СООБЩЕНИЯ ===
+        cursor.execute("SELECT COUNT(*) FROM chats")
+        stats['total_chats'] = _get_count_from_result(cursor.fetchone())
+
+        cursor.execute("SELECT COUNT(*) FROM messages")
+        stats['total_messages'] = _get_count_from_result(cursor.fetchone())
+
+        # === ОТЗЫВЫ ===
         cursor.execute("SELECT COUNT(*) FROM reviews")
-        stats['total_reviews'] = cursor.fetchone()[0]
+        stats['total_reviews'] = _get_count_from_result(cursor.fetchone())
+
+        cursor.execute("SELECT AVG(rating) FROM reviews")
+        result = cursor.fetchone()
+        if result:
+            avg_rating = result['avg'] if isinstance(result, dict) else result[0]
+            stats['average_rating'] = float(avg_rating) if avg_rating else 0.0
+        else:
+            stats['average_rating'] = 0.0
+
+        # === АКТИВНОСТЬ ===
+        # Заказов за последние 24 часа
+        if USE_POSTGRES:
+            cursor.execute("""
+                SELECT COUNT(*) FROM orders
+                WHERE created_at >= NOW() - INTERVAL '1 day'
+            """)
+        else:
+            cursor.execute("""
+                SELECT COUNT(*) FROM orders
+                WHERE created_at >= datetime('now', '-1 day')
+            """)
+        stats['orders_last_24h'] = _get_count_from_result(cursor.fetchone())
+
+        # Новых пользователей за 7 дней
+        if USE_POSTGRES:
+            cursor.execute("""
+                SELECT COUNT(*) FROM users
+                WHERE created_at >= NOW() - INTERVAL '7 days'
+            """)
+        else:
+            cursor.execute("""
+                SELECT COUNT(*) FROM users
+                WHERE created_at >= datetime('now', '-7 days')
+            """)
+        stats['users_last_7days'] = _get_count_from_result(cursor.fetchone())
 
         # Premium статус
         stats['premium_enabled'] = is_premium_enabled()
@@ -3055,7 +3578,7 @@ def get_orders_by_category(category, page=1, per_page=10):
             WHERE o.status = 'open'
             AND oc.category = ?
         """, (category,))
-        total_count = cursor.fetchone()[0] if not USE_POSTGRES else cursor.fetchone()['count']
+        total_count = _get_count_from_result(cursor.fetchone())
 
         # Получаем заказы для текущей страницы
         offset = (page - 1) * per_page
@@ -3148,7 +3671,7 @@ def get_client_orders(client_id, page=1, per_page=10):
 
         # Получаем общее количество заказов
         cursor.execute("SELECT COUNT(*) FROM orders WHERE client_id = ?", (client_id,))
-        total_count = cursor.fetchone()[0] if not USE_POSTGRES else cursor.fetchone()['count']
+        total_count = _get_count_from_result(cursor.fetchone())
 
         # Получаем заказы для текущей страницы
         offset = (page - 1) * per_page
@@ -3452,7 +3975,14 @@ def check_worker_bid_exists(order_id, worker_id):
             WHERE order_id = ? AND worker_id = ?
         """, (order_id, worker_id))
 
-        return cursor.fetchone()[0] > 0
+        result = cursor.fetchone()
+        if not result:
+            return False
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return result.get('count', 0) > 0
+        else:
+            return result[0] > 0
 
 
 def get_bid_by_id(bid_id):
@@ -3516,7 +4046,14 @@ def get_bids_count_for_order(order_id):
             WHERE order_id = ? AND status = 'active'
         """, (order_id,))
 
-        return cursor.fetchone()[0]
+        result = cursor.fetchone()
+        if not result:
+            return 0
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return result.get('count', 0)
+        else:
+            return result[0]
 
 
 def get_bids_for_worker(worker_id):
@@ -3574,7 +4111,13 @@ def select_bid(bid_id):
             logger.warning(f"Отклик {bid_id} не найден")
             return False
 
-        order_id, worker_id, order_status = result[0], result[1], result[2]
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            order_id = result['order_id']
+            worker_id = result['worker_id']
+            order_status = result['status']
+        else:
+            order_id, worker_id, order_status = result[0], result[1], result[2]
 
         # ЗАЩИТА ОТ RACE CONDITION: проверяем что заказ еще не был выбран
         if order_status not in ('open', 'waiting_master_confirmation'):
@@ -3979,8 +4522,20 @@ def migrate_add_ready_in_days_and_notifications():
                 )
             """)
 
+            # 3. Создаем таблицу client_notifications
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS client_notifications (
+                    user_id INTEGER PRIMARY KEY,
+                    notification_message_id INTEGER,
+                    notification_chat_id INTEGER,
+                    last_update_timestamp INTEGER,
+                    unread_bids_count INTEGER DEFAULT 0,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """)
+
             conn.commit()
-            print("✅ Migration completed: added ready_in_days and worker_notifications!")
+            print("✅ Migration completed: added ready_in_days, worker_notifications and client_notifications!")
 
         except Exception as e:
             print(f"⚠️  Error in migrate_add_ready_in_days_and_notifications: {e}")
@@ -3993,16 +4548,28 @@ def migrate_add_ready_in_days_and_notifications():
 def save_worker_notification(worker_user_id, message_id, chat_id, orders_count=0):
     """Сохраняет или обновляет ID сообщения с уведомлением для мастера"""
     from datetime import datetime
-    
+
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
         timestamp = int(datetime.now().timestamp())
-        
-        cursor.execute("""
-            INSERT OR REPLACE INTO worker_notifications 
-            (user_id, notification_message_id, notification_chat_id, last_update_timestamp, available_orders_count)
-            VALUES (?, ?, ?, ?, ?)
-        """, (worker_user_id, message_id, chat_id, timestamp, orders_count))
+
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO worker_notifications
+                (user_id, notification_message_id, notification_chat_id, last_update_timestamp, available_orders_count)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    notification_message_id = EXCLUDED.notification_message_id,
+                    notification_chat_id = EXCLUDED.notification_chat_id,
+                    last_update_timestamp = EXCLUDED.last_update_timestamp,
+                    available_orders_count = EXCLUDED.available_orders_count
+            """, (worker_user_id, message_id, chat_id, timestamp, orders_count))
+        else:
+            cursor.execute("""
+                INSERT OR REPLACE INTO worker_notifications
+                (user_id, notification_message_id, notification_chat_id, last_update_timestamp, available_orders_count)
+                VALUES (?, ?, ?, ?, ?)
+            """, (worker_user_id, message_id, chat_id, timestamp, orders_count))
         conn.commit()
 
 
@@ -4024,6 +4591,86 @@ def delete_worker_notification(worker_user_id):
         conn.commit()
 
 
+# === CLIENT NOTIFICATIONS HELPERS ===
+
+def save_client_notification(client_user_id, message_id, chat_id, bids_count=0):
+    """Сохраняет или обновляет ID сообщения с уведомлением для клиента"""
+    from datetime import datetime
+
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        timestamp = int(datetime.now().timestamp())
+
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO client_notifications
+                (user_id, notification_message_id, notification_chat_id, last_update_timestamp, unread_bids_count)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    notification_message_id = EXCLUDED.notification_message_id,
+                    notification_chat_id = EXCLUDED.notification_chat_id,
+                    last_update_timestamp = EXCLUDED.last_update_timestamp,
+                    unread_bids_count = EXCLUDED.unread_bids_count
+            """, (client_user_id, message_id, chat_id, timestamp, bids_count))
+        else:
+            cursor.execute("""
+                INSERT OR REPLACE INTO client_notifications
+                (user_id, notification_message_id, notification_chat_id, last_update_timestamp, unread_bids_count)
+                VALUES (?, ?, ?, ?, ?)
+            """, (client_user_id, message_id, chat_id, timestamp, bids_count))
+        conn.commit()
+
+
+def get_client_notification(client_user_id):
+    """Получает сохраненное уведомление клиента"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT * FROM client_notifications WHERE user_id = ?
+        """, (client_user_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def delete_client_notification(client_user_id):
+    """Удаляет сохраненное уведомление (когда клиент просмотрел все отклики)"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("DELETE FROM client_notifications WHERE user_id = ?", (client_user_id,))
+        conn.commit()
+
+
+def get_orders_with_unread_bids(client_user_id):
+    """
+    Получает все заказы клиента с количеством откликов.
+
+    Args:
+        client_user_id: ID пользователя-клиента
+
+    Returns:
+        list: Список заказов с полем bid_count
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT
+                o.id,
+                o.city,
+                o.category,
+                o.description,
+                o.status,
+                COUNT(b.id) as bid_count
+            FROM orders o
+            LEFT JOIN bids b ON o.id = b.order_id AND b.status = 'active'
+            WHERE o.client_id = (SELECT id FROM clients WHERE user_id = ?)
+                AND o.status = 'open'
+            GROUP BY o.id
+            HAVING bid_count > 0
+        """, (client_user_id,))
+
+        return [dict(row) for row in cursor.fetchall()]
+
+
 def count_available_orders_for_worker(worker_user_id):
     """
     ИСПРАВЛЕНО: Подсчитывает количество доступных заказов для мастера.
@@ -4042,7 +4689,11 @@ def count_available_orders_for_worker(worker_user_id):
         if not worker:
             return 0
 
-        worker_id = worker[0]
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(worker, dict):
+            worker_id = worker['id']
+        else:
+            worker_id = worker[0]
 
         # Получаем список городов мастера
         cursor.execute("SELECT city FROM worker_cities WHERE worker_id = ?", (worker_id,))
@@ -4051,7 +4702,11 @@ def count_available_orders_for_worker(worker_user_id):
         if not cities_result:
             return 0
 
-        cities = [row[0] for row in cities_result]
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if cities_result and isinstance(cities_result[0], dict):
+            cities = [row['city'] for row in cities_result]
+        else:
+            cities = [row[0] for row in cities_result]
 
         # ИСПРАВЛЕНО: Используем нормализованные таблицы вместо LIKE
         # Ищем заказы через JOIN с order_categories и worker_categories
@@ -4073,7 +4728,13 @@ def count_available_orders_for_worker(worker_user_id):
         cursor.execute(query, (*cities, worker_id, worker_id))
 
         result = cursor.fetchone()
-        count = result[0] if result else 0
+        if not result:
+            return 0
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            count = result.get('count', 0)
+        else:
+            count = result[0]
 
         return count
 
@@ -4134,7 +4795,7 @@ def migrate_add_admin_and_ads():
                     button_url TEXT,
                     target_audience TEXT NOT NULL,
                     placement TEXT NOT NULL,
-                    active BOOLEAN DEFAULT 1,
+                    active BOOLEAN DEFAULT TRUE,
                     start_date TEXT,
                     end_date TEXT,
                     max_views_per_user_per_day INTEGER DEFAULT 1,
@@ -4166,7 +4827,7 @@ def migrate_add_admin_and_ads():
                     ad_id INTEGER NOT NULL,
                     user_id INTEGER NOT NULL,
                     viewed_at TEXT NOT NULL,
-                    clicked BOOLEAN DEFAULT 0,
+                    clicked BOOLEAN DEFAULT FALSE,
                     placement TEXT,
                     FOREIGN KEY (ad_id) REFERENCES ads(id) ON DELETE CASCADE,
                     FOREIGN KEY (user_id) REFERENCES users(id)
@@ -4210,11 +4871,24 @@ def migrate_add_worker_cities():
             workers = cursor.fetchall()
 
             for worker in workers:
-                worker_id, city = worker
-                cursor.execute("""
-                    INSERT OR IGNORE INTO worker_cities (worker_id, city)
-                    VALUES (?, ?)
-                """, (worker_id, city))
+                # PostgreSQL возвращает dict, SQLite возвращает tuple
+                if isinstance(worker, dict):
+                    worker_id = worker['id']
+                    city = worker['city']
+                else:
+                    worker_id, city = worker
+
+                if USE_POSTGRES:
+                    cursor.execute("""
+                        INSERT INTO worker_cities (worker_id, city)
+                        VALUES (%s, %s)
+                        ON CONFLICT (worker_id, city) DO NOTHING
+                    """, (worker_id, city))
+                else:
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO worker_cities (worker_id, city)
+                        VALUES (?, ?)
+                    """, (worker_id, city))
 
             logger.info(f"✅ Мигрировано {len(workers)} городов из поля workers.city")
 
@@ -4232,10 +4906,17 @@ def add_admin_user(telegram_id, role='admin', added_by=None):
         cursor = get_cursor(conn)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        cursor.execute("""
-            INSERT OR IGNORE INTO admin_users (telegram_id, role, added_at, added_by)
-            VALUES (?, ?, ?, ?)
-        """, (telegram_id, role, now, added_by))
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO admin_users (telegram_id, role, added_at, added_by)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (telegram_id) DO NOTHING
+            """, (telegram_id, role, now, added_by))
+        else:
+            cursor.execute("""
+                INSERT OR IGNORE INTO admin_users (telegram_id, role, added_at, added_by)
+                VALUES (?, ?, ?, ?)
+            """, (telegram_id, role, now, added_by))
 
         conn.commit()
         logger.info(f"✅ Админ добавлен: telegram_id={telegram_id}, role={role}")
@@ -4247,7 +4928,14 @@ def is_admin(telegram_id):
         cursor = get_cursor(conn)
         cursor.execute("SELECT COUNT(*) FROM admin_users WHERE telegram_id = ?", (telegram_id,))
         result = cursor.fetchone()
-        return result[0] > 0 if result else False
+        if not result:
+            return False
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            count = result.get('count', 0)
+            return count > 0
+        else:
+            return result[0] > 0
 
 
 def create_broadcast(message_text, target_audience, photo_file_id, created_by):
@@ -4390,16 +5078,164 @@ def get_all_users():
         return cursor.fetchall()
 
 
+def get_all_orders_for_export():
+    """Получает все заказы для экспорта"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT * FROM orders ORDER BY created_at DESC")
+        return cursor.fetchall()
+
+
+def get_all_bids_for_export():
+    """Получает все отклики для экспорта"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT * FROM bids ORDER BY created_at DESC")
+        return cursor.fetchall()
+
+
+def get_all_reviews_for_export():
+    """Получает все отзывы для экспорта"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT * FROM reviews ORDER BY created_at DESC")
+        return cursor.fetchall()
+
+
+def get_category_reports():
+    """
+    Получает подробные отчеты по категориям работ, городам и специализациям
+    для аналитики в админ-панели
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        reports = {}
+
+        # === ТОП КАТЕГОРИЙ ЗАКАЗОВ ===
+        cursor.execute("""
+            SELECT category, COUNT(*) as count
+            FROM orders
+            GROUP BY category
+            ORDER BY count DESC
+            LIMIT 10
+        """)
+        reports['top_categories'] = cursor.fetchall()
+
+        # === ТОП ГОРОДОВ ПО ЗАКАЗАМ ===
+        cursor.execute("""
+            SELECT city, COUNT(*) as count
+            FROM orders
+            WHERE city IS NOT NULL AND city != ''
+            GROUP BY city
+            ORDER BY count DESC
+            LIMIT 10
+        """)
+        reports['top_cities_orders'] = cursor.fetchall()
+
+        # === ТОП СПЕЦИАЛИЗАЦИЙ МАСТЕРОВ ===
+        cursor.execute("""
+            SELECT specialization, COUNT(*) as count
+            FROM workers
+            WHERE specialization IS NOT NULL AND specialization != ''
+            GROUP BY specialization
+            ORDER BY count DESC
+            LIMIT 10
+        """)
+        reports['top_specializations'] = cursor.fetchall()
+
+        # === СТАТИСТИКА ПО СТАТУСАМ ЗАКАЗОВ В КАТЕГОРИЯХ ===
+        cursor.execute("""
+            SELECT
+                category,
+                SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) as open_count,
+                SUM(CASE WHEN status IN ('master_selected', 'contact_shared', 'master_confirmed') THEN 1 ELSE 0 END) as active_count,
+                SUM(CASE WHEN status IN ('done', 'completed') THEN 1 ELSE 0 END) as completed_count,
+                COUNT(*) as total_count
+            FROM orders
+            GROUP BY category
+            ORDER BY total_count DESC
+            LIMIT 15
+        """)
+        reports['category_statuses'] = cursor.fetchall()
+
+        # === АКТИВНОСТЬ ПО ГОРОДАМ (заказы + мастера) ===
+        cursor.execute("""
+            SELECT
+                city,
+                COUNT(*) as order_count
+            FROM orders
+            WHERE city IS NOT NULL AND city != ''
+            GROUP BY city
+            ORDER BY order_count DESC
+            LIMIT 10
+        """)
+        city_orders = {dict(row)['city']: dict(row)['order_count'] for row in cursor.fetchall()}
+
+        # Получаем количество мастеров по городам
+        cursor.execute("""
+            SELECT
+                wc.city,
+                COUNT(DISTINCT wc.worker_id) as worker_count
+            FROM worker_cities wc
+            GROUP BY wc.city
+            ORDER BY worker_count DESC
+            LIMIT 15
+        """)
+        city_workers = {dict(row)['city']: dict(row)['worker_count'] for row in cursor.fetchall()}
+
+        # Объединяем данные
+        all_cities = set(city_orders.keys()) | set(city_workers.keys())
+        city_activity = []
+        for city in all_cities:
+            city_activity.append({
+                'city': city,
+                'orders': city_orders.get(city, 0),
+                'workers': city_workers.get(city, 0),
+                'total': city_orders.get(city, 0) + city_workers.get(city, 0)
+            })
+
+        # Сортируем по общей активности
+        city_activity.sort(key=lambda x: x['total'], reverse=True)
+        reports['city_activity'] = city_activity[:10]
+
+        # === СРЕДНЯЯ ЦЕНА ПО КАТЕГОРИЯМ (из откликов) ===
+        cursor.execute("""
+            SELECT
+                o.category,
+                AVG(CAST(b.proposed_price AS REAL)) as avg_price,
+                COUNT(b.id) as bid_count
+            FROM bids b
+            INNER JOIN orders o ON b.order_id = o.id
+            WHERE b.proposed_price IS NOT NULL
+              AND b.proposed_price != ''
+              AND b.currency = 'BYN'
+            GROUP BY o.category
+            HAVING bid_count >= 3
+            ORDER BY avg_price DESC
+            LIMIT 10
+        """)
+        reports['avg_prices_by_category'] = cursor.fetchall()
+
+        return reports
+
+
 # ------- ФУНКЦИИ ДЛЯ РАБОТЫ С ГОРОДАМИ МАСТЕРА -------
 
 def add_worker_city(worker_id, city):
     """Добавляет город к мастеру"""
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
-        cursor.execute("""
-            INSERT OR IGNORE INTO worker_cities (worker_id, city)
-            VALUES (?, ?)
-        """, (worker_id, city))
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO worker_cities (worker_id, city)
+                VALUES (%s, %s)
+                ON CONFLICT (worker_id, city) DO NOTHING
+            """, (worker_id, city))
+        else:
+            cursor.execute("""
+                INSERT OR IGNORE INTO worker_cities (worker_id, city)
+                VALUES (?, ?)
+            """, (worker_id, city))
         conn.commit()
         logger.info(f"✅ Город '{city}' добавлен мастеру worker_id={worker_id}")
 
@@ -4439,12 +5275,262 @@ def set_worker_cities(worker_id, cities):
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
         # Удаляем все существующие
-        cursor.execute("DELETE FROM worker_cities WHERE worker_id = ?", (worker_id,))
+        if USE_POSTGRES:
+            cursor.execute("DELETE FROM worker_cities WHERE worker_id = %s", (worker_id,))
+        else:
+            cursor.execute("DELETE FROM worker_cities WHERE worker_id = ?", (worker_id,))
         # Добавляем новые
         for city in cities:
-            cursor.execute("""
-                INSERT OR IGNORE INTO worker_cities (worker_id, city)
-                VALUES (?, ?)
-            """, (worker_id, city))
+            if USE_POSTGRES:
+                cursor.execute("""
+                    INSERT INTO worker_cities (worker_id, city)
+                    VALUES (%s, %s)
+                    ON CONFLICT (worker_id, city) DO NOTHING
+                """, (worker_id, city))
+            else:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO worker_cities (worker_id, city)
+                    VALUES (?, ?)
+                """, (worker_id, city))
         conn.commit()
         logger.info(f"✅ Установлено {len(cities)} городов для мастера worker_id={worker_id}")
+
+
+# ============================================================
+# СИСТЕМА УВЕДОМЛЕНИЙ
+# ============================================================
+
+def get_notification_settings(user_id):
+    """
+    Получает настройки уведомлений пользователя.
+    Если настроек нет - создает с дефолтными значениями.
+
+    Args:
+        user_id: ID пользователя
+
+    Returns:
+        dict: Настройки уведомлений
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT new_orders_enabled, new_bids_enabled
+            FROM notification_settings
+            WHERE user_id = ?
+        """, (user_id,))
+
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+
+        # Создаем дефолтные настройки
+        now = datetime.now().isoformat()
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO notification_settings (user_id, new_orders_enabled, new_bids_enabled, updated_at)
+                VALUES (%s, TRUE, TRUE, %s)
+                ON CONFLICT (user_id) DO NOTHING
+            """, (user_id, now))
+        else:
+            cursor.execute("""
+                INSERT OR IGNORE INTO notification_settings (user_id, new_orders_enabled, new_bids_enabled, updated_at)
+                VALUES (?, 1, 1, ?)
+            """, (user_id, now))
+        conn.commit()
+
+        return {
+            'new_orders_enabled': True,
+            'new_bids_enabled': True
+        }
+
+
+def update_notification_setting(user_id, setting_name, enabled):
+    """
+    Обновляет конкретную настройку уведомлений.
+
+    Args:
+        user_id: ID пользователя
+        setting_name: 'new_orders_enabled' или 'new_bids_enabled'
+        enabled: True/False
+    """
+    allowed_settings = ['new_orders_enabled', 'new_bids_enabled']
+    if setting_name not in allowed_settings:
+        raise ValueError(f"Недопустимое имя настройки: {setting_name}")
+
+    now = datetime.now().isoformat()
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Создаем запись если не существует
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO notification_settings (user_id, new_orders_enabled, new_bids_enabled, updated_at)
+                VALUES (%s, TRUE, TRUE, %s)
+                ON CONFLICT (user_id) DO NOTHING
+            """, (user_id, now))
+            # Обновляем настройку
+            query = f"UPDATE notification_settings SET {setting_name} = %s, updated_at = %s WHERE user_id = %s"
+            cursor.execute(query, (enabled, now, user_id))
+        else:
+            cursor.execute("""
+                INSERT OR IGNORE INTO notification_settings (user_id, new_orders_enabled, new_bids_enabled, updated_at)
+                VALUES (?, 1, 1, ?)
+            """, (user_id, now))
+            # Обновляем настройку
+            query = f"UPDATE notification_settings SET {setting_name} = ?, updated_at = ? WHERE user_id = ?"
+            cursor.execute(query, (1 if enabled else 0, now, user_id))
+        conn.commit()
+
+        logger.info(f"📢 Настройка уведомлений обновлена: user_id={user_id}, {setting_name}={enabled}")
+
+
+def has_active_notification(user_id, notification_type):
+    """
+    Проверяет, есть ли активное (не просмотренное) уведомление у пользователя.
+
+    Args:
+        user_id: ID пользователя
+        notification_type: 'new_orders' или 'new_bids'
+
+    Returns:
+        bool: True если есть активное уведомление
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT id FROM sent_notifications
+            WHERE user_id = ? AND notification_type = ? AND cleared_at IS NULL
+            ORDER BY sent_at DESC
+            LIMIT 1
+        """, (user_id, notification_type))
+
+        return cursor.fetchone() is not None
+
+
+def save_sent_notification(user_id, notification_type, message_id=None):
+    """
+    Сохраняет информацию об отправленном уведомлении.
+
+    Args:
+        user_id: ID пользователя
+        notification_type: 'new_orders' или 'new_bids'
+        message_id: ID сообщения в Telegram (для последующего удаления)
+
+    Returns:
+        int: ID созданной записи
+    """
+    now = datetime.now().isoformat()
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            INSERT INTO sent_notifications (user_id, notification_type, message_id, sent_at)
+            VALUES (?, ?, ?, ?)
+        """, (user_id, notification_type, message_id, now))
+        conn.commit()
+
+        notification_id = cursor.lastrowid
+        logger.info(f"📬 Уведомление сохранено: id={notification_id}, user_id={user_id}, type={notification_type}")
+        return notification_id
+
+
+def clear_notification(user_id, notification_type):
+    """
+    Помечает уведомление как просмотренное (очищает).
+
+    Args:
+        user_id: ID пользователя
+        notification_type: 'new_orders' или 'new_bids'
+    """
+    now = datetime.now().isoformat()
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            UPDATE sent_notifications
+            SET cleared_at = ?
+            WHERE user_id = ? AND notification_type = ? AND cleared_at IS NULL
+        """, (now, user_id, notification_type))
+        conn.commit()
+
+        logger.info(f"✅ Уведомление очищено: user_id={user_id}, type={notification_type}")
+
+
+def get_active_notification_message_id(user_id, notification_type):
+    """
+    Получает message_id активного уведомления для удаления.
+
+    Args:
+        user_id: ID пользователя
+        notification_type: 'new_orders' или 'new_bids'
+
+    Returns:
+        int | None: message_id или None если не найдено
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT message_id FROM sent_notifications
+            WHERE user_id = ? AND notification_type = ? AND cleared_at IS NULL
+            ORDER BY sent_at DESC
+            LIMIT 1
+        """, (user_id, notification_type))
+
+        row = cursor.fetchone()
+        return row['message_id'] if row else None
+
+
+def get_workers_for_new_order_notification(order_city, order_category):
+    """
+    Получает список мастеров, которым нужно отправить уведомление о новом заказе.
+    Учитывает:
+    - Настройки уведомлений (включены ли уведомления)
+    - Соответствие города и категории
+    - Отсутствие активных уведомлений
+
+    Args:
+        order_city: Город заказа
+        order_category: Категория заказа
+
+    Returns:
+        list: Список словарей с данными мастеров (user_id, telegram_id, name)
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        # Получаем мастеров у которых:
+        # 1. Включены уведомления о новых заказах (или настройки не заданы - по умолчанию включено)
+        # 2. Работают в нужном городе
+        # 3. Работают в нужной категории
+        # 4. Нет активного уведомления о новых заказах
+        cursor.execute("""
+            SELECT DISTINCT
+                w.user_id,
+                u.telegram_id,
+                w.name
+            FROM workers w
+            INNER JOIN users u ON w.user_id = u.id
+            LEFT JOIN notification_settings ns ON w.user_id = ns.user_id
+            LEFT JOIN sent_notifications sn ON (
+                w.user_id = sn.user_id
+                AND sn.notification_type = 'new_orders'
+                AND sn.cleared_at IS NULL
+            )
+            WHERE
+                (ns.new_orders_enabled = 1 OR ns.new_orders_enabled IS NULL)
+                AND sn.id IS NULL
+                AND (
+                    w.city LIKE ? OR
+                    w.regions LIKE ? OR
+                    EXISTS (
+                        SELECT 1 FROM worker_cities wc
+                        WHERE wc.worker_id = w.id AND wc.city = ?
+                    )
+                )
+                AND w.categories LIKE ?
+        """, (
+            f'%{order_city}%',
+            f'%{order_city}%',
+            order_city,
+            f'%{order_category}%'
+        ))
+
+        return [dict(row) for row in cursor.fetchall()]

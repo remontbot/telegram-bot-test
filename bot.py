@@ -15,6 +15,9 @@ from telegram import Update
 import db
 import handlers
 
+# Версия бота
+BOT_VERSION = "1.2.0"  # Обновлено: постоянная PostgreSQL БД
+
 # --- НАЧАЛО ИСПРАВЛЕННОГО БЛОКА ДЛЯ ИМПОРТА CONFIG.PY И ЗАГРУЗКИ ENV ---
 # Попытка импортировать config, если он есть рядом (локально)
 config = None
@@ -343,9 +346,9 @@ def main():
             ],
         },
         fallbacks=[
-            CommandHandler("cancel", handlers.cancel),
+            CommandHandler("cancel", handlers.cancel_edit_profile),
             CommandHandler("start", handlers.cancel_from_start),  # КРИТИЧНО: выход из застрявшего диалога
-            MessageHandler(filters.Regex("^(Отмена|отмена|cancel)$"), handlers.cancel),
+            MessageHandler(filters.Regex("^(Отмена|отмена|cancel)$"), handlers.cancel_edit_profile),
             CallbackQueryHandler(handlers.show_worker_profile, pattern="^worker_profile$"),
         ],
         allow_reentry=True,
@@ -390,6 +393,36 @@ def main():
         )
     )
 
+    # --- Обработчики категорий заказов КЛИЕНТА ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_active_orders,
+            pattern="^client_active_orders$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_completed_orders,
+            pattern="^client_completed_orders$",
+        )
+    )
+
+    # --- Обработчики категорий заказов МАСТЕРА ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_active_orders,
+            pattern="^worker_active_orders$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_completed_orders,
+            pattern="^worker_completed_orders$",
+        )
+    )
+
     # --- Обработчик отмены заказа ---
     application.add_handler(
         CallbackQueryHandler(
@@ -410,6 +443,14 @@ def main():
         CallbackQueryHandler(
             handlers.submit_order_rating,
             pattern="^rate_order_"
+        )
+    )
+
+    # --- Обработчик добавления комментария к отзыву ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.add_comment_to_review,
+            pattern="^add_comment_"
         )
     )
 
@@ -464,6 +505,14 @@ def main():
         )
     )
 
+    # MessageHandler для приёма комментариев к отзывам
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handlers.receive_review_comment
+        )
+    )
+
     # --- Обработчики для добавления фото (БЕЗ ConversationHandler) ---
     
     # Начало добавления фото
@@ -485,19 +534,45 @@ def main():
         CallbackQueryHandler(handlers.cancel_profile_photo, pattern="^cancel_profile_photo$")
     )
 
-    # Загрузка фото (обрабатывает и portfolio_photos и profile_photo)
+    # --- Управление фото портфолио ---
     application.add_handler(
-        MessageHandler(filters.PHOTO, handlers.worker_add_photos_upload)
+        CallbackQueryHandler(handlers.manage_portfolio_photos, pattern="^manage_portfolio_photos$")
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(handlers.portfolio_photo_navigate, pattern="^portfolio_(prev|next)_")
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(handlers.delete_portfolio_photo, pattern="^delete_portfolio_photo_")
+    )
+
+    # --- Просмотр портфолио другого мастера ---
+    application.add_handler(
+        CallbackQueryHandler(handlers.view_worker_portfolio, pattern="^view_worker_portfolio_")
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(handlers.worker_portfolio_view_navigate, pattern="^worker_portfolio_view_(prev|next)$")
+    )
+
+    # Загрузка фото (обрабатывает и portfolio_photos и profile_photo)
+    # КРИТИЧНО: Группа -1 чтобы выполнялось РАНЬШЕ ConversationHandler
+    application.add_handler(
+        MessageHandler(filters.PHOTO, handlers.worker_add_photos_upload),
+        group=-1
     )
 
     # Загрузка видео (для портфолио)
     application.add_handler(
-        MessageHandler(filters.VIDEO, handlers.worker_add_photos_upload)
+        MessageHandler(filters.VIDEO, handlers.worker_add_photos_upload),
+        group=-1
     )
 
     # Загрузка документов (когда пользователь перетягивает файл)
     application.add_handler(
-        MessageHandler(filters.Document.ALL, handlers.worker_add_photos_upload)
+        MessageHandler(filters.Document.ALL, handlers.worker_add_photos_upload),
+        group=-1
     )
 
     # --- Меню мастера и заказчика ---
@@ -513,6 +588,13 @@ def main():
         CallbackQueryHandler(
             handlers.toggle_notifications,
             pattern="^toggle_notifications$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.toggle_client_notifications,
+            pattern="^toggle_client_notifications$",
         )
     )
 
@@ -717,6 +799,14 @@ def main():
         )
     )
 
+    # --- Обработчик кнопки "Сказать спасибо платформе" ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.thank_platform,
+            pattern="^thank_platform_"
+        )
+    )
+
     application.add_handler(
         CallbackQueryHandler(
             handlers.test_payment_success,
@@ -830,6 +920,18 @@ def main():
                 CallbackQueryHandler(handlers.admin_broadcast_start, pattern="^admin_broadcast$"),
                 CallbackQueryHandler(handlers.admin_create_ad_start, pattern="^admin_create_ad$"),
                 CallbackQueryHandler(handlers.admin_stats, pattern="^admin_stats$"),
+                CallbackQueryHandler(handlers.admin_category_reports, pattern="^admin_category_reports$"),
+                CallbackQueryHandler(handlers.admin_city_activity, pattern="^admin_city_activity$"),
+                CallbackQueryHandler(handlers.admin_avg_prices, pattern="^admin_avg_prices$"),
+                CallbackQueryHandler(handlers.admin_category_statuses, pattern="^admin_category_statuses$"),
+                CallbackQueryHandler(handlers.admin_export_menu, pattern="^admin_export_menu$"),
+                CallbackQueryHandler(handlers.admin_export_data, pattern="^admin_export_"),
+                CallbackQueryHandler(handlers.admin_users_menu, pattern="^admin_users$"),
+                CallbackQueryHandler(handlers.admin_users_list, pattern="^admin_users_list_"),
+                CallbackQueryHandler(handlers.admin_user_view, pattern="^admin_user_view_"),
+                CallbackQueryHandler(handlers.admin_user_ban_start, pattern="^admin_user_ban_start_"),
+                CallbackQueryHandler(handlers.admin_user_unban, pattern="^admin_user_unban_"),
+                CallbackQueryHandler(handlers.admin_user_search_start, pattern="^admin_user_search_start$"),
                 CallbackQueryHandler(handlers.admin_close, pattern="^admin_close$"),
                 CallbackQueryHandler(handlers.admin_panel, pattern="^admin_back$"),  # Возврат в меню
             ],
@@ -839,6 +941,15 @@ def main():
             ],
             handlers.BROADCAST_ENTER_MESSAGE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_broadcast_send),
+            ],
+            handlers.ADMIN_BAN_REASON: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_user_ban_execute),
+                CallbackQueryHandler(handlers.admin_user_view, pattern="^admin_user_view_"),
+            ],
+            handlers.ADMIN_SEARCH: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_user_search_execute),
+                CallbackQueryHandler(handlers.admin_users_menu, pattern="^admin_users$"),
+                CallbackQueryHandler(handlers.admin_user_search_start, pattern="^admin_user_search_start$"),
             ],
         },
         fallbacks=[
@@ -962,7 +1073,7 @@ def main():
     else:
         logger.warning("⚠️ JobQueue не доступен. Проверка дедлайнов отключена.")
 
-    logger.info("Бот запущен. Опрос обновлений...")
+    logger.info(f"🚀 Бот запущен (версия {BOT_VERSION}). Опрос обновлений...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
