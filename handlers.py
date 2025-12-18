@@ -9052,6 +9052,9 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Обработчик кнопок из постоянного меню внизу экрана"""
     text = update.message.text
 
+    # Логирование для отладки
+    logger.info(f"🔍 handle_menu_buttons вызван! Текст кнопки: '{text}'")
+
     # Получаем пользователя
     user = db.get_user_by_telegram_id(update.effective_user.id)
     if not user:

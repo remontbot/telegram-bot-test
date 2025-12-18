@@ -982,6 +982,7 @@ def main():
     application.add_handler(suggestion_conv_handler)
 
     # --- Обработчик кнопок постоянного меню ---
+    # ВАЖНО: group=-1 чтобы обрабатывался раньше ConversationHandlers
     menu_buttons = [
         "🧰 Меню мастера",
         "🏠 Меню заказчика",
@@ -992,12 +993,25 @@ def main():
     ]
     menu_filter = filters.TEXT & filters.Regex(f"^({'|'.join(menu_buttons)})$")
     application.add_handler(
-        MessageHandler(menu_filter, handlers.handle_menu_buttons)
+        MessageHandler(menu_filter, handlers.handle_menu_buttons),
+        group=-1  # Высокий приоритет - обрабатывается раньше всех ConversationHandlers
     )
 
     # Обработчик неизвестных команд
     application.add_handler(
         MessageHandler(filters.COMMAND, handlers.unknown_command)
+    )
+
+    # --- ВРЕМЕННЫЙ ОБРАБОТЧИК ДЛЯ ОТЛАДКИ ---
+    async def debug_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Временный обработчик для отладки - ловит все необработанные текстовые сообщения"""
+        text = update.message.text if update.message else None
+        logger.warning(f"⚠️ DEBUG: Необработанное текстовое сообщение: '{text}'")
+        logger.warning(f"⚠️ DEBUG: Update: {update}")
+
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, debug_text_handler),
+        group=100  # Самый низкий приоритет - ловит только то, что никто не обработал
     )
 
     # --- ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК ---
