@@ -1914,7 +1914,7 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
         [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
-        [InlineKeyboardButton("💳 Мои платежи", callback_data="client_my_payments")],
+        # [InlineKeyboardButton("💳 Мои платежи", callback_data="client_my_payments")],  # Скрыто до внедрения платной версии
         [InlineKeyboardButton("🔍 Найти мастера", callback_data="client_browse_workers")],
         [InlineKeyboardButton("🧰 Главное меню", callback_data="go_main_menu")],
     ]
@@ -4804,6 +4804,7 @@ async def test_payment_success(update: Update, context: ContextTypes.DEFAULT_TYP
         bid_id = int(query.data.replace("test_payment_success_", ""))
 
         # Получаем информацию об отклике
+        # Сначала пытаемся получить из context.user_data, если нет - из базы данных
         bids = context.user_data.get('viewing_bids', {}).get('bids', [])
         selected_bid = None
         for bid in bids:
@@ -4811,9 +4812,14 @@ async def test_payment_success(update: Update, context: ContextTypes.DEFAULT_TYP
                 selected_bid = bid
                 break
 
+        # Если не нашли в context.user_data, получаем из базы данных
         if not selected_bid:
-            await query.edit_message_text("❌ Ошибка: отклик не найден.")
-            return
+            bid_from_db = db.get_bid_by_id(bid_id)
+            if bid_from_db:
+                selected_bid = dict(bid_from_db)
+            else:
+                await query.edit_message_text("❌ Ошибка: отклик не найден.")
+                return
 
         order_id = selected_bid['order_id']
         worker_id = selected_bid['worker_id']
