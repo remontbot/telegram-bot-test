@@ -9163,6 +9163,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += f"• Новых пользователей за 7 дней: {stats['users_last_7days']}"
 
     keyboard = [
+        [InlineKeyboardButton("📥 Экспорт данных", callback_data="admin_export_menu")],
         [InlineKeyboardButton("🔄 Обновить", callback_data="admin_stats")],
         [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
     ]
@@ -9172,6 +9173,200 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+    return ADMIN_MENU
+
+
+async def admin_export_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню экспорта данных"""
+    query = update.callback_query
+    await query.answer()
+
+    text = "📥 <b>ЭКСПОРТ ДАННЫХ</b>\n\n"
+    text += "Выберите, какие данные экспортировать в CSV:"
+
+    keyboard = [
+        [InlineKeyboardButton("👥 Экспорт пользователей", callback_data="admin_export_users")],
+        [InlineKeyboardButton("📦 Экспорт заказов", callback_data="admin_export_orders")],
+        [InlineKeyboardButton("💼 Экспорт откликов", callback_data="admin_export_bids")],
+        [InlineKeyboardButton("⭐ Экспорт отзывов", callback_data="admin_export_reviews")],
+        [InlineKeyboardButton("📊 Сводная статистика", callback_data="admin_export_stats")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_stats")]
+    ]
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Экспортирует выбранные данные в CSV"""
+    query = update.callback_query
+    await query.answer("Подготовка данных...")
+
+    export_type = query.data.replace("admin_export_", "")
+
+    try:
+        import csv
+        import io
+        from datetime import datetime
+
+        # Создаем CSV в памяти
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        if export_type == "users":
+            users = db.get_all_users()
+            # Заголовки
+            writer.writerow(["ID", "Telegram ID", "Имя", "Username", "Дата регистрации", "Забанен", "Причина бана"])
+            # Данные
+            for user in users:
+                user_dict = dict(user)
+                created_at = user_dict.get('created_at', '')
+                if isinstance(created_at, datetime):
+                    created_at = created_at.strftime('%Y-%m-%d %H:%M:%S')
+                writer.writerow([
+                    user_dict.get('id', ''),
+                    user_dict.get('telegram_id', ''),
+                    user_dict.get('full_name', ''),
+                    user_dict.get('username', ''),
+                    created_at,
+                    'Да' if user_dict.get('is_banned') else 'Нет',
+                    user_dict.get('ban_reason', '')
+                ])
+            filename = f"users_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            caption = f"📊 Экспорт пользователей ({len(users)} записей)"
+
+        elif export_type == "orders":
+            orders = db.get_all_orders_for_export()
+            writer.writerow(["ID заказа", "Клиент ID", "Название", "Категория", "Город", "Статус", "Дата создания", "Описание"])
+            for order in orders:
+                order_dict = dict(order)
+                created_at = order_dict.get('created_at', '')
+                if isinstance(created_at, datetime):
+                    created_at = created_at.strftime('%Y-%m-%d %H:%M:%S')
+                writer.writerow([
+                    order_dict.get('id', ''),
+                    order_dict.get('client_id', ''),
+                    order_dict.get('title', ''),
+                    order_dict.get('category', ''),
+                    order_dict.get('city', ''),
+                    order_dict.get('status', ''),
+                    created_at,
+                    order_dict.get('description', '')[:100]
+                ])
+            filename = f"orders_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            caption = f"📦 Экспорт заказов ({len(orders)} записей)"
+
+        elif export_type == "bids":
+            bids = db.get_all_bids_for_export()
+            writer.writerow(["ID отклика", "Заказ ID", "Мастер ID", "Цена", "Валюта", "Дней до готовности", "Статус", "Дата создания"])
+            for bid in bids:
+                bid_dict = dict(bid)
+                created_at = bid_dict.get('created_at', '')
+                if isinstance(created_at, datetime):
+                    created_at = created_at.strftime('%Y-%m-%d %H:%M:%S')
+                writer.writerow([
+                    bid_dict.get('id', ''),
+                    bid_dict.get('order_id', ''),
+                    bid_dict.get('worker_id', ''),
+                    bid_dict.get('price', ''),
+                    bid_dict.get('currency', ''),
+                    bid_dict.get('ready_days', ''),
+                    bid_dict.get('status', ''),
+                    created_at
+                ])
+            filename = f"bids_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            caption = f"💼 Экспорт откликов ({len(bids)} записей)"
+
+        elif export_type == "reviews":
+            reviews = db.get_all_reviews_for_export()
+            writer.writerow(["ID отзыва", "Заказ ID", "От пользователя", "К пользователю", "Рейтинг", "Комментарий", "Дата"])
+            for review in reviews:
+                review_dict = dict(review)
+                created_at = review_dict.get('created_at', '')
+                if isinstance(created_at, datetime):
+                    created_at = created_at.strftime('%Y-%m-%d %H:%M:%S')
+                writer.writerow([
+                    review_dict.get('id', ''),
+                    review_dict.get('order_id', ''),
+                    review_dict.get('from_user_id', ''),
+                    review_dict.get('to_user_id', ''),
+                    review_dict.get('rating', ''),
+                    review_dict.get('comment', '')[:100],
+                    created_at
+                ])
+            filename = f"reviews_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            caption = f"⭐ Экспорт отзывов ({len(reviews)} записей)"
+
+        elif export_type == "stats":
+            stats = db.get_analytics_stats()
+            writer.writerow(["Метрика", "Значение"])
+            writer.writerow(["Всего пользователей", stats['total_users']])
+            writer.writerow(["Мастеров", stats['total_workers']])
+            writer.writerow(["Клиентов", stats['total_clients']])
+            writer.writerow(["С двумя профилями", stats['dual_profile_users']])
+            writer.writerow(["Забанено", stats['banned_users']])
+            writer.writerow(["Всего заказов", stats['total_orders']])
+            writer.writerow(["Открытые заказы", stats['open_orders']])
+            writer.writerow(["Активные заказы", stats['active_orders']])
+            writer.writerow(["Завершённые заказы", stats['completed_orders']])
+            writer.writerow(["Отменённые заказы", stats['canceled_orders']])
+            writer.writerow(["Всего откликов", stats['total_bids']])
+            writer.writerow(["Ожидают ответа", stats['pending_bids']])
+            writer.writerow(["Приняты", stats['selected_bids']])
+            writer.writerow(["Отклонены", stats['rejected_bids']])
+            writer.writerow(["Активных чатов", stats['total_chats']])
+            writer.writerow(["Всего сообщений", stats['total_messages']])
+            writer.writerow(["Всего отзывов", stats['total_reviews']])
+            writer.writerow(["Средний рейтинг", f"{stats['average_rating']:.2f}"])
+            writer.writerow(["Заказов за 24ч", stats['orders_last_24h']])
+            writer.writerow(["Новых пользователей за 7 дней", stats['users_last_7days']])
+            filename = f"stats_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            caption = "📊 Сводная статистика платформы"
+
+        # Конвертируем в байты
+        csv_data = output.getvalue().encode('utf-8-sig')  # utf-8-sig для правильного отображения в Excel
+        csv_file = io.BytesIO(csv_data)
+        csv_file.name = filename
+
+        # Отправляем файл
+        await context.bot.send_document(
+            chat_id=query.message.chat_id,
+            document=csv_file,
+            filename=filename,
+            caption=caption
+        )
+
+        # Возвращаемся в меню экспорта
+        text = "✅ Данные успешно экспортированы!\n\n"
+        text += "Файл отправлен выше. Выберите другой тип данных для экспорта или вернитесь назад."
+
+        keyboard = [
+            [InlineKeyboardButton("📥 Экспортировать еще", callback_data="admin_export_menu")],
+            [InlineKeyboardButton("⬅️ К статистике", callback_data="admin_stats")]
+        ]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка экспорта данных: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка при экспорте данных: {str(e)}\n\n"
+            "Попробуйте еще раз или обратитесь к разработчику.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="admin_export_menu")
+            ]])
+        )
 
     return ADMIN_MENU
 

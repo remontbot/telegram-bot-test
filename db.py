@@ -5015,6 +5015,30 @@ def get_all_users():
         return cursor.fetchall()
 
 
+def get_all_orders_for_export():
+    """Получает все заказы для экспорта"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT * FROM orders ORDER BY created_at DESC")
+        return cursor.fetchall()
+
+
+def get_all_bids_for_export():
+    """Получает все отклики для экспорта"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT * FROM bids ORDER BY created_at DESC")
+        return cursor.fetchall()
+
+
+def get_all_reviews_for_export():
+    """Получает все отзывы для экспорта"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("SELECT * FROM reviews ORDER BY created_at DESC")
+        return cursor.fetchall()
+
+
 # ------- ФУНКЦИИ ДЛЯ РАБОТЫ С ГОРОДАМИ МАСТЕРА -------
 
 def add_worker_city(worker_id, city):

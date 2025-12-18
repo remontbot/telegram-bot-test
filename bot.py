@@ -912,6 +912,8 @@ def main():
                 CallbackQueryHandler(handlers.admin_broadcast_start, pattern="^admin_broadcast$"),
                 CallbackQueryHandler(handlers.admin_create_ad_start, pattern="^admin_create_ad$"),
                 CallbackQueryHandler(handlers.admin_stats, pattern="^admin_stats$"),
+                CallbackQueryHandler(handlers.admin_export_menu, pattern="^admin_export_menu$"),
+                CallbackQueryHandler(handlers.admin_export_data, pattern="^admin_export_"),
                 CallbackQueryHandler(handlers.admin_users_menu, pattern="^admin_users$"),
                 CallbackQueryHandler(handlers.admin_users_list, pattern="^admin_users_list_"),
                 CallbackQueryHandler(handlers.admin_user_view, pattern="^admin_user_view_"),
