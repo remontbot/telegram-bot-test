@@ -448,6 +448,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message,
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
+
+        # Явно убираем клавиатуру внизу если она есть
+        try:
+            await update.message.reply_text(
+                "✨ Используйте кнопки выше для навигации",
+                reply_markup=ReplyKeyboardRemove()
+            )
+        except:
+            pass
     else:
         # Новый пользователь - выбор первой роли
         keyboard = [
@@ -461,8 +470,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Если вы заказчик — вы быстро находите мастера под свою задачу.\n\n"
             "Выберите, в какой роли вы хотите продолжить:",
             reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML",
-    )
+            parse_mode="HTML",
+        )
+
+        # Явно убираем клавиатуру внизу
+        try:
+            await update.message.reply_text(
+                "✨ Используйте кнопки выше",
+                reply_markup=ReplyKeyboardRemove()
+            )
+        except:
+            pass
     return SELECTING_ROLE
 
 
@@ -9006,6 +9024,8 @@ async def send_suggestion_start(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
 
+    logger.info(f"🔍 send_suggestion_start вызван пользователем {update.effective_user.id}")
+
     await query.edit_message_text(
         "💡 <b>Отправить предложение</b>\n\n"
         "Здесь вы можете отправить свои предложения по улучшению платформы:\n"
@@ -9019,6 +9039,7 @@ async def send_suggestion_start(update: Update, context: ContextTypes.DEFAULT_TY
         ]])
     )
 
+    logger.info(f"✅ Переход в состояние SUGGESTION_TEXT")
     return SUGGESTION_TEXT
 
 
@@ -9026,6 +9047,8 @@ async def receive_suggestion_text(update: Update, context: ContextTypes.DEFAULT_
     """Получение текста предложения"""
     message = update.message
     text = message.text
+
+    logger.info(f"🔍 receive_suggestion_text вызван. Текст: '{text[:50]}...'")
 
     # Проверка длины
     if len(text) > 1000:
