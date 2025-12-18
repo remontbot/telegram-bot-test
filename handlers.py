@@ -431,7 +431,7 @@ def get_persistent_menu(user_id):
     return ReplyKeyboardMarkup(
         keyboard,
         resize_keyboard=True,  # Адаптировать размер кнопок
-        persistent=True,        # Меню не исчезает
+        is_persistent=True,    # Меню не исчезает
     )
 
 
