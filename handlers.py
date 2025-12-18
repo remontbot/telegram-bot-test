@@ -9065,69 +9065,193 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Определяем какую кнопку нажали
     if text == "🧰 Меню мастера":
-        # Эмулируем callback query для show_worker_menu
-        # Создаем фейковый Update с CallbackQuery
-        from telegram import CallbackQuery
-        fake_query = type('obj', (object,), {
-            'answer': lambda: None,
-            'message': update.message,
-            'from_user': update.effective_user,
-            'data': 'show_worker_menu'
-        })()
-        fake_update = type('obj', (object,), {
-            'callback_query': fake_query,
-            'effective_user': update.effective_user
-        })()
+        # Показываем меню мастера
+        notifications_enabled = db.are_notifications_enabled(user_id)
+        notification_status = "🔔 Вкл" if notifications_enabled else "🔕 Выкл"
 
-        await show_worker_menu(fake_update, context)
+        keyboard = [
+            [InlineKeyboardButton("📋 Доступные заказы", callback_data="worker_view_orders")],
+            [InlineKeyboardButton("💼 Мои отклики", callback_data="worker_my_bids")],
+            [InlineKeyboardButton("📦 Мои заказы", callback_data="worker_my_orders")],
+            [InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
+            [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_notifications")],
+            [InlineKeyboardButton("💡 Предложения", callback_data="send_suggestion")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")],
+        ]
+
+        await update.message.reply_text(
+            "🧰 <b>Меню мастера</b>\n\n"
+            "Выберите действие:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
 
     elif text == "🏠 Меню заказчика":
-        # Эмулируем callback query для show_client_menu
-        from telegram import CallbackQuery
-        fake_query = type('obj', (object,), {
-            'answer': lambda: None,
-            'message': update.message,
-            'from_user': update.effective_user,
-            'data': 'show_client_menu'
-        })()
-        fake_update = type('obj', (object,), {
-            'callback_query': fake_query,
-            'effective_user': update.effective_user
-        })()
+        # Показываем меню заказчика
+        notifications_enabled = db.are_client_notifications_enabled(user_id)
+        notification_status = "🔔 Вкл" if notifications_enabled else "🔕 Выкл"
 
-        await show_client_menu(fake_update, context)
+        keyboard = [
+            [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
+            [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
+            [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_client_notifications")],
+            [InlineKeyboardButton("💡 Предложения", callback_data="send_suggestion")],
+            [InlineKeyboardButton("🧰 Главное меню", callback_data="go_main_menu")],
+        ]
+
+        await update.message.reply_text(
+            "🏠 <b>Меню заказчика</b>\n\n"
+            "Создайте заказ - мастера увидят его и откликнутся!\n"
+            "Или найдите мастера самостоятельно.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
 
     elif text == "👤 Мой профиль":
         # Показываем профиль мастера
-        from telegram import CallbackQuery
-        fake_query = type('obj', (object,), {
-            'answer': lambda: None,
-            'message': update.message,
-            'from_user': update.effective_user,
-            'data': 'worker_profile'
-        })()
-        fake_update = type('obj', (object,), {
-            'callback_query': fake_query,
-            'effective_user': update.effective_user
-        })()
+        worker_profile = db.get_worker_profile(user_id)
 
-        await show_worker_profile(fake_update, context)
+        if not worker_profile:
+            await update.message.reply_text(
+                "❌ У вас нет профиля мастера.\n\n"
+                "Создайте профиль мастера через /start"
+            )
+            return
+
+        profile_dict = dict(worker_profile)
+
+        # Формируем текст профиля
+        name = profile_dict.get("name", "Не указано")
+        phone = profile_dict.get("phone", "Не указано")
+        city = profile_dict.get("city", "Не указано")
+        categories = profile_dict.get("categories", "Не указано")
+        experience = profile_dict.get("experience", "Не указано")
+        description = profile_dict.get("description", "Не указано")
+        rating = profile_dict.get("rating") or 0.0
+        rating_count = profile_dict.get("rating_count") or 0
+        verified_reviews = profile_dict.get("verified_reviews") or 0
+        portfolio_photos = profile_dict.get("portfolio_photos") or ""
+        profile_photo = profile_dict.get("profile_photo") or ""
+
+        # Подсчёт фотографий
+        photos_count = len(portfolio_photos.split(",")) if portfolio_photos else 0
+
+        if rating and rating > 0:
+            stars = "⭐" * int(rating)
+            rating_text = f"{stars} {rating:.1f}/5.0 ({rating_count} отзывов)"
+        else:
+            rating_text = "⭐ Пока нет отзывов"
+
+        verified_text = f"\n✅ {verified_reviews} проверенных отзывов" if verified_reviews > 0 else ""
+
+        text = (
+            f"👤 <b>Мой профиль мастера</b>\n\n"
+            f"📛 <b>Имя:</b> {name}\n"
+            f"📞 <b>Телефон:</b> <code>{phone}</code>\n"
+            f"🏙 <b>Город:</b> {city}\n"
+            f"🔧 <b>Виды работ:</b> {categories}\n"
+            f"📅 <b>Опыт:</b> {experience}\n"
+            f"📝 <b>О себе:</b> {description}\n\n"
+            f"⭐ <b>Рейтинг:</b> {rating_text}{verified_text}\n"
+            f"📸 <b>Фото работ:</b> {photos_count}"
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("✏️ Редактировать", callback_data="edit_profile")],
+        ]
+
+        # Добавляем кнопку просмотра работ если они есть
+        if photos_count > 0:
+            keyboard.append([InlineKeyboardButton("📸 Посмотреть все работы", callback_data="view_portfolio")])
+
+        # Добавляем кнопку отзывов если они есть
+        if rating_count > 0:
+            keyboard.append([InlineKeyboardButton("💬 Мои отзывы", callback_data="worker_view_reviews")])
+
+        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")])
+
+        # Показываем фото профиля (лицо), если есть. Иначе - первое из портфолио
+        photo_to_show = profile_photo if profile_photo else (portfolio_photos.split(",")[0] if portfolio_photos else None)
+
+        if photo_to_show:
+            try:
+                await update.message.reply_photo(
+                    photo=photo_to_show,
+                    caption=text,
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            except Exception as e:
+                # Если фото не загружается - отправляем без фото
+                logger.warning(f"Не удалось отправить фото профиля: {e}")
+                await update.message.reply_text(
+                    text,
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+        else:
+            await update.message.reply_text(
+                text,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
 
     elif text == "📂 Мои заказы":
         # Показываем заказы клиента
-        from telegram import CallbackQuery
-        fake_query = type('obj', (object,), {
-            'answer': lambda: None,
-            'message': update.message,
-            'from_user': update.effective_user,
-            'data': 'client_my_orders'
-        })()
-        fake_update = type('obj', (object,), {
-            'callback_query': fake_query,
-            'effective_user': update.effective_user
-        })()
+        client_profile = db.get_client_profile(user_id)
 
-        await client_my_orders(fake_update, context)
+        if not client_profile:
+            await update.message.reply_text(
+                "❌ У вас нет профиля заказчика.\n\n"
+                "Создайте профиль заказчика через /start"
+            )
+            return
+
+        client_dict = dict(client_profile)
+        orders = db.get_orders_by_client(client_dict["id"])
+
+        if not orders:
+            keyboard = [
+                [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
+                [InlineKeyboardButton("⬅️ Назад", callback_data="show_client_menu")],
+            ]
+            await update.message.reply_text(
+                "📂 <b>Мои заказы</b>\n\n"
+                "У вас пока нет заказов.\n\n"
+                "Создайте первый заказ, и мастера начнут на него откликаться!",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+        # Группируем заказы по статусу
+        open_orders = [o for o in orders if dict(o)['status'] == 'open']
+        active_orders = [o for o in orders if dict(o)['status'] in ['master_selected', 'contact_shared', 'waiting_master_confirmation']]
+        completed_orders = [o for o in orders if dict(o)['status'] in ['done', 'completed']]
+        cancelled_orders = [o for o in orders if dict(o)['status'] in ['canceled', 'cancelled', 'expired']]
+
+        text = f"📂 <b>Мои заказы</b>\n\n"
+        text += f"📊 Всего заказов: {len(orders)}\n"
+        text += f"🆕 Открытых: {len(open_orders)}\n"
+        text += f"🔄 Активных: {len(active_orders)}\n"
+        text += f"✅ Завершённых: {len(completed_orders)}\n"
+        text += f"❌ Отменённых: {len(cancelled_orders)}\n\n"
+        text += "Выберите категорию:"
+
+        keyboard = [
+            [InlineKeyboardButton(f"🆕 Открытые ({len(open_orders)})", callback_data="client_orders_open")],
+            [InlineKeyboardButton(f"🔄 Активные ({len(active_orders)})", callback_data="client_orders_active")],
+            [InlineKeyboardButton(f"✅ Завершённые ({len(completed_orders)})", callback_data="client_orders_completed")],
+            [InlineKeyboardButton(f"❌ Отменённые ({len(cancelled_orders)})", callback_data="client_orders_cancelled")],
+            [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="show_client_menu")],
+        ]
+
+        await update.message.reply_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
     elif text == "💡 Предложения":
         # Открываем форму предложений
