@@ -369,7 +369,9 @@ def _get_bids_word(count):
     ADMIN_MENU,
     BROADCAST_SELECT_AUDIENCE,
     BROADCAST_ENTER_MESSAGE,
-) = range(48)
+    ADMIN_BAN_REASON,
+    ADMIN_SEARCH,
+) = range(50)
 
 
 def is_valid_name(name: str) -> bool:
@@ -8964,9 +8966,10 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     keyboard = [
+        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton("📢 Отправить Broadcast", callback_data="admin_broadcast")],
         [InlineKeyboardButton("📺 Создать рекламу", callback_data="admin_create_ad")],
-        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton("👥 Управление пользователями", callback_data="admin_users")],
         [InlineKeyboardButton("❌ Закрыть", callback_data="admin_close")],
     ]
 
@@ -9115,44 +9118,402 @@ async def admin_create_ad_start(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Статистика по broadcast и рекламе"""
+    """Подробная статистика системы"""
     query = update.callback_query
     await query.answer()
 
     # Получаем статистику из БД
-    with db.get_db_connection() as conn:
-        cursor = db.get_cursor(conn)
+    stats = db.get_analytics_stats()
 
-        # Broadcasts
-        cursor.execute("SELECT COUNT(*), SUM(sent_count), SUM(failed_count) FROM broadcasts")
-        broadcast_stats = cursor.fetchone()
+    text = "📊 <b>СТАТИСТИКА ПЛАТФОРМЫ</b>\n\n"
 
-        # Ads
-        cursor.execute("SELECT COUNT(*), SUM(view_count), SUM(click_count) FROM ads WHERE active = 1")
-        ad_stats = cursor.fetchone()
+    # Пользователи
+    text += "👥 <b>ПОЛЬЗОВАТЕЛИ:</b>\n"
+    text += f"• Всего: {stats['total_users']}\n"
+    text += f"• Мастеров: {stats['total_workers']}\n"
+    text += f"• Клиентов: {stats['total_clients']}\n"
+    text += f"• С двумя профилями: {stats['dual_profile_users']}\n"
+    text += f"• Забанено: {stats['banned_users']}\n\n"
 
-    broadcast_count = broadcast_stats[0] if broadcast_stats else 0
-    total_sent = broadcast_stats[1] if broadcast_stats and broadcast_stats[1] else 0
-    total_failed = broadcast_stats[2] if broadcast_stats and broadcast_stats[2] else 0
+    # Заказы
+    text += "📦 <b>ЗАКАЗЫ:</b>\n"
+    text += f"• Всего создано: {stats['total_orders']}\n"
+    text += f"• Открытые: {stats['open_orders']}\n"
+    text += f"• В работе: {stats['active_orders']}\n"
+    text += f"• Завершённые: {stats['completed_orders']}\n"
+    text += f"• Отменённые: {stats['canceled_orders']}\n\n"
 
-    ad_count = ad_stats[0] if ad_stats else 0
-    total_views = ad_stats[1] if ad_stats and ad_stats[1] else 0
-    total_clicks = ad_stats[2] if ad_stats and ad_stats[2] else 0
+    # Отклики
+    text += "💼 <b>ОТКЛИКИ:</b>\n"
+    text += f"• Всего откликов: {stats['total_bids']}\n"
+    text += f"• Ожидают ответа: {stats['pending_bids']}\n"
+    text += f"• Приняты: {stats['selected_bids']}\n"
+    text += f"• Отклонены: {stats['rejected_bids']}\n\n"
+
+    # Чаты и отзывы
+    text += "💬 <b>ЧАТЫ И ОТЗЫВЫ:</b>\n"
+    text += f"• Активных чатов: {stats['total_chats']}\n"
+    text += f"• Всего сообщений: {stats['total_messages']}\n"
+    text += f"• Оставлено отзывов: {stats['total_reviews']}\n"
+    text += f"• Средний рейтинг: {stats['average_rating']:.1f} ⭐\n\n"
+
+    # Активность
+    text += "📈 <b>АКТИВНОСТЬ:</b>\n"
+    text += f"• Заказов за последние 24ч: {stats['orders_last_24h']}\n"
+    text += f"• Новых пользователей за 7 дней: {stats['users_last_7days']}"
+
+    keyboard = [
+        [InlineKeyboardButton("🔄 Обновить", callback_data="admin_stats")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
+    ]
 
     await query.edit_message_text(
-        "📊 <b>СТАТИСТИКА</b>\n\n"
-        "📢 <b>Broadcasts:</b>\n"
-        f"• Всего отправлено: {broadcast_count}\n"
-        f"• Доставлено сообщений: {total_sent}\n"
-        f"• Ошибок: {total_failed}\n\n"
-        "📺 <b>Реклама:</b>\n"
-        f"• Активных объявлений: {ad_count}\n"
-        f"• Просмотров: {total_views}\n"
-        f"• Кликов: {total_clicks}",
+        text,
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")
-        ]])
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_users_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню управления пользователями"""
+    query = update.callback_query
+    await query.answer()
+
+    stats = db.get_analytics_stats()
+
+    text = "👥 <b>УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ</b>\n\n"
+    text += f"Всего пользователей: {stats['total_users']}\n"
+    text += f"Мастеров: {stats['total_workers']}\n"
+    text += f"Клиентов: {stats['total_clients']}\n"
+    text += f"Забанено: {stats['banned_users']}\n\n"
+    text += "Выберите фильтр или воспользуйтесь поиском:"
+
+    keyboard = [
+        [InlineKeyboardButton("👤 Все пользователи", callback_data="admin_users_list_all")],
+        [InlineKeyboardButton("👷 Только мастера", callback_data="admin_users_list_workers")],
+        [InlineKeyboardButton("📋 Только клиенты", callback_data="admin_users_list_clients")],
+        [InlineKeyboardButton("🔄 Оба профиля", callback_data="admin_users_list_dual")],
+        [InlineKeyboardButton("🚫 Забаненные", callback_data="admin_users_list_banned")],
+        [InlineKeyboardButton("🔍 Поиск пользователя", callback_data="admin_user_search_start")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
+    ]
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает список пользователей с выбранным фильтром"""
+    query = update.callback_query
+    await query.answer()
+
+    # Парсим фильтр из callback_data
+    filter_type = query.data.replace("admin_users_list_", "")
+    page = context.user_data.get('admin_users_page', 1)
+
+    users = db.get_users_filtered(filter_type, page=page, per_page=10)
+
+    if not users:
+        text = "👥 <b>Пользователи не найдены</b>\n\n"
+        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="admin_users")]]
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return ADMIN_MENU
+
+    filter_names = {
+        'all': 'Все пользователи',
+        'workers': 'Мастера',
+        'clients': 'Клиенты',
+        'dual': 'С двумя профилями',
+        'banned': 'Забаненные'
+    }
+
+    text = f"👥 <b>{filter_names.get(filter_type, 'Пользователи')}</b>\n"
+    text += f"Страница {page}\n\n"
+
+    keyboard = []
+    for user in users:
+        user_dict = dict(user)
+        name = user_dict.get('full_name', 'Без имени')
+        telegram_id = user_dict['telegram_id']
+
+        # Эмодзи статуса
+        status_emoji = "🚫" if user_dict.get('is_banned') else ""
+
+        # Тип профиля
+        profile_type = ""
+        if user_dict.get('worker_id') and user_dict.get('client_id'):
+            profile_type = "👷📋"
+        elif user_dict.get('worker_id'):
+            profile_type = "👷"
+        elif user_dict.get('client_id'):
+            profile_type = "📋"
+
+        button_text = f"{status_emoji}{profile_type} {name[:25]}"
+        keyboard.append([InlineKeyboardButton(
+            button_text,
+            callback_data=f"admin_user_view_{telegram_id}"
+        )])
+
+    # Навигация
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton("⬅️ Предыдущая", callback_data=f"admin_users_page_{filter_type}_{page-1}"))
+    if len(users) == 10:  # Полная страница = возможно есть следующая
+        nav_row.append(InlineKeyboardButton("➡️ Следующая", callback_data=f"admin_users_page_{filter_type}_{page+1}"))
+    if nav_row:
+        keyboard.append(nav_row)
+
+    keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="admin_users")])
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_user_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает детальную информацию о пользователе"""
+    query = update.callback_query
+    await query.answer()
+
+    telegram_id = int(query.data.replace("admin_user_view_", ""))
+    details = db.get_user_details_for_admin(telegram_id)
+
+    if not details:
+        await query.edit_message_text("❌ Пользователь не найден.")
+        return ADMIN_MENU
+
+    user = details['user']
+    worker = details['worker_profile']
+    client = details['client_profile']
+    stats = details['stats']
+
+    # Форматируем информацию
+    text = "👤 <b>ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ</b>\n\n"
+
+    # Основная информация
+    text += f"<b>Имя:</b> {user.get('full_name', 'Не указано')}\n"
+    text += f"<b>Username:</b> @{user.get('username', 'нет')}\n"
+    text += f"<b>Telegram ID:</b> <code>{user['telegram_id']}</code>\n"
+    text += f"<b>Статус:</b> {'🚫 Забанен' if user.get('is_banned') else '✅ Активен'}\n"
+
+    if user.get('is_banned'):
+        text += f"<b>Причина бана:</b> {user.get('ban_reason', 'Не указана')}\n"
+
+    from datetime import datetime
+    created_at = user.get('created_at')
+    if isinstance(created_at, str):
+        created_at = datetime.fromisoformat(created_at)
+    if created_at:
+        text += f"<b>Регистрация:</b> {created_at.strftime('%d.%m.%Y %H:%M')}\n"
+
+    # Профили
+    text += f"\n<b>ПРОФИЛИ:</b>\n"
+    if worker:
+        text += f"👷 <b>Мастер</b>\n"
+        text += f"  • Специализация: {worker.get('specialization', 'Не указана')}\n"
+        if stats.get('total_bids'):
+            text += f"  • Откликов: {stats['total_bids']} (принято: {stats.get('accepted_bids', 0)})\n"
+        if stats.get('worker_rating'):
+            text += f"  • Рейтинг: {stats['worker_rating']:.1f} ⭐\n"
+
+    if client:
+        text += f"📋 <b>Клиент</b>\n"
+        if stats.get('total_orders'):
+            text += f"  • Заказов создано: {stats['total_orders']}\n"
+            text += f"  • Завершено: {stats.get('completed_orders', 0)}\n"
+
+    if not worker and not client:
+        text += "❌ Нет активных профилей\n"
+
+    # Кнопки действий
+    keyboard = []
+    if user.get('is_banned'):
+        keyboard.append([InlineKeyboardButton("✅ Разбанить", callback_data=f"admin_user_unban_{telegram_id}")])
+    else:
+        keyboard.append([InlineKeyboardButton("🚫 Забанить", callback_data=f"admin_user_ban_start_{telegram_id}")])
+
+    keyboard.append([InlineKeyboardButton("⬅️ Назад к списку", callback_data="admin_users")])
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_user_ban_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало процесса бана пользователя"""
+    query = update.callback_query
+    await query.answer()
+
+    telegram_id = int(query.data.replace("admin_user_ban_start_", ""))
+    context.user_data['admin_ban_user_id'] = telegram_id
+
+    text = "🚫 <b>БАН ПОЛЬЗОВАТЕЛЯ</b>\n\n"
+    text += f"Telegram ID: <code>{telegram_id}</code>\n\n"
+    text += "Отправьте причину бана или нажмите \"Отмена\":"
+
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=f"admin_user_view_{telegram_id}")]]
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_BAN_REASON
+
+
+async def admin_user_ban_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выполняет бан пользователя с указанной причиной"""
+    telegram_id = context.user_data.get('admin_ban_user_id')
+    if not telegram_id:
+        await update.message.reply_text("❌ Ошибка: пользователь не выбран.")
+        return ConversationHandler.END
+
+    reason = update.message.text.strip()
+    admin_telegram_id = update.effective_user.id
+
+    success = db.ban_user(telegram_id, reason, admin_telegram_id)
+
+    if success:
+        text = f"✅ Пользователь <code>{telegram_id}</code> забанен.\n"
+        text += f"Причина: {reason}"
+    else:
+        text = "❌ Ошибка при бане пользователя."
+
+    keyboard = [[InlineKeyboardButton("⬅️ К управлению пользователями", callback_data="admin_users")]]
+
+    await update.message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    context.user_data.pop('admin_ban_user_id', None)
+    return ADMIN_MENU
+
+
+async def admin_user_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Разбанивает пользователя"""
+    query = update.callback_query
+    await query.answer()
+
+    telegram_id = int(query.data.replace("admin_user_unban_", ""))
+
+    success = db.unban_user(telegram_id)
+
+    if success:
+        text = f"✅ Пользователь <code>{telegram_id}</code> разбанен."
+    else:
+        text = "❌ Ошибка при разбане пользователя."
+
+    keyboard = [
+        [InlineKeyboardButton("👤 Посмотреть профиль", callback_data=f"admin_user_view_{telegram_id}")],
+        [InlineKeyboardButton("⬅️ К управлению пользователями", callback_data="admin_users")]
+    ]
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_user_search_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало поиска пользователя"""
+    query = update.callback_query
+    await query.answer()
+
+    text = "🔍 <b>ПОИСК ПОЛЬЗОВАТЕЛЯ</b>\n\n"
+    text += "Введите для поиска:\n"
+    text += "• Telegram ID\n"
+    text += "• Имя пользователя\n"
+    text += "• Username (без @)\n\n"
+    text += "Или нажмите \"Отмена\":"
+
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="admin_users")]]
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_SEARCH
+
+
+async def admin_user_search_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выполняет поиск пользователя"""
+    query_text = update.message.text.strip()
+
+    users = db.search_users(query_text, limit=10)
+
+    if not users:
+        text = f"🔍 По запросу '<code>{query_text}</code>' ничего не найдено."
+        keyboard = [[InlineKeyboardButton("🔍 Новый поиск", callback_data="admin_user_search_start")],
+                    [InlineKeyboardButton("⬅️ Назад", callback_data="admin_users")]]
+
+        await update.message.reply_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return ADMIN_MENU
+
+    text = f"🔍 <b>Результаты поиска:</b> '<code>{query_text}</code>'\n\n"
+    text += f"Найдено пользователей: {len(users)}\n\n"
+
+    keyboard = []
+    for user in users:
+        user_dict = dict(user)
+        name = user_dict.get('full_name', 'Без имени')
+        telegram_id = user_dict['telegram_id']
+
+        # Эмодзи статуса
+        status_emoji = "🚫" if user_dict.get('is_banned') else ""
+
+        # Тип профиля
+        profile_type = ""
+        if user_dict.get('worker_id') and user_dict.get('client_id'):
+            profile_type = "👷📋"
+        elif user_dict.get('worker_id'):
+            profile_type = "👷"
+        elif user_dict.get('client_id'):
+            profile_type = "📋"
+
+        button_text = f"{status_emoji}{profile_type} {name[:25]} (ID: {telegram_id})"
+        keyboard.append([InlineKeyboardButton(
+            button_text,
+            callback_data=f"admin_user_view_{telegram_id}"
+        )])
+
+    keyboard.append([InlineKeyboardButton("🔍 Новый поиск", callback_data="admin_user_search_start")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="admin_users")])
+
+    await update.message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
     return ADMIN_MENU
