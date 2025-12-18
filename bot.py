@@ -799,6 +799,14 @@ def main():
         )
     )
 
+    # --- Обработчик кнопки "Сказать спасибо платформе" ---
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.thank_platform,
+            pattern="^thank_platform_"
+        )
+    )
+
     application.add_handler(
         CallbackQueryHandler(
             handlers.test_payment_success,
@@ -912,6 +920,10 @@ def main():
                 CallbackQueryHandler(handlers.admin_broadcast_start, pattern="^admin_broadcast$"),
                 CallbackQueryHandler(handlers.admin_create_ad_start, pattern="^admin_create_ad$"),
                 CallbackQueryHandler(handlers.admin_stats, pattern="^admin_stats$"),
+                CallbackQueryHandler(handlers.admin_category_reports, pattern="^admin_category_reports$"),
+                CallbackQueryHandler(handlers.admin_city_activity, pattern="^admin_city_activity$"),
+                CallbackQueryHandler(handlers.admin_avg_prices, pattern="^admin_avg_prices$"),
+                CallbackQueryHandler(handlers.admin_category_statuses, pattern="^admin_category_statuses$"),
                 CallbackQueryHandler(handlers.admin_export_menu, pattern="^admin_export_menu$"),
                 CallbackQueryHandler(handlers.admin_export_data, pattern="^admin_export_"),
                 CallbackQueryHandler(handlers.admin_users_menu, pattern="^admin_users$"),

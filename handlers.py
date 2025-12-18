@@ -2157,7 +2157,7 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
         [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
-        # TEMPORARILY HIDDEN UNTIL 10-20k USERS: [InlineKeyboardButton("💳 Мои платежи", callback_data="client_my_payments")],
+        [InlineKeyboardButton("💳 Мои платежи", callback_data="client_my_payments")],
         [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_client_notifications")],
         [InlineKeyboardButton("🧰 Главное меню", callback_data="go_main_menu")],
     ]
@@ -5513,33 +5513,30 @@ async def select_master(update: Update, context: ContextTypes.DEFAULT_TYPE):
         price = selected_bid['proposed_price']
         currency = selected_bid['currency']
 
-        # 🆓 ВРЕМЕННО БЕСПЛАТНО: Пропускаем оплату до достижения 10-20k пользователей
-        # Вместо показа окна оплаты, сразу вызываем логику успешной "оплаты"
-        #
-        # ЗАКОММЕНТИРОВАННЫЙ КОД ДЛЯ БУДУЩЕГО ИСПОЛЬЗОВАНИЯ:
-        # # Показываем окно подтверждения с оплатой
-        # text = (
-        #     f"✅ <b>Вы выбрали мастера:</b>\n\n"
-        #     f"👤 {worker_name}\n"
-        #     f"💰 Цена: {price} {currency}\n\n"
-        #     f"📞 <b>Для получения контакта мастера необходима оплата:</b>\n"
-        #     f"💳 Стоимость доступа: <b>1 BYN</b> (или 10 Telegram Stars)\n\n"
-        #     f"После оплаты вы получите:\n"
-        #     f"• Контактный телефон мастера\n"
-        #     f"• Возможность напрямую связаться с ним\n"
-        #     f"• Мастер получит уведомление о вашем выборе\n\n"
-        #     f"💡 <i>Выберите удобный способ оплаты:</i>"
-        # )
-        # keyboard = [
-        #     [InlineKeyboardButton("⭐ Оплатить Telegram Stars", callback_data=f"pay_stars_{bid_id}")],
-        #     [InlineKeyboardButton("💳 Оплатить картой", callback_data=f"pay_card_{bid_id}")],
-        #     [InlineKeyboardButton("⬅️ Назад к откликам", callback_data=f"view_bids_{order_id}")],
-        # ]
-        # await safe_edit_message(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        # 💝 БЕСПЛАТНАЯ БЛАГОДАРНОСТЬ: Приучаем пользователей к действию "поблагодарить платформу"
+        # Позже (при 10-20k пользователей) эта кнопка превратится в реальную оплату через Stars
+        text = (
+            f"✅ <b>Вы выбрали мастера:</b>\n\n"
+            f"👤 {worker_name}\n"
+            f"💰 Цена работы: {price} {currency}\n\n"
+            f"🎉 <b>Получите контакт мастера:</b>\n\n"
+            f"Наша платформа помогает мастерам находить клиентов, а клиентам - надёжных специалистов.\n\n"
+            f"<i>В будущем мы введём символическую плату за подключение к мастеру, "
+            f"но пока платформа работает БЕСПЛАТНО!</i>\n\n"
+            f"💝 Нажмите кнопку ниже, чтобы продолжить:"
+        )
 
-        # 🆓 БЕСПЛАТНЫЙ РЕЖИМ: Подменяем callback_data для прямого вызова успешной обработки
-        query.data = f"test_payment_success_{bid_id}"
-        await test_payment_success(update, context)
+        keyboard = [
+            [InlineKeyboardButton("💝 Сказать спасибо и получить контакт", callback_data=f"thank_platform_{bid_id}")],
+            [InlineKeyboardButton("⬅️ Назад к откликам", callback_data=f"view_bids_{order_id}")],
+        ]
+
+        await safe_edit_message(
+            query,
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
     except Exception as e:
         logger.error(f"Ошибка в select_master: {e}", exc_info=True)
@@ -5682,6 +5679,33 @@ async def confirm_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def thank_platform(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    💝 Обработчик кнопки "Сказать спасибо платформе"
+
+    На данный момент работает бесплатно - просто создаёт чат между клиентом и мастером.
+    В будущем (при 10-20k пользователей) здесь будет реальная оплата через Telegram Stars.
+    Цель: приучить пользователей к действию "поблагодарить/оплатить" перед получением контакта.
+    """
+    query = update.callback_query
+    await query.answer("💝 Спасибо за поддержку!")
+
+    try:
+        bid_id = int(query.data.replace("thank_platform_", ""))
+
+        # Подменяем callback_data для вызова существующей логики
+        query.data = f"test_payment_success_{bid_id}"
+        await test_payment_success(update, context)
+
+    except Exception as e:
+        logger.error(f"Ошибка в thank_platform: {e}", exc_info=True)
+        await safe_edit_message(
+            query,
+            "❌ Произошла ошибка. Попробуйте ещё раз.",
+            parse_mode="HTML"
+        )
+
+
 async def test_payment_success(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     🆓 БЕСПЛАТНЫЙ РЕЖИМ: Обрабатывает выбор мастера БЕЗ оплаты (до достижения 10-20k пользователей)
@@ -5690,7 +5714,9 @@ async def test_payment_success(update: Update, context: ContextTypes.DEFAULT_TYP
     в бесплатном режиме. Создаёт чат между клиентом и мастером напрямую без платежей.
     """
     query = update.callback_query
-    await query.answer()
+    # Не вызываем answer() здесь, т.к. уже вызван в thank_platform
+    if not query.message:
+        await query.answer()
 
     try:
         bid_id = int(query.data.replace("test_payment_success_", ""))
@@ -8973,6 +8999,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton("📈 Отчеты по категориям", callback_data="admin_category_reports")],
         [InlineKeyboardButton("📢 Отправить Broadcast", callback_data="admin_broadcast")],
         [InlineKeyboardButton("📺 Создать рекламу", callback_data="admin_create_ad")],
         [InlineKeyboardButton("👥 Управление пользователями", callback_data="admin_users")],
@@ -9371,6 +9398,211 @@ async def admin_export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("🔙 Назад", callback_data="admin_export_menu")
+            ]])
+        )
+
+    return ADMIN_MENU
+
+
+async def admin_category_reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает подробные отчеты по категориям, городам и специализациям"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        reports = db.get_category_reports()
+
+        text = "📈 <b>ОТЧЕТЫ ПО КАТЕГОРИЯМ</b>\n\n"
+
+        # ТОП КАТЕГОРИЙ ЗАКАЗОВ
+        text += "🏆 <b>ТОП-10 КАТЕГОРИЙ ЗАКАЗОВ:</b>\n"
+        if reports['top_categories']:
+            for i, row in enumerate(reports['top_categories'][:10], 1):
+                row_dict = dict(row)
+                category = row_dict.get('category', 'Неизвестно')
+                count = row_dict.get('count', 0)
+                text += f"{i}. {category}: <b>{count}</b>\n"
+        else:
+            text += "Нет данных\n"
+
+        text += "\n"
+
+        # ТОП ГОРОДОВ
+        text += "🏙 <b>ТОП-10 ГОРОДОВ ПО ЗАКАЗАМ:</b>\n"
+        if reports['top_cities_orders']:
+            for i, row in enumerate(reports['top_cities_orders'][:10], 1):
+                row_dict = dict(row)
+                city = row_dict.get('city', 'Неизвестно')
+                count = row_dict.get('count', 0)
+                text += f"{i}. {city}: <b>{count}</b>\n"
+        else:
+            text += "Нет данных\n"
+
+        text += "\n"
+
+        # ТОП СПЕЦИАЛИЗАЦИЙ МАСТЕРОВ
+        text += "👷 <b>ТОП-10 СПЕЦИАЛИЗАЦИЙ:</b>\n"
+        if reports['top_specializations']:
+            for i, row in enumerate(reports['top_specializations'][:10], 1):
+                row_dict = dict(row)
+                spec = row_dict.get('specialization', 'Неизвестно')
+                count = row_dict.get('count', 0)
+                text += f"{i}. {spec}: <b>{count}</b>\n"
+        else:
+            text += "Нет данных\n"
+
+        keyboard = [
+            [InlineKeyboardButton("🌍 Активность по городам", callback_data="admin_city_activity")],
+            [InlineKeyboardButton("💰 Средние цены", callback_data="admin_avg_prices")],
+            [InlineKeyboardButton("📊 Статусы по категориям", callback_data="admin_category_statuses")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
+        ]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в admin_category_reports: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка при получении отчетов: {str(e)}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="admin_back")
+            ]])
+        )
+
+    return ADMIN_MENU
+
+
+async def admin_city_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Детальная активность по городам"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        reports = db.get_category_reports()
+
+        text = "🌍 <b>АКТИВНОСТЬ ПО ГОРОДАМ</b>\n\n"
+
+        if reports['city_activity']:
+            for i, city_data in enumerate(reports['city_activity'][:10], 1):
+                city = city_data['city']
+                orders = city_data['orders']
+                workers = city_data['workers']
+                total = city_data['total']
+                text += f"{i}. <b>{city}</b>\n"
+                text += f"   📦 Заказов: {orders}\n"
+                text += f"   👷 Мастеров: {workers}\n"
+                text += f"   📊 Всего активности: {total}\n\n"
+        else:
+            text += "Нет данных\n"
+
+        keyboard = [[InlineKeyboardButton("⬅️ Назад к отчетам", callback_data="admin_category_reports")]]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в admin_city_activity: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Ошибка при получении данных",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="admin_category_reports")
+            ]])
+        )
+
+    return ADMIN_MENU
+
+
+async def admin_avg_prices(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Средние цены по категориям"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        reports = db.get_category_reports()
+
+        text = "💰 <b>СРЕДНИЕ ЦЕНЫ ПО КАТЕГОРИЯМ</b>\n\n"
+        text += "<i>(Только для категорий с минимум 3 откликами в BYN)</i>\n\n"
+
+        if reports['avg_prices_by_category']:
+            for i, row in enumerate(reports['avg_prices_by_category'][:10], 1):
+                row_dict = dict(row)
+                category = row_dict.get('category', 'Неизвестно')
+                avg_price = row_dict.get('avg_price', 0)
+                bid_count = row_dict.get('bid_count', 0)
+                text += f"{i}. <b>{category}</b>\n"
+                text += f"   Средняя цена: {avg_price:.2f} BYN\n"
+                text += f"   Откликов: {bid_count}\n\n"
+        else:
+            text += "Недостаточно данных для анализа\n"
+
+        keyboard = [[InlineKeyboardButton("⬅️ Назад к отчетам", callback_data="admin_category_reports")]]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в admin_avg_prices: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Ошибка при получении данных",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="admin_category_reports")
+            ]])
+        )
+
+    return ADMIN_MENU
+
+
+async def admin_category_statuses(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Статусы заказов по категориям"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        reports = db.get_category_reports()
+
+        text = "📊 <b>СТАТУСЫ ЗАКАЗОВ ПО КАТЕГОРИЯМ</b>\n\n"
+
+        if reports['category_statuses']:
+            for row in reports['category_statuses'][:10]:
+                row_dict = dict(row)
+                category = row_dict.get('category', 'Неизвестно')
+                open_count = row_dict.get('open_count', 0)
+                active_count = row_dict.get('active_count', 0)
+                completed_count = row_dict.get('completed_count', 0)
+                total_count = row_dict.get('total_count', 0)
+
+                text += f"<b>{category}</b> (всего: {total_count})\n"
+                text += f"  🟢 Открытые: {open_count}\n"
+                text += f"  🔵 В работе: {active_count}\n"
+                text += f"  ✅ Завершённые: {completed_count}\n\n"
+        else:
+            text += "Нет данных\n"
+
+        keyboard = [[InlineKeyboardButton("⬅️ Назад к отчетам", callback_data="admin_category_reports")]]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в admin_category_statuses: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Ошибка при получении данных",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="admin_category_reports")
             ]])
         )
 

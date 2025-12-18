@@ -5039,6 +5039,123 @@ def get_all_reviews_for_export():
         return cursor.fetchall()
 
 
+def get_category_reports():
+    """
+    Получает подробные отчеты по категориям работ, городам и специализациям
+    для аналитики в админ-панели
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        reports = {}
+
+        # === ТОП КАТЕГОРИЙ ЗАКАЗОВ ===
+        cursor.execute("""
+            SELECT category, COUNT(*) as count
+            FROM orders
+            GROUP BY category
+            ORDER BY count DESC
+            LIMIT 10
+        """)
+        reports['top_categories'] = cursor.fetchall()
+
+        # === ТОП ГОРОДОВ ПО ЗАКАЗАМ ===
+        cursor.execute("""
+            SELECT city, COUNT(*) as count
+            FROM orders
+            WHERE city IS NOT NULL AND city != ''
+            GROUP BY city
+            ORDER BY count DESC
+            LIMIT 10
+        """)
+        reports['top_cities_orders'] = cursor.fetchall()
+
+        # === ТОП СПЕЦИАЛИЗАЦИЙ МАСТЕРОВ ===
+        cursor.execute("""
+            SELECT specialization, COUNT(*) as count
+            FROM workers
+            WHERE specialization IS NOT NULL AND specialization != ''
+            GROUP BY specialization
+            ORDER BY count DESC
+            LIMIT 10
+        """)
+        reports['top_specializations'] = cursor.fetchall()
+
+        # === СТАТИСТИКА ПО СТАТУСАМ ЗАКАЗОВ В КАТЕГОРИЯХ ===
+        cursor.execute("""
+            SELECT
+                category,
+                SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) as open_count,
+                SUM(CASE WHEN status IN ('master_selected', 'contact_shared', 'master_confirmed') THEN 1 ELSE 0 END) as active_count,
+                SUM(CASE WHEN status IN ('done', 'completed') THEN 1 ELSE 0 END) as completed_count,
+                COUNT(*) as total_count
+            FROM orders
+            GROUP BY category
+            ORDER BY total_count DESC
+            LIMIT 15
+        """)
+        reports['category_statuses'] = cursor.fetchall()
+
+        # === АКТИВНОСТЬ ПО ГОРОДАМ (заказы + мастера) ===
+        cursor.execute("""
+            SELECT
+                city,
+                COUNT(*) as order_count
+            FROM orders
+            WHERE city IS NOT NULL AND city != ''
+            GROUP BY city
+            ORDER BY order_count DESC
+            LIMIT 10
+        """)
+        city_orders = {dict(row)['city']: dict(row)['order_count'] for row in cursor.fetchall()}
+
+        # Получаем количество мастеров по городам
+        cursor.execute("""
+            SELECT
+                wc.city,
+                COUNT(DISTINCT wc.worker_id) as worker_count
+            FROM worker_cities wc
+            GROUP BY wc.city
+            ORDER BY worker_count DESC
+            LIMIT 15
+        """)
+        city_workers = {dict(row)['city']: dict(row)['worker_count'] for row in cursor.fetchall()}
+
+        # Объединяем данные
+        all_cities = set(city_orders.keys()) | set(city_workers.keys())
+        city_activity = []
+        for city in all_cities:
+            city_activity.append({
+                'city': city,
+                'orders': city_orders.get(city, 0),
+                'workers': city_workers.get(city, 0),
+                'total': city_orders.get(city, 0) + city_workers.get(city, 0)
+            })
+
+        # Сортируем по общей активности
+        city_activity.sort(key=lambda x: x['total'], reverse=True)
+        reports['city_activity'] = city_activity[:10]
+
+        # === СРЕДНЯЯ ЦЕНА ПО КАТЕГОРИЯМ (из откликов) ===
+        cursor.execute("""
+            SELECT
+                o.category,
+                AVG(CAST(b.proposed_price AS REAL)) as avg_price,
+                COUNT(b.id) as bid_count
+            FROM bids b
+            INNER JOIN orders o ON b.order_id = o.id
+            WHERE b.proposed_price IS NOT NULL
+              AND b.proposed_price != ''
+              AND b.currency = 'BYN'
+            GROUP BY o.category
+            HAVING bid_count >= 3
+            ORDER BY avg_price DESC
+            LIMIT 10
+        """)
+        reports['avg_prices_by_category'] = cursor.fetchall()
+
+        return reports
+
+
 # ------- ФУНКЦИИ ДЛЯ РАБОТЫ С ГОРОДАМИ МАСТЕРА -------
 
 def add_worker_city(worker_id, city):
