@@ -5999,9 +5999,9 @@ async def open_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         text += "💡 Напишите сообщение для отправки в чат:"
 
-        # Сохраняем chat_id в контексте для отправки сообщения
-        context.user_data['active_chat_id'] = chat_id
-        context.user_data['active_chat_role'] = my_role
+        # ИСПРАВЛЕНО: Сохраняем активный чат в БД вместо user_data
+        # Это решает проблему потери состояния при перезапуске бота
+        db.set_active_chat(query.from_user.id, chat_id, my_role)
 
         keyboard = [
             [InlineKeyboardButton("🔄 Обновить", callback_data=f"open_chat_{chat_id}")],
@@ -6022,13 +6022,16 @@ async def open_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает сообщения, отправленные в активный чат"""
-    # Проверяем есть ли активный чат
-    chat_id = context.user_data.get('active_chat_id')
-    my_role = context.user_data.get('active_chat_role')
+    # ИСПРАВЛЕНО: Получаем активный чат из БД вместо user_data
+    # Это решает проблему потери состояния при перезапуске бота
+    active_chat = db.get_active_chat(update.effective_user.id)
 
-    if not chat_id or not my_role:
+    if not active_chat:
         # Нет активного чата, пропускаем
         return
+
+    chat_id = active_chat['chat_id']
+    my_role = active_chat['role']
 
     message_text = update.message.text
 
