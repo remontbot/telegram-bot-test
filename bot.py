@@ -979,7 +979,8 @@ def main():
         allow_reentry=True,
     )
 
-    application.add_handler(suggestion_conv_handler)
+    # Важно: ConversationHandler должен быть в group=0 для приоритета
+    application.add_handler(suggestion_conv_handler, group=0)
 
     # Обработчик неизвестных команд
     application.add_handler(
