@@ -1838,10 +1838,11 @@ async def worker_my_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Фильтруем только АКТИВНЫЕ отклики (pending - ждём ответа клиента)
-    pending_bids = [dict(bid) for bid in all_bids if dict(bid)['status'] == 'pending']
+    # ИСПРАВЛЕНО: Фильтруем только АКТИВНЫЕ отклики (active - ждём ответа клиента)
+    # Статус 'active' присваивается при создании отклика в db.create_bid()
+    active_bids = [dict(bid) for bid in all_bids if dict(bid)['status'] == 'active']
 
-    if not pending_bids:
+    if not active_bids:
         keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")]]
         await query.edit_message_text(
             "💼 <b>Активные отклики</b>\n\n"
@@ -1853,12 +1854,12 @@ async def worker_my_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Формируем текст с активными откликами
-    text = f"💼 <b>Активные отклики</b> ({len(pending_bids)})\n\n"
+    text = f"💼 <b>Активные отклики</b> ({len(active_bids)})\n\n"
     text += "⏳ Ожидают ответа клиента:\n\n"
 
     keyboard = []
 
-    for i, bid in enumerate(pending_bids[:10], 1):  # Показываем до 10 активных
+    for i, bid in enumerate(active_bids[:10], 1):  # Показываем до 10 активных
         order_id = bid['order_id']
         order = db.get_order_by_id(order_id)
 
@@ -1882,10 +1883,10 @@ async def worker_my_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             text += "\n"
 
-    if len(pending_bids) > 10:
-        text += f"... и ещё {len(pending_bids) - 10}\n\n"
+    if len(active_bids) > 10:
+        text += f"... и ещё {len(active_bids) - 10}\n\n"
 
-    text += f"📊 <b>Всего активных откликов:</b> {len(pending_bids)}"
+    text += f"📊 <b>Всего активных откликов:</b> {len(active_bids)}"
 
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")])
 
@@ -5702,6 +5703,147 @@ async def confirm_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def process_bid_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, bid_id: int):
+    """
+    Общая функция для обработки выбора мастера (с оплатой или без).
+    Вызывается из thank_platform и test_payment_success.
+    """
+    query = update.callback_query
+
+    try:
+        # Получаем информацию об отклике
+        # Сначала пытаемся получить из context.user_data, если нет - из базы данных
+        bids = context.user_data.get('viewing_bids', {}).get('bids', [])
+        selected_bid = None
+        for bid in bids:
+            if bid['id'] == bid_id:
+                selected_bid = bid
+                break
+
+        # Если не нашли в context.user_data, получаем из базы данных
+        if not selected_bid:
+            bid_from_db = db.get_bid_by_id(bid_id)
+            if bid_from_db:
+                selected_bid = dict(bid_from_db)
+            else:
+                await safe_edit_message(query, "❌ Ошибка: отклик не найден.", parse_mode="HTML")
+                return
+
+        order_id = selected_bid['order_id']
+        worker_id = selected_bid['worker_id']
+        worker_name = selected_bid['worker_name']
+        worker_telegram_id = selected_bid.get('worker_telegram_id')
+
+        # Получаем информацию о клиенте
+        user = db.get_user(query.from_user.id)
+        if not user:
+            await safe_edit_message(query, "❌ Ошибка: пользователь не найден.", parse_mode="HTML")
+            return
+
+        client_profile = db.get_client_profile(user["id"])
+        if not client_profile:
+            await safe_edit_message(query, "❌ Ошибка: профиль клиента не найден.", parse_mode="HTML")
+            return
+
+        # 1. Создаём транзакцию (оплата 1 BYN за доступ)
+        transaction_id = db.create_transaction(
+            user_id=user["id"],
+            order_id=order_id,
+            bid_id=bid_id,
+            transaction_type="chat_access",
+            amount=1.00,
+            currency="BYN",
+            payment_method="test",
+            description=f"Доступ к чату с мастером для заказа #{order_id}"
+        )
+
+        logger.info(f"✅ Транзакция #{transaction_id} создана: клиент {user['id']} оплатил доступ к мастеру {worker_id}")
+
+        # 2. Получаем worker_user_id (из таблицы workers поле user_id)
+        worker_profile = db.get_worker_by_id(worker_id)
+        if not worker_profile:
+            await safe_edit_message(query, "❌ Ошибка: профиль мастера не найден.", parse_mode="HTML")
+            return
+
+        worker_user_id = worker_profile['user_id']
+
+        # 3. Проверяем существует ли уже чат
+        existing_chat = db.get_chat_by_order_and_bid(order_id, bid_id)
+
+        if existing_chat:
+            chat_id = existing_chat['id']
+            logger.info(f"Чат #{chat_id} уже существует, используем его")
+        else:
+            # Создаём новый чат
+            chat_id = db.create_chat(
+                order_id=order_id,
+                client_user_id=user["id"],
+                worker_user_id=worker_user_id,
+                bid_id=bid_id
+            )
+            logger.info(f"✅ Чат #{chat_id} создан между клиентом {user['id']} и мастером {worker_user_id}")
+
+        # 4. Отмечаем отклик как выбранный, НО заказ в статусе "waiting_master_confirmation"
+        db.update_order_status(order_id, "waiting_master_confirmation")
+        db.select_bid(bid_id)
+
+        # 5. Уведомляем мастера что его выбрали и открыт чат
+        if worker_telegram_id:
+            try:
+                keyboard_for_worker = [
+                    [InlineKeyboardButton("💬 Открыть чат", callback_data=f"open_chat_{chat_id}")],
+                ]
+
+                await context.bot.send_message(
+                    chat_id=worker_telegram_id,
+                    text=(
+                        f"🎉 <b>Ваш отклик выбран!</b>\n\n"
+                        f"Клиент выбрал вас для выполнения заказа #{order_id}\n\n"
+                        f"💬 Открыт чат для обсуждения деталей.\n"
+                        f"⚠️ <b>ВАЖНО:</b> Ответьте клиенту в течение 24 часов, иначе ваш рейтинг снизится!\n\n"
+                        f"Обсудите детали заказа и подтвердите готовность выполнить работу."
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard_for_worker)
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при отправке уведомления мастеру: {e}")
+
+        # 6. Показываем клиенту что чат открыт
+        text = (
+            f"✅ <b>Оплата прошла успешно!</b>\n\n"
+            f"👤 <b>Выбран мастер:</b> {worker_name}\n\n"
+            f"💬 <b>Открыт чат для обсуждения деталей</b>\n\n"
+            f"📋 <b>Следующие шаги:</b>\n"
+            f"1. Обсудите с мастером детали заказа в чате\n"
+            f"2. Дождитесь подтверждения мастера (до 24 часов)\n"
+            f"3. Договоритесь о времени и месте встречи\n\n"
+            f"💡 Если мастер не ответит в течение 24 часов, вы сможете выбрать другого мастера БЕЗ дополнительной оплаты.\n\n"
+            f"Удачного сотрудничества! 🤝"
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("💬 Открыть чат", callback_data=f"open_chat_{chat_id}")],
+            [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="show_client_menu")],
+        ]
+
+        await safe_edit_message(
+            query,
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в process_bid_selection: {e}", exc_info=True)
+        await safe_edit_message(
+            query,
+            "❌ Произошла ошибка. Попробуйте ещё раз.",
+            parse_mode="HTML"
+        )
+
+
 async def thank_platform(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     💝 Обработчик кнопки "Сказать спасибо платформе"
@@ -5715,10 +5857,8 @@ async def thank_platform(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         bid_id = int(query.data.replace("thank_platform_", ""))
-
-        # Подменяем callback_data для вызова существующей логики
-        query.data = f"test_payment_success_{bid_id}"
-        await test_payment_success(update, context)
+        # ИСПРАВЛЕНО: Вызываем общую функцию напрямую с bid_id
+        await process_bid_selection(update, context, bid_id)
 
     except Exception as e:
         logger.error(f"Ошибка в thank_platform: {e}", exc_info=True)
@@ -5743,133 +5883,8 @@ async def test_payment_success(update: Update, context: ContextTypes.DEFAULT_TYP
 
     try:
         bid_id = int(query.data.replace("test_payment_success_", ""))
-
-        # Получаем информацию об отклике
-        # Сначала пытаемся получить из context.user_data, если нет - из базы данных
-        bids = context.user_data.get('viewing_bids', {}).get('bids', [])
-        selected_bid = None
-        for bid in bids:
-            if bid['id'] == bid_id:
-                selected_bid = bid
-                break
-
-        # Если не нашли в context.user_data, получаем из базы данных
-        if not selected_bid:
-            bid_from_db = db.get_bid_by_id(bid_id)
-            if bid_from_db:
-                selected_bid = dict(bid_from_db)
-            else:
-                await query.edit_message_text("❌ Ошибка: отклик не найден.")
-                return
-
-        order_id = selected_bid['order_id']
-        worker_id = selected_bid['worker_id']
-        worker_name = selected_bid['worker_name']
-        worker_telegram_id = selected_bid.get('worker_telegram_id')
-
-        # Получаем информацию о клиенте
-        user = db.get_user(query.from_user.id)
-        if not user:
-            await query.edit_message_text("❌ Ошибка: пользователь не найден.")
-            return
-
-        client_profile = db.get_client_profile(user["id"])
-        if not client_profile:
-            await query.edit_message_text("❌ Ошибка: профиль клиента не найден.")
-            return
-
-        # 1. Создаём транзакцию (оплата 1 BYN за доступ)
-        # ИСПРАВЛЕНО: Было 5.00, изменено на 1.00 для соответствия UI
-        transaction_id = db.create_transaction(
-            user_id=user["id"],
-            order_id=order_id,
-            bid_id=bid_id,
-            transaction_type="chat_access",  # ИСПРАВЛЕНО: точное название (не contact, а chat)
-            amount=1.00,  # ИСПРАВЛЕНО: было 5.00
-            currency="BYN",
-            payment_method="test",
-            description=f"Доступ к чату с мастером для заказа #{order_id}"  # ИСПРАВЛЕНО: было "к мастеру"
-        )
-
-        logger.info(f"✅ Транзакция #{transaction_id} создана: клиент {user['id']} оплатил доступ к мастеру {worker_id}")
-
-        # 2. Получаем worker_user_id (из таблицы workers поле user_id)
-        worker_profile = db.get_worker_by_id(worker_id)
-        if not worker_profile:
-            await query.edit_message_text("❌ Ошибка: профиль мастера не найден.")
-            return
-
-        worker_user_id = worker_profile['user_id']
-
-        # 3. Проверяем существует ли уже чат
-        existing_chat = db.get_chat_by_order_and_bid(order_id, bid_id)
-
-        if existing_chat:
-            chat_id = existing_chat['id']
-            logger.info(f"Чат #{chat_id} уже существует, используем его")
-        else:
-            # Создаём новый чат
-            chat_id = db.create_chat(
-                order_id=order_id,
-                client_user_id=user["id"],
-                worker_user_id=worker_user_id,
-                bid_id=bid_id
-            )
-            logger.info(f"✅ Чат #{chat_id} создан между клиентом {user['id']} и мастером {worker_user_id}")
-
-        # 3. Отмечаем отклик как выбранный, НО заказ в статусе "waiting_master_confirmation"
-        # Изменяем статус заказа
-        db.update_order_status(order_id, "waiting_master_confirmation")
-
-        # Отклик помечаем как selected
-        db.select_bid(bid_id)
-
-        # 4. Уведомляем мастера что его выбрали и открыт чат
-        if worker_telegram_id:
-            try:
-                keyboard_for_worker = [
-                    [InlineKeyboardButton("💬 Открыть чат", callback_data=f"open_chat_{chat_id}")],
-                ]
-
-                await context.bot.send_message(
-                    chat_id=worker_telegram_id,
-                    text=(
-                        f"🎉 <b>Ваш отклик выбран!</b>\n\n"
-                        f"Клиент выбрал вас для выполнения заказа #{order_id}\n\n"
-                        f"💬 Открыт чат для обсуждения деталей.\n"
-                        f"⚠️ <b>ВАЖНО:</b> Ответьте клиенту в течение 24 часов, иначе ваш рейтинг снизится!\n\n"
-                        f"Обсудите детали заказа и подтвердите готовность выполнить работу."
-                    ),
-                    parse_mode="HTML",
-                    reply_markup=InlineKeyboardMarkup(keyboard_for_worker)
-                )
-            except Exception as e:
-                logger.error(f"Ошибка при отправке уведомления мастеру: {e}")
-
-        # 5. Показываем клиенту что чат открыт
-        text = (
-            f"✅ <b>Оплата прошла успешно!</b>\n\n"
-            f"👤 <b>Выбран мастер:</b> {worker_name}\n\n"
-            f"💬 <b>Открыт чат для обсуждения деталей</b>\n\n"
-            f"📋 <b>Следующие шаги:</b>\n"
-            f"1. Обсудите с мастером детали заказа в чате\n"
-            f"2. Дождитесь подтверждения мастера (до 24 часов)\n"
-            f"3. Договоритесь о времени и месте встречи\n\n"
-            f"💡 Если мастер не ответит в течение 24 часов, вы сможете выбрать другого мастера БЕЗ дополнительной оплаты.\n\n"
-            f"Удачного сотрудничества! 🤝"
-        )
-
-        keyboard = [
-            [InlineKeyboardButton("💬 Открыть чат", callback_data=f"open_chat_{chat_id}")],
-            [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
-            [InlineKeyboardButton("🏠 Главное меню", callback_data="show_client_menu")],
-        ]
-
-        await query.edit_message_text(
-            text,
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        # ИСПРАВЛЕНО: Вызываем общую функцию process_bid_selection
+        await process_bid_selection(update, context, bid_id)
 
         # Очищаем контекст просмотра откликов
         if 'viewing_bids' in context.user_data:
@@ -5877,7 +5892,8 @@ async def test_payment_success(update: Update, context: ContextTypes.DEFAULT_TYP
 
     except Exception as e:
         logger.error(f"Ошибка в test_payment_success: {e}", exc_info=True)
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             f"❌ Ошибка при обработке оплаты:\n{str(e)}",
             parse_mode="HTML"
         )
@@ -7088,14 +7104,18 @@ async def worker_bid_publish(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 currency
             )
         
-        # Подтверждение мастеру
-        keyboard = [[InlineKeyboardButton("📋 К доступным заказам", callback_data="worker_view_orders")]]
-        
+        # ИСПРАВЛЕНО: Добавлена кнопка "Мои отклики" для быстрого доступа к своим откликам
+        keyboard = [
+            [InlineKeyboardButton("💼 Мои отклики", callback_data="worker_my_bids")],
+            [InlineKeyboardButton("📋 К доступным заказам", callback_data="worker_view_orders")],
+        ]
+
         await message.reply_text(
             "✅ <b>Отклик отправлен!</b>\n\n"
             f"💰 Ваша цена: {price} {currency}\n"
             f"📝 Комментарий: {comment if comment else 'Нет'}\n\n"
-            "Клиент увидит ваш отклик и сможет с вами связаться!",
+            "Клиент увидит ваш отклик и сможет с вами связаться!\n\n"
+            "💡 Вы можете посмотреть свои отклики в разделе \"💼 Мои отклики\"",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
