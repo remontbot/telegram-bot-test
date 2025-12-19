@@ -1938,7 +1938,7 @@ async def worker_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     order_dict = dict(order)
                     if order_dict['status'] in ('master_selected', 'contact_shared', 'master_confirmed', 'waiting_master_confirmation'):
                         active_count += 1
-                    elif order_dict['status'] in ('done', 'completed', 'canceled'):
+                    elif order_dict['status'] in ('done', 'completed', 'canceled', 'cancelled'):
                         completed_count += 1
 
         if active_count == 0 and completed_count == 0:
@@ -2100,7 +2100,7 @@ async def worker_completed_orders(update: Update, context: ContextTypes.DEFAULT_
                 order = db.get_order_by_id(bid_dict['order_id'])
                 if order:
                     order_dict = dict(order)
-                    if order_dict['status'] in ('done', 'completed', 'canceled'):
+                    if order_dict['status'] in ('done', 'completed', 'canceled', 'cancelled'):
                         bid_dict['order_status'] = order_dict['status']
                         bid_dict['order_city'] = order_dict.get('city', 'Не указан')
                         bid_dict['order_category'] = order_dict.get('category', 'Без категории')
@@ -4095,8 +4095,8 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         # Подсчитываем активные и завершённые заказы
-        active_statuses = ['open', 'pending_choice', 'master_selected', 'contact_shared', 'waiting_master_confirmation']
-        completed_statuses = ['done', 'completed', 'canceled']
+        active_statuses = ['open', 'pending_choice', 'master_selected', 'contact_shared', 'waiting_master_confirmation', 'master_confirmed']
+        completed_statuses = ['done', 'completed', 'canceled', 'cancelled']
 
         active_count = sum(1 for o in all_orders if dict(o).get('status', 'open') in active_statuses)
         completed_count = sum(1 for o in all_orders if dict(o).get('status', 'open') in completed_statuses)
@@ -4152,7 +4152,7 @@ async def client_active_orders(update: Update, context: ContextTypes.DEFAULT_TYP
 
         # Получаем все заказы и фильтруем активные
         all_orders, _, _ = db.get_client_orders(client_profile["id"], page=1, per_page=1000)
-        active_statuses = ['open', 'pending_choice', 'master_selected', 'contact_shared', 'waiting_master_confirmation']
+        active_statuses = ['open', 'pending_choice', 'master_selected', 'contact_shared', 'waiting_master_confirmation', 'master_confirmed']
         orders = [o for o in all_orders if dict(o).get('status', 'open') in active_statuses]
 
         if not orders:
@@ -4181,14 +4181,16 @@ async def client_active_orders(update: Update, context: ContextTypes.DEFAULT_TYP
                 "pending_choice": "🟡",
                 "master_selected": "🔵",
                 "contact_shared": "✅",
-                "waiting_master_confirmation": "⏳"
+                "waiting_master_confirmation": "⏳",
+                "master_confirmed": "💬"
             }
             status_text = {
                 "open": "Открыт",
                 "pending_choice": "Ожидает выбора",
                 "master_selected": "Мастер выбран",
                 "contact_shared": "Контакт передан",
-                "waiting_master_confirmation": "Ожидает подтверждения"
+                "waiting_master_confirmation": "Ожидает подтверждения",
+                "master_confirmed": "В работе"
             }
 
             emoji = status_emoji.get(order_dict.get("status", "open"), "⚪")
@@ -4266,7 +4268,7 @@ async def client_completed_orders(update: Update, context: ContextTypes.DEFAULT_
 
         # Получаем все заказы и фильтруем завершённые
         all_orders, _, _ = db.get_client_orders(client_profile["id"], page=1, per_page=1000)
-        completed_statuses = ['done', 'completed', 'canceled']
+        completed_statuses = ['done', 'completed', 'canceled', 'cancelled']
         orders = [o for o in all_orders if dict(o).get('status', 'open') in completed_statuses]
 
         if not orders:
