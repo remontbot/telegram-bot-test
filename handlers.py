@@ -7890,119 +7890,113 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
 # ============================================
 
 async def client_complete_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Клиент подтверждает завершение заказа"""
+    """
+    ИСПРАВЛЕНО: Клиент завершает заказ.
+    Заказ сразу получает статус 'completed', обе стороны могут оставить отзыв.
+    """
     query = update.callback_query
     await query.answer()
 
     order_id = int(query.data.replace("complete_order_", ""))
 
-    # Помечаем что клиент подтвердил завершение
-    both_confirmed = db.mark_order_completed_by_client(order_id)
+    # ИСПРАВЛЕНО: Заказ завершается сразу (не требуется подтверждение от обеих сторон)
+    db.mark_order_completed_by_client(order_id)
 
-    if both_confirmed:
-        # Обе стороны подтвердили - заказ завершен
-        order = db.get_order_by_id(order_id)
-        worker_info = db.get_worker_info_for_order(order_id)
+    # Получаем информацию о заказе и мастере
+    order = db.get_order_by_id(order_id)
+    worker_info = db.get_worker_info_for_order(order_id)
 
-        if order and worker_info:
-            order_dict = dict(order)
-            worker_dict = dict(worker_info)
+    if order and worker_info:
+        order_dict = dict(order)
+        worker_dict = dict(worker_info)
 
-            # Уведомляем клиента
-            await query.edit_message_text(
-                "✅ <b>Заказ завершен!</b>\n\n"
-                "Спасибо за подтверждение! Мастер также подтвердил завершение работы.\n\n"
-                "Оставьте отзыв о работе мастера, это поможет другим заказчикам!",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("⭐ Оставить отзыв", callback_data=f"leave_review_{order_id}")
-                ]])
-            )
-
-            # Уведомляем мастера
-            user_id = worker_dict['user_id']
-            user = db.get_user_by_id(user_id)
-            if user:
-                user_dict = dict(user)
-                telegram_id = user_dict['telegram_id']
-                try:
-                    await context.bot.send_message(
-                        chat_id=telegram_id,
-                        text=f"✅ <b>Заказ #{order_id} завершен!</b>\n\n"
-                             f"Клиент подтвердил завершение работы.\n"
-                             f"Оставьте отзыв о работе с клиентом!",
-                        parse_mode="HTML",
-                        reply_markup=InlineKeyboardMarkup([[
-                            InlineKeyboardButton("⭐ Оставить отзыв", callback_data=f"leave_review_{order_id}")
-                        ]])
-                    )
-                except Exception as e:
-                    logger.error(f"Не удалось отправить уведомление мастеру: {e}")
-    else:
-        # Только клиент подтвердил, ждем мастера
+        # Уведомляем клиента
         await query.edit_message_text(
-            "✅ <b>Спасибо за подтверждение!</b>\n\n"
-            "Ожидаем подтверждения от мастера.\n"
-            "Когда обе стороны подтвердят завершение, вы сможете оставить отзыв.",
-            parse_mode="HTML"
+            "✅ <b>Заказ завершен!</b>\n\n"
+            "Заказ перемещен во вкладку \"Завершенные заказы\".\n\n"
+            "💡 Оставьте отзыв о работе мастера - это поможет другим заказчикам выбрать проверенного специалиста!",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⭐ Оценить мастера", callback_data=f"leave_review_{order_id}")],
+                [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")]
+            ])
         )
+
+        # Уведомляем мастера о завершении заказа
+        user_id = worker_dict['user_id']
+        user = db.get_user_by_id(user_id)
+        if user:
+            user_dict = dict(user)
+            telegram_id = user_dict['telegram_id']
+            try:
+                await context.bot.send_message(
+                    chat_id=telegram_id,
+                    text=f"✅ <b>Заказ #{order_id} завершен!</b>\n\n"
+                         f"Клиент завершил заказ.\n"
+                         f"Заказ перемещен во вкладку \"Завершенные заказы\".\n\n"
+                         f"💡 Оставьте отзыв о работе с клиентом!",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⭐ Оценить заказчика", callback_data=f"leave_review_{order_id}")],
+                        [InlineKeyboardButton("📦 Мои заказы", callback_data="worker_my_orders")]
+                    ])
+                )
+            except Exception as e:
+                logger.error(f"Не удалось отправить уведомление мастеру: {e}")
 
 
 async def worker_complete_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Мастер подтверждает завершение заказа"""
+    """
+    ИСПРАВЛЕНО: Мастер завершает заказ.
+    Заказ сразу получает статус 'completed', обе стороны могут оставить отзыв.
+    """
     query = update.callback_query
     await query.answer()
 
     order_id = int(query.data.replace("worker_complete_order_", ""))
 
-    # Помечаем что мастер подтвердил завершение
-    both_confirmed = db.mark_order_completed_by_worker(order_id)
+    # ИСПРАВЛЕНО: Заказ завершается сразу (не требуется подтверждение от обеих сторон)
+    db.mark_order_completed_by_worker(order_id)
 
-    if both_confirmed:
-        # Обе стороны подтвердили - заказ завершен
-        order = db.get_order_by_id(order_id)
+    # Получаем информацию о заказе
+    order = db.get_order_by_id(order_id)
 
-        if order:
-            order_dict = dict(order)
+    if order:
+        order_dict = dict(order)
 
-            # Уведомляем мастера
-            await query.edit_message_text(
-                "✅ <b>Заказ завершен!</b>\n\n"
-                "Спасибо за подтверждение! Клиент также подтвердил завершение заказа.\n\n"
-                "Оставьте отзыв о работе с клиентом!",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("⭐ Оставить отзыв", callback_data=f"leave_review_{order_id}")
-                ]])
-            )
-
-            # Уведомляем клиента
-            client_user_id = order_dict['client_user_id']
-            user = db.get_user_by_id(client_user_id)
-            if user:
-                user_dict = dict(user)
-                telegram_id = user_dict['telegram_id']
-                try:
-                    await context.bot.send_message(
-                        chat_id=telegram_id,
-                        text=f"✅ <b>Заказ #{order_id} завершен!</b>\n\n"
-                             f"Мастер подтвердил завершение работы.\n"
-                             f"Оставьте отзыв о работе мастера!",
-                        parse_mode="HTML",
-                        reply_markup=InlineKeyboardMarkup([[
-                            InlineKeyboardButton("⭐ Оставить отзыв", callback_data=f"leave_review_{order_id}")
-                        ]])
-                    )
-                except Exception as e:
-                    logger.error(f"Не удалось отправить уведомление клиенту: {e}")
-    else:
-        # Только мастер подтвердил, ждем клиента
+        # Уведомляем мастера
         await query.edit_message_text(
-            "✅ <b>Спасибо за подтверждение!</b>\n\n"
-            "Ожидаем подтверждения от клиента.\n"
-            "Когда обе стороны подтвердят завершение, вы сможете оставить отзыв.",
-            parse_mode="HTML"
+            "✅ <b>Заказ завершен!</b>\n\n"
+            "Заказ перемещен во вкладку \"Завершенные заказы\".\n\n"
+            "💡 Оставьте отзыв о работе с заказчиком!",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⭐ Оценить заказчика", callback_data=f"leave_review_{order_id}")],
+                [InlineKeyboardButton("📦 Мои заказы", callback_data="worker_my_orders")]
+            ])
         )
+
+        # Уведомляем клиента о завершении заказа
+        client_user_id = order_dict['client_user_id']
+        user = db.get_user_by_id(client_user_id)
+        if user:
+            user_dict = dict(user)
+            telegram_id = user_dict['telegram_id']
+            try:
+                await context.bot.send_message(
+                    chat_id=telegram_id,
+                    text=f"✅ <b>Заказ #{order_id} завершен!</b>\n\n"
+                         f"Мастер завершил заказ.\n"
+                         f"Заказ перемещен во вкладку \"Завершенные заказы\".\n\n"
+                         f"💡 Оставьте отзыв о работе мастера!",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⭐ Оценить мастера", callback_data=f"leave_review_{order_id}")],
+                        [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")]
+                    ])
+                )
+            except Exception as e:
+                logger.error(f"Не удалось отправить уведомление клиенту: {e}")
 
 
 async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE):

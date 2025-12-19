@@ -1301,90 +1301,52 @@ def set_selected_worker(order_id, worker_id):
 
 def mark_order_completed_by_client(order_id):
     """
-    Клиент подтверждает завершение заказа.
-    Если мастер тоже подтвердил - меняет статус на 'completed'.
+    ИСПРАВЛЕНО: Клиент завершает заказ.
+    Заказ сразу получает статус 'completed' - не требуется подтверждение от мастера.
+    Обе стороны могут оставить отзыв о работе.
 
     Returns:
-        bool: True если обе стороны подтвердили завершение
+        bool: True (заказ завершен)
     """
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
-        # Помечаем что клиент подтвердил
+        # Помечаем что клиент завершил и сразу меняем статус
         cursor.execute("""
             UPDATE orders
-            SET completed_by_client = 1
+            SET completed_by_client = 1,
+                status = 'completed'
             WHERE id = ?
         """, (order_id,))
 
-        # Проверяем подтвердил ли мастер
-        cursor.execute("""
-            SELECT completed_by_worker FROM orders WHERE id = ?
-        """, (order_id,))
-        row = cursor.fetchone()
-
-        if row:
-            if USE_POSTGRES:
-                worker_completed = row['completed_by_worker']
-            else:
-                worker_completed = row[0]
-
-            # Если обе стороны подтвердили - меняем статус
-            if worker_completed:
-                cursor.execute("""
-                    UPDATE orders SET status = 'completed' WHERE id = ?
-                """, (order_id,))
-                conn.commit()
-                logger.info(f"✅ Заказ {order_id} завершен: обе стороны подтвердили (клиент)")
-                return True
-
         conn.commit()
-        logger.info(f"📝 Заказ {order_id}: клиент подтвердил завершение, ожидается подтверждение мастера")
-        return False
+        logger.info(f"✅ Заказ {order_id} завершен клиентом")
+        return True
 
 
 def mark_order_completed_by_worker(order_id):
     """
-    Мастер подтверждает завершение заказа.
-    Если клиент тоже подтвердил - меняет статус на 'completed'.
+    ИСПРАВЛЕНО: Мастер завершает заказ.
+    Заказ сразу получает статус 'completed' - не требуется подтверждение от клиента.
+    Обе стороны могут оставить отзыв о работе.
 
     Returns:
-        bool: True если обе стороны подтвердили завершение
+        bool: True (заказ завершен)
     """
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
-        # Помечаем что мастер подтвердил
+        # Помечаем что мастер завершил и сразу меняем статус
         cursor.execute("""
             UPDATE orders
-            SET completed_by_worker = 1
+            SET completed_by_worker = 1,
+                status = 'completed'
             WHERE id = ?
         """, (order_id,))
 
-        # Проверяем подтвердил ли клиент
-        cursor.execute("""
-            SELECT completed_by_client FROM orders WHERE id = ?
-        """, (order_id,))
-        row = cursor.fetchone()
-
-        if row:
-            if USE_POSTGRES:
-                client_completed = row['completed_by_client']
-            else:
-                client_completed = row[0]
-
-            # Если обе стороны подтвердили - меняем статус
-            if client_completed:
-                cursor.execute("""
-                    UPDATE orders SET status = 'completed' WHERE id = ?
-                """, (order_id,))
-                conn.commit()
-                logger.info(f"✅ Заказ {order_id} завершен: обе стороны подтвердили (мастер)")
-                return True
-
         conn.commit()
-        logger.info(f"📝 Заказ {order_id}: мастер подтвердил завершение, ожидается подтверждение клиента")
-        return False
+        logger.info(f"✅ Заказ {order_id} завершен мастером")
+        return True
 
 
 def get_worker_info_for_order(order_id):
