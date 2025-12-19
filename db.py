@@ -1110,11 +1110,18 @@ def add_completed_work_photo(order_id, worker_id, photo_id):
         cursor = get_cursor(conn)
         created_at = datetime.now().isoformat()
         try:
-            cursor.execute("""
-                INSERT INTO completed_work_photos
-                (order_id, worker_id, photo_id, verified, created_at)
-                VALUES (?, ?, ?, 0, ?)
-            """, (order_id, worker_id, photo_id, created_at))
+            if USE_POSTGRES:
+                cursor.execute("""
+                    INSERT INTO completed_work_photos
+                    (order_id, worker_id, photo_id, verified, created_at)
+                    VALUES (%s, %s, %s, FALSE, %s)
+                """, (order_id, worker_id, photo_id, created_at))
+            else:
+                cursor.execute("""
+                    INSERT INTO completed_work_photos
+                    (order_id, worker_id, photo_id, verified, created_at)
+                    VALUES (?, ?, ?, 0, ?)
+                """, (order_id, worker_id, photo_id, created_at))
             conn.commit()
 
             if USE_POSTGRES:
