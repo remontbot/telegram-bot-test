@@ -882,31 +882,20 @@ def get_worker_completed_orders_count(worker_user_id):
 
 def calculate_photo_limit(worker_user_id):
     """
-    Рассчитывает максимальное количество фото для мастера на основе выполненных заказов.
+    Рассчитывает максимальное количество фото для портфолио мастера.
 
     Логика:
-    - Начальный лимит: 10 фото (при регистрации)
-    - За каждые 5 завершенных заказов: +5 фото
-    - Максимум: 30 фото
+    - Фиксированный лимит: 10 фото (обычное портфолио)
+    - Подтвержденные фото работ хранятся отдельно (до 90 фото)
 
     Args:
         worker_user_id: ID пользователя-мастера
 
     Returns:
-        int: Максимальное количество фото (от 10 до 30)
+        int: Максимальное количество фото в портфолио (10)
     """
-    completed_orders = get_worker_completed_orders_count(worker_user_id)
-
-    # Базовый лимит: 10 фото
-    base_limit = 10
-
-    # За каждые 5 заказов добавляем 5 фото
-    bonus_photos = (completed_orders // 5) * 5
-
-    # Итоговый лимит (не больше 30)
-    total_limit = min(base_limit + bonus_photos, 30)
-
-    return total_limit
+    # Фиксированный лимит портфолио
+    return 10
 
 
 def get_client_profile(user_id):
@@ -1110,11 +1099,18 @@ def add_completed_work_photo(order_id, worker_id, photo_id):
         cursor = get_cursor(conn)
         created_at = datetime.now().isoformat()
         try:
-            cursor.execute("""
-                INSERT INTO completed_work_photos
-                (order_id, worker_id, photo_id, verified, created_at)
-                VALUES (?, ?, ?, 0, ?)
-            """, (order_id, worker_id, photo_id, created_at))
+            if USE_POSTGRES:
+                cursor.execute("""
+                    INSERT INTO completed_work_photos
+                    (order_id, worker_id, photo_id, verified, created_at)
+                    VALUES (%s, %s, %s, FALSE, %s)
+                """, (order_id, worker_id, photo_id, created_at))
+            else:
+                cursor.execute("""
+                    INSERT INTO completed_work_photos
+                    (order_id, worker_id, photo_id, verified, created_at)
+                    VALUES (?, ?, ?, 0, ?)
+                """, (order_id, worker_id, photo_id, created_at))
             conn.commit()
 
             if USE_POSTGRES:
@@ -1236,6 +1232,29 @@ def get_unverified_photos_for_client(user_id):
             ORDER BY cwp.created_at DESC
         """, (user_id,))
         return cursor.fetchall()
+
+
+def count_worker_completed_work_photos(worker_id):
+    """
+    Подсчитывает общее количество фотографий завершенных работ у мастера.
+
+    Args:
+        worker_id: ID мастера
+
+    Returns:
+        int: Количество фотографий
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT COUNT(*) as count
+            FROM completed_work_photos
+            WHERE worker_id = ?
+        """, (worker_id,))
+        result = cursor.fetchone()
+        if result:
+            return dict(result)['count'] if isinstance(result, dict) else result[0]
+        return 0
 
 
 def get_order_by_id(order_id):

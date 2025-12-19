@@ -2449,23 +2449,19 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
     logger.info(f"Запущен режим добавления фото для user_id={user_id}")
 
     if available_slots <= 0:
-        # Информация о том, как увеличить лимит
-        if max_photos < 30:
-            limit_info = f"\n\n💡 <b>Хотите больше фото?</b>\n" \
-                        f"Выполняйте заказы чтобы увеличить лимит до 30 фото!\n" \
-                        f"За каждые 5 заказов: +5 фото"
-        else:
-            limit_info = "\n\n✨ Вы достигли максимального лимита в 30 фото!"
-
         await query.edit_message_text(
             "📸 <b>Портфолио заполнено</b>\n\n"
-            f"У вас уже загружено максимальное количество фото ({max_photos}).\n\n"
+            f"У вас уже загружено максимум {max_photos} фото в портфолио.\n\n"
             "🗑 <b>Чтобы добавить новые фото:</b>\n"
-            "Используйте кнопку «🗑 Управление фото работ» чтобы удалить старые фото и освободить место."
-            f"{limit_info}",
+            "Используйте кнопку «🗑 Управление фото» чтобы удалить старые.\n\n"
+            "✨ <b>Хотите больше фото?</b>\n"
+            "Загружайте фото завершенных работ после каждого заказа!\n"
+            "• До 3 фото за заказ\n"
+            "• С подтверждением заказчика ✅\n"
+            "• До 90 подтвержденных фото в профиле",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🗑 Управление фото работ", callback_data="manage_portfolio_photos")],
+                [InlineKeyboardButton("🗑 Управление фото", callback_data="manage_portfolio_photos")],
                 [InlineKeyboardButton("⬅️ Назад к профилю", callback_data="worker_profile")]
             ])
         )
@@ -2478,15 +2474,10 @@ async def worker_add_photos_start(update: Update, context: ContextTypes.DEFAULT_
                    "Это повышает доверие клиентов.\n\n" \
                    f"После можете добавить до {max_photos - 1} фотографий ваших работ и 1 видео."
     else:
-        # Показываем прогресс и информацию о лимите
-        if max_photos > 10:
-            hint_text = f"📊 Загружено: {current_count}/{max_photos}\n" \
-                       f"Можно добавить ещё: {available_slots} фото/видео\n\n" \
-                       f"💡 Ваш лимит увеличен до {max_photos} фото за {completed_orders} выполненных заказов!"
-        else:
-            hint_text = f"📊 Загружено: {current_count}/{max_photos}\n" \
-                       f"Можно добавить ещё: {available_slots} фото/видео\n\n" \
-                       f"💡 Выполняйте заказы чтобы увеличить лимит до 30 фото!"
+        # Показываем прогресс
+        hint_text = f"📊 Загружено: {current_count}/{max_photos}\n" \
+                   f"Можно добавить ещё: {available_slots} фото/видео\n\n" \
+                   f"💡 Это портфолио (макс. 10 фото). После заказов загружайте подтвержденные фото работ!"
 
     await query.edit_message_text(
         f"📸 <b>Добавление фото в портфолио</b>\n\n"
@@ -2602,12 +2593,7 @@ async def worker_add_photos_upload(update: Update, context: ContextTypes.DEFAULT
 
     if total_count >= max_photos:
         keyboard = [[InlineKeyboardButton("✅ Завершить добавление", callback_data="finish_adding_photos")]]
-
-        # Информация о том, как увеличить лимит
-        if max_photos < 30:
-            limit_info = f"\n\n💡 Выполняйте заказы чтобы увеличить лимит до 30 фото!"
-        else:
-            limit_info = ""
+        limit_info = "\n\n💡 Загружайте фото после заказов (до 3 фото, подтвержденные заказчиком)!"
 
         await update.message.reply_text(
             f"⚠️ Достигнут лимит в {max_photos} фотографий.\n\n"
@@ -4499,15 +4485,15 @@ async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_T
                 await safe_edit_message(query, "❌ Информация о клиенте не найдена.")
                 return
             client_user_dict = dict(client_user)
-            target_name = client_user_dict.get('first_name', 'Клиент')
-            target_role = "Клиент"
+            target_name = client_user_dict.get('first_name', 'Заказчик')
+            target_role = "Заказчик"
             cancel_callback = "worker_my_orders"
 
         # Показываем форму оценки
         text = (
             f"✅ <b>Завершение заказа #{order_id}</b>\n\n"
             f"👤 <b>{target_role}:</b> {target_name}\n\n"
-            f"📊 <b>Оцените {'работу мастера' if is_client else 'клиента'}:</b>\n"
+            f"📊 <b>Оцените {'работу мастера' if is_client else 'заказчика'}:</b>\n"
             f"Ваша оценка поможет {'другим клиентам' if is_client else 'другим мастерам'} сделать правильный выбор."
         )
 
@@ -4655,7 +4641,13 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Проверяем, оставила ли противоположная сторона уже отзыв
         opposite_review_exists = db.check_review_exists(order_id, notify_user_id)
 
-        # Обновляем статус заказа на "done" ТОЛЬКО если обе стороны оценили
+        # ИСПРАВЛЕНО: Обновляем статус заказа на "completed" СРАЗУ при первой оценке
+        # Это делает заказ видимым в "Завершенные заказы" у обеих сторон
+        if order_dict['status'] not in ['completed', 'done']:
+            db.update_order_status(order_id, 'completed')
+            logger.info(f"✅ Заказ {order_id} помечен как 'completed' - первая оценка получена")
+
+        # Если обе стороны оценили, дополнительно помечаем как 'done'
         if opposite_review_exists and order_dict['status'] != 'done':
             db.update_order_status(order_id, 'done')
             logger.info(f"✅ Заказ {order_id} помечен как 'done' - обе стороны оценили")
@@ -4850,12 +4842,15 @@ async def worker_upload_work_photo_start(update: Update, context: ContextTypes.D
 
         text = (
             f"📸 <b>Загрузка фото работы для заказа #{order_id}</b>\n\n"
-            f"Отправьте фотографии выполненной работы (до 10 фото).\n\n"
+            f"Отправьте фотографии выполненной работы (до 3 фото).\n\n"
+            f"✅ <b>Подтвержденные заказчиком фото:</b>\n"
+            f"• Получат специальный значок ✅\n"
+            f"• Повышают доверие клиентов\n"
+            f"• Максимум 90 фото в профиле\n\n"
             f"💡 <b>Советы для качественных фото:</b>\n"
             f"• Убедитесь, что работа хорошо видна\n"
             f"• Используйте хорошее освещение\n"
-            f"• Покажите результат с разных ракурсов\n"
-            f"• Избегайте размытых фото\n\n"
+            f"• Покажите результат с разных ракурсов\n\n"
             f"После загрузки всех фото нажмите «Завершить»."
         )
 
@@ -4930,17 +4925,35 @@ async def worker_upload_work_photo_receive(update: Update, context: ContextTypes
             if 'uploaded_work_photos' not in context.user_data:
                 context.user_data['uploaded_work_photos'] = []
 
+            # Проверяем лимит 3 фото
+            if len(context.user_data['uploaded_work_photos']) >= 3:
+                await update.message.reply_text(
+                    "⚠️ <b>Достигнут лимит</b>\n\n"
+                    "Максимум 3 фото на один заказ.\n\n"
+                    "Нажмите «Завершить загрузку» чтобы сохранить фото.",
+                    parse_mode="HTML"
+                )
+                return
+
             context.user_data['uploaded_work_photos'].append(photo_id)
             count = len(context.user_data['uploaded_work_photos'])
 
             # Подтверждаем получение
-            await update.message.reply_text(
-                f"✅ Фото {count} получено.\n\n"
-                f"Можете отправить ещё фото или нажмите «Завершить загрузку».",
-                parse_mode="HTML"
-            )
+            remaining = 3 - count
+            if remaining > 0:
+                await update.message.reply_text(
+                    f"✅ Фото {count}/3 получено.\n\n"
+                    f"Можете отправить ещё {remaining} фото или нажмите «Завершить загрузку».",
+                    parse_mode="HTML"
+                )
+            else:
+                await update.message.reply_text(
+                    f"✅ Все 3 фото получены!\n\n"
+                    f"Нажмите «Завершить загрузку» чтобы сохранить.",
+                    parse_mode="HTML"
+                )
 
-            logger.info(f"Получено фото {count} для заказа {order_id}")
+            logger.info(f"Получено фото {count}/3 для заказа {order_id}")
 
     except Exception as e:
         logger.error(f"Ошибка при получении фото работы: {e}", exc_info=True)
@@ -4980,9 +4993,37 @@ async def worker_finish_work_photos(update: Update, context: ContextTypes.DEFAUL
 
         worker_dict = dict(worker_profile)
 
+        # Проверяем общий лимит подтвержденных фото (90 максимум)
+        current_total = db.count_worker_completed_work_photos(worker_dict['id'])
+        remaining_slots = max(0, 90 - current_total)
+
+        if remaining_slots == 0:
+            await safe_edit_message(
+                query,
+                "⚠️ <b>Достигнут максимальный лимит</b>\n\n"
+                "У вас уже 90 подтвержденных фото работ (максимум).\n\n"
+                "🗑 <b>Удалите старые фото:</b>\n"
+                "Чтобы добавить новые, сначала удалите некоторые старые фото через управление портфолио.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🗑 Управление фото", callback_data="manage_completed_photos"),
+                    InlineKeyboardButton("⬅️ Назад", callback_data="worker_my_orders")
+                ]])
+            )
+            context.user_data.pop('uploading_work_photo_order_id', None)
+            context.user_data.pop('uploaded_work_photos', None)
+            return
+
+        # Если фото больше чем доступно слотов - обрезаем
+        photos_to_save = photos[:remaining_slots]
+        if len(photos_to_save) < len(photos):
+            warning_text = f"\n\n⚠️ Сохранено только {len(photos_to_save)} из {len(photos)} фото (достигнут лимит 90)"
+        else:
+            warning_text = ""
+
         # Сохраняем каждое фото в БД
         saved_count = 0
-        for photo_id in photos:
+        for photo_id in photos_to_save:
             result = db.add_completed_work_photo(order_id, worker_dict['id'], photo_id)
             if result:
                 saved_count += 1
@@ -5027,7 +5068,8 @@ async def worker_finish_work_photos(update: Update, context: ContextTypes.DEFAUL
             f"✅ <b>Фотографии загружены!</b>\n\n"
             f"Загружено {saved_count} {_get_photos_word(saved_count)}.\n\n"
             f"📨 Клиент получил уведомление и сможет подтвердить подлинность фото.\n"
-            f"Подтверждённые фото будут отмечены значком ✅ в вашем профиле.",
+            f"Подтверждённые фото будут отмечены значком ✅ в вашем профиле."
+            f"{warning_text}",
             parse_mode="HTML"
         )
 
@@ -6041,7 +6083,10 @@ async def open_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = [
             [InlineKeyboardButton("🔄 Обновить", callback_data=f"open_chat_{chat_id}")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="show_client_menu" if is_client else "show_worker_menu")],
+            [
+                InlineKeyboardButton("⬅️ Назад", callback_data="show_client_menu" if is_client else "show_worker_menu"),
+                InlineKeyboardButton("🏠 Главное меню", callback_data="show_client_menu" if is_client else "show_worker_menu")
+            ],
         ]
 
         await safe_edit_message(
@@ -6058,6 +6103,14 @@ async def open_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает сообщения, отправленные в активный чат"""
+    # КРИТИЧНО: Проверяем, не находится ли пользователь в ConversationHandler
+    # Если находится - пропускаем, чтобы ConversationHandler обработал сообщение
+    conversation_keys = ['review_order_id', 'review_bid_id', 'review_rating',
+                        'suggestion_active', 'adding_photos']
+    if any(key in context.user_data for key in conversation_keys):
+        # Пользователь в ConversationHandler, пропускаем
+        return
+
     # ИСПРАВЛЕНО: Получаем активный чат из БД вместо user_data
     # Это решает проблему потери состояния при перезапуске бота
     active_chat = db.get_active_chat(update.effective_user.id)
@@ -6137,12 +6190,19 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception as e:
                 logger.error(f"Ошибка при отправке уведомления: {e}")
 
+        # Определяем меню для возврата
+        menu_callback = "show_client_menu" if my_role == "client" else "show_worker_menu"
+
         # Подтверждаем отправку
         await update.message.reply_text(
             "✅ Сообщение отправлено!",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("💬 Открыть чат", callback_data=f"open_chat_{chat_id}")
-            ]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Обновить чат", callback_data=f"open_chat_{chat_id}")],
+                [
+                    InlineKeyboardButton("⬅️ Назад", callback_data=menu_callback),
+                    InlineKeyboardButton("🏠 Главное меню", callback_data=menu_callback)
+                ]
+            ])
         )
 
     except Exception as e:
@@ -8195,6 +8255,9 @@ async def save_review(update: Update, context: ContextTypes.DEFAULT_TYPE, query=
         # Сохраняем отзыв
         success = db.add_review(from_user_id, to_user_id, order_id, role_from, role_to, rating, comment)
 
+        # Определяем меню для возврата на основе роли
+        menu_callback = "show_worker_menu" if role_from == "worker" else "show_client_menu"
+
         if success:
             stars = "⭐" * rating
             message_text = (
@@ -8204,7 +8267,7 @@ async def save_review(update: Update, context: ContextTypes.DEFAULT_TYPE, query=
             if comment:
                 message_text += f"\n📝 Комментарий:\n{comment[:100]}{'...' if len(comment) > 100 else ''}"
 
-            keyboard = [[InlineKeyboardButton("⬅️ В главное меню", callback_data="start")]]
+            keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data=menu_callback)]]
 
             if query:
                 await query.edit_message_text(
@@ -8220,18 +8283,23 @@ async def save_review(update: Update, context: ContextTypes.DEFAULT_TYPE, query=
                 )
         else:
             error_message = "❌ Не удалось сохранить отзыв. Возможно вы уже оставляли отзыв по этому заказу."
+            keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data=menu_callback)]]
             if query:
-                await query.edit_message_text(error_message)
+                await query.edit_message_text(error_message, reply_markup=InlineKeyboardMarkup(keyboard))
             else:
-                await update.message.reply_text(error_message)
+                await update.message.reply_text(error_message, reply_markup=InlineKeyboardMarkup(keyboard))
 
     except Exception as e:
         logger.error(f"Ошибка при сохранении отзыва: {e}", exc_info=True)
         error_message = f"❌ Произошла ошибка при сохранении отзыва: {str(e)}"
+        # Определяем меню для возврата
+        role_from = context.user_data.get('review_role_from', 'worker')
+        menu_callback = "show_worker_menu" if role_from == "worker" else "show_client_menu"
+        keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data=menu_callback)]]
         if query:
-            await query.edit_message_text(error_message)
+            await query.edit_message_text(error_message, reply_markup=InlineKeyboardMarkup(keyboard))
         else:
-            await update.message.reply_text(error_message)
+            await update.message.reply_text(error_message, reply_markup=InlineKeyboardMarkup(keyboard))
 
     # Очищаем данные
     context.user_data.clear()
@@ -9083,6 +9151,9 @@ async def send_suggestion_start(update: Update, context: ContextTypes.DEFAULT_TY
 
     logger.info(f"🔍 send_suggestion_start вызван пользователем {update.effective_user.id}")
 
+    # Устанавливаем флаг, чтобы handle_chat_message не перехватывал сообщения
+    context.user_data['suggestion_active'] = True
+
     await query.edit_message_text(
         "💡 <b>Отправить предложение</b>\n\n"
         "Здесь вы можете отправить свои предложения по улучшению платформы:\n"
@@ -9144,13 +9215,19 @@ async def receive_suggestion_text(update: Update, context: ContextTypes.DEFAULT_
         suggestion_id = db.create_suggestion(user_dict['id'], user_role, text)
         logger.info(f"✅ Предложение #{suggestion_id} создано пользователем {user_dict['id']}")
 
+        # Очищаем флаг
+        context.user_data.pop('suggestion_active', None)
+
+        # Определяем правильное меню для возврата
+        menu_callback = "show_worker_menu" if user_role in ['worker', 'both'] else "show_client_menu"
+
         await message.reply_text(
             "✅ <b>Спасибо за ваше предложение!</b>\n\n"
             "Мы обязательно рассмотрим его и постараемся сделать платформу лучше!\n\n"
             "💡 Вы можете отправить еще предложения в любое время через меню.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠 В меню", callback_data="go_main_menu")
+                InlineKeyboardButton("🏠 В главное меню", callback_data=menu_callback)
             ]])
         )
 
@@ -9158,11 +9235,18 @@ async def receive_suggestion_text(update: Update, context: ContextTypes.DEFAULT_
 
     except Exception as e:
         logger.error(f"Ошибка при создании предложения: {e}", exc_info=True)
+
+        # Очищаем флаг
+        context.user_data.pop('suggestion_active', None)
+
+        # Определяем правильное меню для возврата
+        menu_callback = "show_worker_menu" if user_role in ['worker', 'both'] else "show_client_menu"
+
         await message.reply_text(
             "❌ Произошла ошибка при отправке предложения.\n\n"
             "Попробуйте позже.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠 В меню", callback_data="go_main_menu")
+                InlineKeyboardButton("🏠 В главное меню", callback_data=menu_callback)
             ]])
         )
         return ConversationHandler.END
@@ -9173,12 +9257,24 @@ async def cancel_suggestion(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    # Очищаем флаг
+    context.user_data.pop('suggestion_active', None)
+
+    # Определяем меню для возврата
+    user = db.get_user_by_telegram_id(update.effective_user.id)
+    menu_callback = "show_worker_menu"
+    if user:
+        user_dict = dict(user)
+        client_profile = db.get_client_profile(user_dict['id'])
+        if client_profile and not db.get_worker_profile(user_dict['id']):
+            menu_callback = "show_client_menu"
+
     await query.edit_message_text(
         "❌ Отправка предложения отменена.\n\n"
         "Вы можете вернуться к ней в любое время через меню.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🏠 В меню", callback_data="go_main_menu")
+            InlineKeyboardButton("🏠 В главное меню", callback_data=menu_callback)
         ]])
     )
 
