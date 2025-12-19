@@ -621,6 +621,16 @@ def init_db():
             );
         """)
 
+        # ИСПРАВЛЕНИЕ: Таблица активных чатов (для сохранения состояния между перезапусками)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS active_chats (
+                telegram_id INTEGER PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                role TEXT NOT NULL,                -- 'client' или 'worker'
+                updated_at TEXT NOT NULL
+            );
+        """)
+
         conn.commit()
 
 
@@ -2778,6 +2788,71 @@ def is_worker_confirmed(chat_id):
             return bool(result.get('worker_confirmed', False))
         else:
             return bool(result[0])
+
+
+# === ACTIVE CHAT HELPERS (ИСПРАВЛЕНИЕ: сохранение в БД вместо user_data) ===
+
+def set_active_chat(telegram_id, chat_id, role):
+    """
+    Сохраняет активный чат пользователя в БД.
+    Это решает проблему потери состояния при перезапуске бота.
+
+    Args:
+        telegram_id: Telegram ID пользователя
+        chat_id: ID чата
+        role: Роль пользователя в чате ('client' или 'worker')
+    """
+    from datetime import datetime
+
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            INSERT OR REPLACE INTO active_chats (telegram_id, chat_id, role, updated_at)
+            VALUES (?, ?, ?, ?)
+        """, (telegram_id, chat_id, role, datetime.now().isoformat()))
+        conn.commit()
+        logger.info(f"✅ Активный чат сохранён: user={telegram_id}, chat={chat_id}, role={role}")
+
+
+def get_active_chat(telegram_id):
+    """
+    Получает активный чат пользователя из БД.
+
+    Args:
+        telegram_id: Telegram ID пользователя
+
+    Returns:
+        dict: {'chat_id': int, 'role': str} или None если нет активного чата
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT chat_id, role FROM active_chats WHERE telegram_id = ?
+        """, (telegram_id,))
+        result = cursor.fetchone()
+
+        if not result:
+            return None
+
+        # PostgreSQL возвращает dict, SQLite может вернуть tuple
+        if isinstance(result, dict):
+            return {'chat_id': result['chat_id'], 'role': result['role']}
+        else:
+            return {'chat_id': result[0], 'role': result[1]}
+
+
+def clear_active_chat(telegram_id):
+    """
+    Очищает активный чат пользователя.
+
+    Args:
+        telegram_id: Telegram ID пользователя
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("DELETE FROM active_chats WHERE telegram_id = ?", (telegram_id,))
+        conn.commit()
+        logger.info(f"✅ Активный чат очищен для user={telegram_id}")
 
 
 # === TRANSACTION HELPERS ===
