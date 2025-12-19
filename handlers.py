@@ -4672,7 +4672,7 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
                     keyboard = []
                     # Если мастер еще не оценил клиента, добавляем кнопку оценки
                     if not opposite_review_exists:
-                        keyboard.append([InlineKeyboardButton("⭐ Оценить клиента", callback_data=f"complete_order_{order_id}")])
+                        keyboard.append([InlineKeyboardButton("⭐ Оценить заказчика", callback_data=f"complete_order_{order_id}")])
                     keyboard.append([InlineKeyboardButton("📸 Загрузить фото работы", callback_data=f"upload_work_photo_{order_id}")])
                     keyboard.append([InlineKeyboardButton("➡️ Пропустить", callback_data=f"skip_work_photo_{order_id}")])
 
@@ -6440,7 +6440,9 @@ async def worker_view_order_details(update: Update, context: ContextTypes.DEFAUL
                 else:
                     keyboard.append([InlineKeyboardButton("💰 Откликнуться", callback_data=f"bid_on_order_{order_id}")])
 
-            keyboard.append([InlineKeyboardButton("⬅️ К списку заказов", callback_data="worker_view_orders")])
+            # ИСПРАВЛЕНО: Если мастер откликнулся на заказ - возвращаем в "Мои отклики", иначе в "Доступные заказы"
+            back_callback = "worker_my_bids" if already_bid else "worker_view_orders"
+            keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)])
             
             await query.message.delete()
             await query.message.reply_photo(
@@ -6468,7 +6470,9 @@ async def worker_view_order_details(update: Update, context: ContextTypes.DEFAUL
                 else:
                     keyboard.append([InlineKeyboardButton("💰 Откликнуться", callback_data=f"bid_on_order_{order_id}")])
 
-            keyboard.append([InlineKeyboardButton("⬅️ К списку заказов", callback_data="worker_view_orders")])
+            # ИСПРАВЛЕНО: Если мастер откликнулся на заказ - возвращаем в "Мои отклики", иначе в "Доступные заказы"
+            back_callback = "worker_my_bids" if already_bid else "worker_view_orders"
+            keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)])
             
             await query.edit_message_text(
                 text,
