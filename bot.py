@@ -556,6 +556,10 @@ def main():
         CallbackQueryHandler(handlers.worker_portfolio_view_navigate, pattern="^worker_portfolio_view_(prev|next)$")
     )
 
+    application.add_handler(
+        CallbackQueryHandler(handlers.back_to_bid_card, pattern="^back_to_bid_card$")
+    )
+
     # Загрузка фото (обрабатывает и portfolio_photos и profile_photo)
     # КРИТИЧНО: Группа -1 чтобы выполнялось РАНЬШЕ ConversationHandler
     application.add_handler(
@@ -902,12 +906,15 @@ def main():
         CommandHandler("check_expired_chats", handlers.check_expired_chats_command)
     )
 
-    # Глобальный обработчик сообщений для чатов (ВАЖНО: должен быть ДО unknown_command)
+    # Глобальный обработчик сообщений для чатов
+    # КРИТИЧНО: Группа -1 чтобы выполнялось РАНЬШЕ ConversationHandler
+    # Это позволяет обрабатывать сообщения в активном чате до того, как ConversationHandler их перехватит
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handlers.handle_chat_message
-        )
+        ),
+        group=-1
     )
 
     # --- ConversationHandler для админ-панели ---
