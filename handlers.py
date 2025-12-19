@@ -3333,7 +3333,7 @@ async def view_worker_portfolio(update: Update, context: ContextTypes.DEFAULT_TY
             query,
             "📸 У этого мастера пока нет фото работ.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("⬅️ Назад", callback_data="client_my_orders")
+                InlineKeyboardButton("⬅️ Назад", callback_data="back_to_bid_card")
             ]])
         )
         return
@@ -3357,7 +3357,7 @@ async def view_worker_portfolio(update: Update, context: ContextTypes.DEFAULT_TY
         ]
         keyboard.append(nav_buttons)
 
-    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="client_my_orders")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_bid_card")])
 
     try:
         await query.message.delete()
@@ -3404,7 +3404,7 @@ async def worker_portfolio_view_navigate(update: Update, context: ContextTypes.D
         ]
         keyboard.append(nav_buttons)
 
-    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="client_my_orders")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_bid_card")])
 
     try:
         await query.message.delete()
@@ -5507,6 +5507,40 @@ async def bid_navigate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"Ошибка в bid_navigate: {e}", exc_info=True)
+
+
+async def back_to_bid_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат к карточке отклика из просмотра портфолио"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # Проверяем, что у нас есть данные об откликах
+        bid_data = context.user_data.get('viewing_bids')
+        if not bid_data:
+            await query.message.delete()
+            await context.bot.send_message(
+                chat_id=query.from_user.id,
+                text="❌ Ошибка: данные откликов не найдены. Вернитесь к списку заказов.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⬅️ К моим заказам", callback_data="client_my_orders")
+                ]])
+            )
+            return
+
+        # Показываем текущую карточку отклика
+        await show_bid_card(update, context, query=query)
+
+    except Exception as e:
+        logger.error(f"Ошибка в back_to_bid_card: {e}", exc_info=True)
+        await query.message.delete()
+        await context.bot.send_message(
+            chat_id=query.from_user.id,
+            text="❌ Произошла ошибка. Вернитесь к списку заказов.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ К моим заказам", callback_data="client_my_orders")
+            ]])
+        )
 
 
 async def select_master(update: Update, context: ContextTypes.DEFAULT_TYPE):
