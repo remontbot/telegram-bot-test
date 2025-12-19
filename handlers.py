@@ -1878,7 +1878,7 @@ async def worker_my_bids(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Добавляем кнопку для просмотра заказа
             keyboard.append([InlineKeyboardButton(
                 f"📋 Заказ #{order_id}",
-                callback_data=f"order_{order_id}"
+                callback_data=f"view_order_{order_id}"
             )])
 
             text += "\n"
