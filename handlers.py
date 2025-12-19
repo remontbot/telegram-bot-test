@@ -4499,15 +4499,15 @@ async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_T
                 await safe_edit_message(query, "❌ Информация о клиенте не найдена.")
                 return
             client_user_dict = dict(client_user)
-            target_name = client_user_dict.get('first_name', 'Клиент')
-            target_role = "Клиент"
+            target_name = client_user_dict.get('first_name', 'Заказчик')
+            target_role = "Заказчик"
             cancel_callback = "worker_my_orders"
 
         # Показываем форму оценки
         text = (
             f"✅ <b>Завершение заказа #{order_id}</b>\n\n"
             f"👤 <b>{target_role}:</b> {target_name}\n\n"
-            f"📊 <b>Оцените {'работу мастера' if is_client else 'клиента'}:</b>\n"
+            f"📊 <b>Оцените {'работу мастера' if is_client else 'заказчика'}:</b>\n"
             f"Ваша оценка поможет {'другим клиентам' if is_client else 'другим мастерам'} сделать правильный выбор."
         )
 
@@ -4655,7 +4655,13 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Проверяем, оставила ли противоположная сторона уже отзыв
         opposite_review_exists = db.check_review_exists(order_id, notify_user_id)
 
-        # Обновляем статус заказа на "done" ТОЛЬКО если обе стороны оценили
+        # ИСПРАВЛЕНО: Обновляем статус заказа на "completed" СРАЗУ при первой оценке
+        # Это делает заказ видимым в "Завершенные заказы" у обеих сторон
+        if order_dict['status'] not in ['completed', 'done']:
+            db.update_order_status(order_id, 'completed')
+            logger.info(f"✅ Заказ {order_id} помечен как 'completed' - первая оценка получена")
+
+        # Если обе стороны оценили, дополнительно помечаем как 'done'
         if opposite_review_exists and order_dict['status'] != 'done':
             db.update_order_status(order_id, 'done')
             logger.info(f"✅ Заказ {order_id} помечен как 'done' - обе стороны оценили")
@@ -6041,7 +6047,10 @@ async def open_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = [
             [InlineKeyboardButton("🔄 Обновить", callback_data=f"open_chat_{chat_id}")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="show_client_menu" if is_client else "show_worker_menu")],
+            [
+                InlineKeyboardButton("⬅️ Назад", callback_data="show_client_menu" if is_client else "show_worker_menu"),
+                InlineKeyboardButton("🏠 Главное меню", callback_data="show_client_menu" if is_client else "show_worker_menu")
+            ],
         ]
 
         await safe_edit_message(
@@ -6058,6 +6067,14 @@ async def open_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает сообщения, отправленные в активный чат"""
+    # КРИТИЧНО: Проверяем, не находится ли пользователь в ConversationHandler
+    # Если находится - пропускаем, чтобы ConversationHandler обработал сообщение
+    conversation_keys = ['review_order_id', 'review_bid_id', 'review_rating',
+                        'suggestion_active', 'adding_photos']
+    if any(key in context.user_data for key in conversation_keys):
+        # Пользователь в ConversationHandler, пропускаем
+        return
+
     # ИСПРАВЛЕНО: Получаем активный чат из БД вместо user_data
     # Это решает проблему потери состояния при перезапуске бота
     active_chat = db.get_active_chat(update.effective_user.id)
@@ -6137,12 +6154,19 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception as e:
                 logger.error(f"Ошибка при отправке уведомления: {e}")
 
+        # Определяем меню для возврата
+        menu_callback = "show_client_menu" if my_role == "client" else "show_worker_menu"
+
         # Подтверждаем отправку
         await update.message.reply_text(
             "✅ Сообщение отправлено!",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("💬 Открыть чат", callback_data=f"open_chat_{chat_id}")
-            ]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Обновить чат", callback_data=f"open_chat_{chat_id}")],
+                [
+                    InlineKeyboardButton("⬅️ Назад", callback_data=menu_callback),
+                    InlineKeyboardButton("🏠 Главное меню", callback_data=menu_callback)
+                ]
+            ])
         )
 
     except Exception as e:
@@ -8195,6 +8219,9 @@ async def save_review(update: Update, context: ContextTypes.DEFAULT_TYPE, query=
         # Сохраняем отзыв
         success = db.add_review(from_user_id, to_user_id, order_id, role_from, role_to, rating, comment)
 
+        # Определяем меню для возврата на основе роли
+        menu_callback = "show_worker_menu" if role_from == "worker" else "show_client_menu"
+
         if success:
             stars = "⭐" * rating
             message_text = (
@@ -8204,7 +8231,7 @@ async def save_review(update: Update, context: ContextTypes.DEFAULT_TYPE, query=
             if comment:
                 message_text += f"\n📝 Комментарий:\n{comment[:100]}{'...' if len(comment) > 100 else ''}"
 
-            keyboard = [[InlineKeyboardButton("⬅️ В главное меню", callback_data="start")]]
+            keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data=menu_callback)]]
 
             if query:
                 await query.edit_message_text(
@@ -8220,18 +8247,23 @@ async def save_review(update: Update, context: ContextTypes.DEFAULT_TYPE, query=
                 )
         else:
             error_message = "❌ Не удалось сохранить отзыв. Возможно вы уже оставляли отзыв по этому заказу."
+            keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data=menu_callback)]]
             if query:
-                await query.edit_message_text(error_message)
+                await query.edit_message_text(error_message, reply_markup=InlineKeyboardMarkup(keyboard))
             else:
-                await update.message.reply_text(error_message)
+                await update.message.reply_text(error_message, reply_markup=InlineKeyboardMarkup(keyboard))
 
     except Exception as e:
         logger.error(f"Ошибка при сохранении отзыва: {e}", exc_info=True)
         error_message = f"❌ Произошла ошибка при сохранении отзыва: {str(e)}"
+        # Определяем меню для возврата
+        role_from = context.user_data.get('review_role_from', 'worker')
+        menu_callback = "show_worker_menu" if role_from == "worker" else "show_client_menu"
+        keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data=menu_callback)]]
         if query:
-            await query.edit_message_text(error_message)
+            await query.edit_message_text(error_message, reply_markup=InlineKeyboardMarkup(keyboard))
         else:
-            await update.message.reply_text(error_message)
+            await update.message.reply_text(error_message, reply_markup=InlineKeyboardMarkup(keyboard))
 
     # Очищаем данные
     context.user_data.clear()
@@ -9083,6 +9115,9 @@ async def send_suggestion_start(update: Update, context: ContextTypes.DEFAULT_TY
 
     logger.info(f"🔍 send_suggestion_start вызван пользователем {update.effective_user.id}")
 
+    # Устанавливаем флаг, чтобы handle_chat_message не перехватывал сообщения
+    context.user_data['suggestion_active'] = True
+
     await query.edit_message_text(
         "💡 <b>Отправить предложение</b>\n\n"
         "Здесь вы можете отправить свои предложения по улучшению платформы:\n"
@@ -9144,13 +9179,19 @@ async def receive_suggestion_text(update: Update, context: ContextTypes.DEFAULT_
         suggestion_id = db.create_suggestion(user_dict['id'], user_role, text)
         logger.info(f"✅ Предложение #{suggestion_id} создано пользователем {user_dict['id']}")
 
+        # Очищаем флаг
+        context.user_data.pop('suggestion_active', None)
+
+        # Определяем правильное меню для возврата
+        menu_callback = "show_worker_menu" if user_role in ['worker', 'both'] else "show_client_menu"
+
         await message.reply_text(
             "✅ <b>Спасибо за ваше предложение!</b>\n\n"
             "Мы обязательно рассмотрим его и постараемся сделать платформу лучше!\n\n"
             "💡 Вы можете отправить еще предложения в любое время через меню.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠 В меню", callback_data="go_main_menu")
+                InlineKeyboardButton("🏠 В главное меню", callback_data=menu_callback)
             ]])
         )
 
@@ -9158,11 +9199,18 @@ async def receive_suggestion_text(update: Update, context: ContextTypes.DEFAULT_
 
     except Exception as e:
         logger.error(f"Ошибка при создании предложения: {e}", exc_info=True)
+
+        # Очищаем флаг
+        context.user_data.pop('suggestion_active', None)
+
+        # Определяем правильное меню для возврата
+        menu_callback = "show_worker_menu" if user_role in ['worker', 'both'] else "show_client_menu"
+
         await message.reply_text(
             "❌ Произошла ошибка при отправке предложения.\n\n"
             "Попробуйте позже.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠 В меню", callback_data="go_main_menu")
+                InlineKeyboardButton("🏠 В главное меню", callback_data=menu_callback)
             ]])
         )
         return ConversationHandler.END
@@ -9173,12 +9221,24 @@ async def cancel_suggestion(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    # Очищаем флаг
+    context.user_data.pop('suggestion_active', None)
+
+    # Определяем меню для возврата
+    user = db.get_user_by_telegram_id(update.effective_user.id)
+    menu_callback = "show_worker_menu"
+    if user:
+        user_dict = dict(user)
+        client_profile = db.get_client_profile(user_dict['id'])
+        if client_profile and not db.get_worker_profile(user_dict['id']):
+            menu_callback = "show_client_menu"
+
     await query.edit_message_text(
         "❌ Отправка предложения отменена.\n\n"
         "Вы можете вернуться к ней в любое время через меню.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🏠 В меню", callback_data="go_main_menu")
+            InlineKeyboardButton("🏠 В главное меню", callback_data=menu_callback)
         ]])
     )
 
