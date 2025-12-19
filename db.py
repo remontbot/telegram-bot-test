@@ -2806,10 +2806,24 @@ def set_active_chat(telegram_id, chat_id, role):
 
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
-        cursor.execute("""
-            INSERT OR REPLACE INTO active_chats (telegram_id, chat_id, role, updated_at)
-            VALUES (?, ?, ?, ?)
-        """, (telegram_id, chat_id, role, datetime.now().isoformat()))
+
+        if USE_POSTGRES:
+            # PostgreSQL: используем ON CONFLICT вместо INSERT OR REPLACE
+            cursor.execute("""
+                INSERT INTO active_chats (telegram_id, chat_id, role, updated_at)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (telegram_id)
+                DO UPDATE SET chat_id = EXCLUDED.chat_id,
+                              role = EXCLUDED.role,
+                              updated_at = EXCLUDED.updated_at
+            """, (telegram_id, chat_id, role, datetime.now().isoformat()))
+        else:
+            # SQLite: используем INSERT OR REPLACE
+            cursor.execute("""
+                INSERT OR REPLACE INTO active_chats (telegram_id, chat_id, role, updated_at)
+                VALUES (?, ?, ?, ?)
+            """, (telegram_id, chat_id, role, datetime.now().isoformat()))
+
         conn.commit()
         logger.info(f"✅ Активный чат сохранён: user={telegram_id}, chat={chat_id}, role={role}")
 
@@ -2826,9 +2840,16 @@ def get_active_chat(telegram_id):
     """
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
-        cursor.execute("""
-            SELECT chat_id, role FROM active_chats WHERE telegram_id = ?
-        """, (telegram_id,))
+
+        if USE_POSTGRES:
+            cursor.execute("""
+                SELECT chat_id, role FROM active_chats WHERE telegram_id = %s
+            """, (telegram_id,))
+        else:
+            cursor.execute("""
+                SELECT chat_id, role FROM active_chats WHERE telegram_id = ?
+            """, (telegram_id,))
+
         result = cursor.fetchone()
 
         if not result:
@@ -2850,7 +2871,12 @@ def clear_active_chat(telegram_id):
     """
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
-        cursor.execute("DELETE FROM active_chats WHERE telegram_id = ?", (telegram_id,))
+
+        if USE_POSTGRES:
+            cursor.execute("DELETE FROM active_chats WHERE telegram_id = %s", (telegram_id,))
+        else:
+            cursor.execute("DELETE FROM active_chats WHERE telegram_id = ?", (telegram_id,))
+
         conn.commit()
         logger.info(f"✅ Активный чат очищен для user={telegram_id}")
 
