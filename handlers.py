@@ -5111,6 +5111,244 @@ async def worker_cancel_work_photos(update: Update, context: ContextTypes.DEFAUL
         logger.error(f"Ошибка при отмене загрузки фото: {e}", exc_info=True)
 
 
+async def manage_completed_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    НОВОЕ: Управление фотографиями завершенных работ мастера.
+    Позволяет просматривать и удалять старые фото.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        user_id = query.from_user.id
+        user = db.get_user_by_telegram_id(user_id)
+        if not user:
+            await safe_edit_message(query, "❌ Пользователь не найден.")
+            return
+
+        user_dict = dict(user)
+        worker_profile = db.get_worker_profile(user_dict['id'])
+        if not worker_profile:
+            await safe_edit_message(query, "❌ Профиль мастера не найден.")
+            return
+
+        worker_dict = dict(worker_profile)
+
+        # Получаем все фотографии мастера
+        all_photos = db.get_all_worker_completed_photos(worker_dict['id'])
+        if not all_photos:
+            await safe_edit_message(
+                query,
+                "📸 <b>У вас пока нет фотографий завершенных работ</b>\n\n"
+                "Фотографии появятся после завершения заказов.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")
+                ]])
+            )
+            return
+
+        total_photos = len(all_photos)
+
+        # Сохраняем текущую страницу в context
+        if 'photo_management_page' not in context.user_data:
+            context.user_data['photo_management_page'] = 0
+
+        page = context.user_data.get('photo_management_page', 0)
+        photos_per_page = 5
+        start_idx = page * photos_per_page
+        end_idx = start_idx + photos_per_page
+        photos_on_page = all_photos[start_idx:end_idx]
+
+        # Формируем сообщение
+        text = (
+            f"🗑 <b>Управление фотографиями работ</b>\n\n"
+            f"📊 <b>Всего фото:</b> {total_photos}/90\n\n"
+            f"💡 <b>Совет:</b> Оставляйте только лучшие работы для красивого портфолио!\n\n"
+            f"📸 <b>Страница {page + 1}/{(total_photos - 1) // photos_per_page + 1}:</b>"
+        )
+
+        # Формируем клавиатуру с фото
+        keyboard = []
+        for idx, photo in enumerate(photos_on_page, start=start_idx + 1):
+            photo_dict = dict(photo)
+            verified_mark = "✅" if photo_dict.get('verified') else ""
+            order_title = photo_dict.get('order_title', 'Без названия')[:30]
+
+            keyboard.append([InlineKeyboardButton(
+                f"{verified_mark} Фото #{idx}: {order_title}",
+                callback_data=f"view_work_photo_{photo_dict['id']}"
+            )])
+
+        # Кнопки навигации
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data="photo_page_prev"))
+        if end_idx < total_photos:
+            nav_buttons.append(InlineKeyboardButton("➡️ Вперед", callback_data="photo_page_next"))
+
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+
+        # Кнопка возврата
+        keyboard.append([InlineKeyboardButton("🏠 В главное меню", callback_data="show_worker_menu")])
+
+        await safe_edit_message(
+            query,
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка при управлении фото: {e}", exc_info=True)
+        await safe_edit_message(
+            query,
+            f"❌ Произошла ошибка:\n{str(e)}",
+            parse_mode="HTML"
+        )
+
+
+async def photo_page_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    НОВОЕ: Навигация между страницами фотографий.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        direction = query.data.replace("photo_page_", "")
+        current_page = context.user_data.get('photo_management_page', 0)
+
+        if direction == "next":
+            context.user_data['photo_management_page'] = current_page + 1
+        elif direction == "prev":
+            context.user_data['photo_management_page'] = max(0, current_page - 1)
+
+        # Перенаправляем на manage_completed_photos для обновления отображения
+        await manage_completed_photos(update, context)
+
+    except Exception as e:
+        logger.error(f"Ошибка при навигации по страницам: {e}", exc_info=True)
+
+
+async def view_work_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    НОВОЕ: Просмотр отдельного фото работы с возможностью удаления.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        photo_db_id = int(query.data.replace("view_work_photo_", ""))
+
+        user_id = query.from_user.id
+        user = db.get_user_by_telegram_id(user_id)
+        if not user:
+            await safe_edit_message(query, "❌ Пользователь не найден.")
+            return
+
+        user_dict = dict(user)
+        worker_profile = db.get_worker_profile(user_dict['id'])
+        if not worker_profile:
+            await safe_edit_message(query, "❌ Профиль мастера не найден.")
+            return
+
+        worker_dict = dict(worker_profile)
+
+        # Получаем все фото и находим нужное
+        all_photos = db.get_all_worker_completed_photos(worker_dict['id'])
+        target_photo = None
+        for photo in all_photos:
+            photo_dict = dict(photo)
+            if photo_dict['id'] == photo_db_id:
+                target_photo = photo_dict
+                break
+
+        if not target_photo:
+            await safe_edit_message(query, "❌ Фото не найдено.")
+            return
+
+        # Отправляем фото с кнопками
+        verified_text = "✅ Подтверждено заказчиком" if target_photo.get('verified') else "⏳ Не подтверждено"
+        order_title = target_photo.get('order_title', 'Без названия')
+
+        text = (
+            f"📸 <b>Фото работы</b>\n\n"
+            f"📋 <b>Заказ:</b> {order_title}\n"
+            f"🔖 <b>Статус:</b> {verified_text}\n\n"
+            f"🗑 Хотите удалить это фото?"
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("🗑 Удалить фото", callback_data=f"confirm_delete_photo_{photo_db_id}")],
+            [InlineKeyboardButton("⬅️ Назад к списку", callback_data="manage_completed_photos")]
+        ]
+
+        # Удаляем старое сообщение и отправляем фото
+        await query.message.delete()
+        await context.bot.send_photo(
+            chat_id=query.message.chat_id,
+            photo=target_photo['photo_id'],
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка при просмотре фото: {e}", exc_info=True)
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=f"❌ Произошла ошибка:\n{str(e)}",
+            parse_mode="HTML"
+        )
+
+
+async def confirm_delete_work_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    НОВОЕ: Подтверждение удаления фото работы.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        photo_db_id = int(query.data.replace("confirm_delete_photo_", ""))
+
+        # Удаляем фото из БД
+        success = db.delete_completed_work_photo(photo_db_id)
+
+        if success:
+            await query.message.delete()
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="✅ <b>Фото удалено</b>\n\nВозвращаемся к списку фотографий...",
+                parse_mode="HTML"
+            )
+
+            # Сбрасываем страницу и возвращаемся к списку
+            context.user_data['photo_management_page'] = 0
+
+            # Создаем новый query для manage_completed_photos
+            # Используем send_message вместо редактирования
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="🔄 Обновляем список...",
+                parse_mode="HTML"
+            )
+        else:
+            await query.message.edit_caption(
+                caption="❌ Не удалось удалить фото. Попробуйте позже.",
+                parse_mode="HTML"
+            )
+
+    except Exception as e:
+        logger.error(f"Ошибка при удалении фото: {e}", exc_info=True)
+        await query.message.edit_caption(
+            caption=f"❌ Произошла ошибка:\n{str(e)}",
+            parse_mode="HTML"
+        )
+
+
 async def client_check_work_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     НОВОЕ: Просмотр фото работы клиентом для подтверждения.
