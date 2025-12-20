@@ -4080,23 +4080,30 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # Подсчитываем активные и завершённые заказы
-        active_statuses = ['open', 'pending_choice', 'master_selected', 'contact_shared', 'waiting_master_confirmation', 'master_confirmed']
+        # Подсчитываем заказы по трем категориям
+        # 1. В ожидании мастера (заказ открыт, но мастер еще не выбран)
+        waiting_statuses = ['open']
+        # 2. В работе (мастер выбран и работает)
+        in_progress_statuses = ['waiting_master_confirmation', 'master_confirmed', 'in_progress']
+        # 3. Завершенные
         completed_statuses = ['done', 'completed', 'canceled', 'cancelled']
 
-        active_count = sum(1 for o in all_orders if dict(o).get('status', 'open') in active_statuses)
+        waiting_count = sum(1 for o in all_orders if dict(o).get('status', 'open') in waiting_statuses)
+        in_progress_count = sum(1 for o in all_orders if dict(o).get('status', 'open') in in_progress_statuses)
         completed_count = sum(1 for o in all_orders if dict(o).get('status', 'open') in completed_statuses)
 
         # Показываем меню выбора категории
         text = "📂 <b>Мои заказы</b>\n\n"
         text += f"Всего заказов: {total_count}\n"
-        text += f"🟢 Активные: {active_count}\n"
+        text += f"🔍 В ожидании мастера: {waiting_count}\n"
+        text += f"🔧 В работе: {in_progress_count}\n"
         text += f"✅ Завершённые: {completed_count}\n\n"
         text += "Выберите категорию:"
 
         keyboard = [
-            [InlineKeyboardButton(f"🟢 Активные заказы ({active_count})", callback_data="client_active_orders")],
-            [InlineKeyboardButton(f"✅ Завершённые заказы ({completed_count})", callback_data="client_completed_orders")],
+            [InlineKeyboardButton(f"🔍 В ожидании мастера ({waiting_count})", callback_data="client_waiting_orders")],
+            [InlineKeyboardButton(f"🔧 В работе ({in_progress_count})", callback_data="client_in_progress_orders")],
+            [InlineKeyboardButton(f"✅ Завершённые ({completed_count})", callback_data="client_completed_orders")],
             [InlineKeyboardButton("📝 Создать новый заказ", callback_data="client_create_order")],
             [InlineKeyboardButton("⬅️ Назад в меню", callback_data="show_client_menu")]
         ]
@@ -4120,8 +4127,8 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def client_active_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает активные заказы клиента"""
+async def client_waiting_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает заказы в ожидании мастера (без выбранного мастера)"""
     query = update.callback_query
     await query.answer()
 
@@ -4136,10 +4143,10 @@ async def client_active_orders(update: Update, context: ContextTypes.DEFAULT_TYP
             await safe_edit_message(query, "❌ Профиль клиента не найден.")
             return
 
-        # Получаем все заказы и фильтруем активные
+        # Получаем заказы в ожидании (мастер еще не выбран)
         all_orders, _, _ = db.get_client_orders(client_profile["id"], page=1, per_page=1000)
-        active_statuses = ['open', 'pending_choice', 'master_selected', 'contact_shared', 'waiting_master_confirmation', 'master_confirmed']
-        orders = [o for o in all_orders if dict(o).get('status', 'open') in active_statuses]
+        waiting_statuses = ['open']
+        orders = [o for o in all_orders if dict(o).get('status', 'open') in waiting_statuses]
 
         if not orders:
             keyboard = [
@@ -4148,41 +4155,21 @@ async def client_active_orders(update: Update, context: ContextTypes.DEFAULT_TYP
             ]
             await safe_edit_message(
                 query,
-                "🟢 <b>Активные заказы</b>\n\nУ вас нет активных заказов.",
+                "🔍 <b>В ожидании мастера</b>\n\nУ вас нет заказов в ожидании.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
 
         # Формируем список заказов
-        text = f"🟢 <b>Активные заказы</b> ({len(orders)})\n\n"
+        text = f"🔍 <b>В ожидании мастера</b> ({len(orders)})\n\n"
         keyboard = []
 
-        for order in orders[:10]:  # Показываем первые 10
+        for order in orders[:10]:
             order_dict = dict(order)
             order_id = order_dict['id']
 
-            status_emoji = {
-                "open": "🟢",
-                "pending_choice": "🟡",
-                "master_selected": "🔵",
-                "contact_shared": "✅",
-                "waiting_master_confirmation": "⏳",
-                "master_confirmed": "💬"
-            }
-            status_text = {
-                "open": "Открыт",
-                "pending_choice": "Ожидает выбора",
-                "master_selected": "Мастер выбран",
-                "contact_shared": "Контакт передан",
-                "waiting_master_confirmation": "Ожидает подтверждения",
-                "master_confirmed": "В работе"
-            }
-
-            emoji = status_emoji.get(order_dict.get("status", "open"), "⚪")
-            status = status_text.get(order_dict.get("status", "open"), "Неизвестно")
-
-            text += f"{emoji} <b>Заказ #{order_id}</b> - {status}\n"
+            text += f"🟢 <b>Заказ #{order_id}</b> - Открыт\n"
             text += f"🔧 {order_dict.get('category', 'Не указана')}\n"
 
             description = order_dict.get('description', '')
@@ -4199,30 +4186,10 @@ async def client_active_orders(update: Update, context: ContextTypes.DEFAULT_TYP
                     callback_data=f"view_bids_{order_id}"
                 )])
 
-            # Кнопка отмены для открытых заказов
-            order_status = order_dict.get('status', '')
-            if order_status in ('open', 'waiting_master_confirmation'):
-                keyboard.append([InlineKeyboardButton(
-                    f"❌ Отменить заказ #{order_id}",
-                    callback_data=f"cancel_order_{order_id}"
-                )])
-
-            # Если мастер выбран, показываем кнопки чата и завершения
-            selected_worker_id = order_dict.get('selected_worker_id')
-            if selected_worker_id:
-                chat = db.get_chat_by_order(order_id)
-                if chat:
-                    chat_dict = dict(chat)
-                    keyboard.append([InlineKeyboardButton(
-                        f"💬 Чат (заказ #{order_id})",
-                        callback_data=f"open_chat_{chat_dict['id']}"
-                    )])
-
-                if order_status not in ('done', 'completed', 'cancelled'):
-                    keyboard.append([InlineKeyboardButton(
-                        f"✅ Завершить заказ #{order_id}",
-                        callback_data=f"complete_order_{order_id}"
-                    )])
+            keyboard.append([InlineKeyboardButton(
+                f"❌ Отменить заказ #{order_id}",
+                callback_data=f"cancel_order_{order_id}"
+            )])
 
             text += "\n"
 
@@ -4232,7 +4199,97 @@ async def client_active_orders(update: Update, context: ContextTypes.DEFAULT_TYP
         await safe_edit_message(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
     except Exception as e:
-        logger.error(f"Ошибка в client_active_orders: {e}", exc_info=True)
+        logger.error(f"Ошибка в client_waiting_orders: {e}", exc_info=True)
+        await safe_edit_message(query, f"❌ Ошибка: {str(e)}")
+
+
+async def client_in_progress_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает заказы в работе (мастер выбран и работает)"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        user = db.get_user(query.from_user.id)
+        if not user:
+            await safe_edit_message(query, "❌ Пользователь не найден.")
+            return
+
+        client_profile = db.get_client_profile(user["id"])
+        if not client_profile:
+            await safe_edit_message(query, "❌ Профиль клиента не найден.")
+            return
+
+        # Получаем заказы в работе (мастер выбран)
+        all_orders, _, _ = db.get_client_orders(client_profile["id"], page=1, per_page=1000)
+        in_progress_statuses = ['waiting_master_confirmation', 'master_confirmed', 'in_progress']
+        orders = [o for o in all_orders if dict(o).get('status', 'open') in in_progress_statuses]
+
+        if not orders:
+            keyboard = [
+                [InlineKeyboardButton("📝 Создать новый заказ", callback_data="client_create_order")],
+                [InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")]
+            ]
+            await safe_edit_message(
+                query,
+                "🔧 <b>В работе</b>\n\nУ вас нет заказов в работе.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+        # Формируем список заказов
+        text = f"🔧 <b>В работе</b> ({len(orders)})\n\n"
+        keyboard = []
+
+        for order in orders[:10]:
+            order_dict = dict(order)
+            order_id = order_dict['id']
+            order_status = order_dict.get('status', '')
+
+            status_emoji = {
+                "waiting_master_confirmation": "⏳",
+                "master_confirmed": "💬",
+                "in_progress": "🔧"
+            }
+            status_text = {
+                "waiting_master_confirmation": "Ожидает подтверждения",
+                "master_confirmed": "Подтверждено",
+                "in_progress": "В работе"
+            }
+
+            emoji = status_emoji.get(order_status, "⚪")
+            status = status_text.get(order_status, "В работе")
+
+            text += f"{emoji} <b>Заказ #{order_id}</b> - {status}\n"
+            text += f"🔧 {order_dict.get('category', 'Не указана')}\n"
+
+            description = order_dict.get('description', '')
+            if len(description) > 50:
+                description = description[:50] + "..."
+            text += f"📝 {description}\n"
+
+            # Кнопки чата и завершения
+            chat = db.get_chat_by_order(order_id)
+            if chat:
+                chat_dict = dict(chat)
+                keyboard.append([InlineKeyboardButton(
+                    f"💬 Чат (заказ #{order_id})",
+                    callback_data=f"open_chat_{chat_dict['id']}"
+                )])
+
+            keyboard.append([InlineKeyboardButton(
+                f"✅ Завершить заказ #{order_id}",
+                callback_data=f"complete_order_{order_id}"
+            )])
+
+            text += "\n"
+
+        keyboard.append([InlineKeyboardButton("⬅️ Назад к заказам", callback_data="client_my_orders")])
+
+        await safe_edit_message(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    except Exception as e:
+        logger.error(f"Ошибка в client_in_progress_orders: {e}", exc_info=True)
         await safe_edit_message(query, f"❌ Ошибка: {str(e)}")
 
 
@@ -6344,7 +6401,8 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     # КРИТИЧНО: Проверяем, не находится ли пользователь в ConversationHandler
     # Если находится - пропускаем, чтобы ConversationHandler обработал сообщение
     conversation_keys = ['review_order_id', 'review_bid_id', 'review_rating',
-                        'suggestion_active', 'adding_photos']
+                        'suggestion_active', 'adding_photos', 'bid_order_id',
+                        'uploading_work_photo_order_id', 'order_client_id']
     if any(key in context.user_data for key in conversation_keys):
         # Пользователь в ConversationHandler, пропускаем
         return
@@ -6428,12 +6486,13 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                         worker_profile = db.get_worker_profile(user_dict['id'])
                         sender_name = worker_profile['name'] if worker_profile else "Мастер"
 
+                    # Отправляем краткое уведомление (без полного текста сообщения)
                     await context.bot.send_message(
                         chat_id=other_user_dict['telegram_id'],
                         text=(
                             f"💬 <b>Новое сообщение от {sender_name}</b>\n"
                             f"📋 Заказ #{chat_dict['order_id']}\n\n"
-                            f"{message_text}"
+                            f"Откройте чат, чтобы прочитать сообщение"
                         ),
                         parse_mode="HTML",
                         reply_markup=InlineKeyboardMarkup([[

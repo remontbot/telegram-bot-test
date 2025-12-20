@@ -396,8 +396,15 @@ def main():
     # --- Обработчики категорий заказов КЛИЕНТА ---
     application.add_handler(
         CallbackQueryHandler(
-            handlers.client_active_orders,
-            pattern="^client_active_orders$",
+            handlers.client_waiting_orders,
+            pattern="^client_waiting_orders$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.client_in_progress_orders,
+            pattern="^client_in_progress_orders$",
         )
     )
 
