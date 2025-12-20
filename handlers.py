@@ -6404,29 +6404,44 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         if other_user:
             other_user_dict = dict(other_user)
-            try:
-                # Получаем имя отправителя
-                if my_role == "client":
-                    client_profile = db.get_client_profile(user_dict['id'])
-                    sender_name = client_profile['name'] if client_profile else "Клиент"
-                else:
-                    worker_profile = db.get_worker_profile(user_dict['id'])
-                    sender_name = worker_profile['name'] if worker_profile else "Мастер"
 
-                await context.bot.send_message(
-                    chat_id=other_user_dict['telegram_id'],
-                    text=(
-                        f"💬 <b>Новое сообщение от {sender_name}</b>\n"
-                        f"📋 Заказ #{chat_dict['order_id']}\n\n"
-                        f"{message_text}"
-                    ),
-                    parse_mode="HTML",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("💬 Открыть чат", callback_data=f"open_chat_{chat_id}")
-                    ]])
-                )
-            except Exception as e:
-                logger.error(f"Ошибка при отправке уведомления: {e}")
+            # ИСПРАВЛЕНО: Проверяем статус заказа - не уведомляем о сообщениях в завершенных заказах
+            order = db.get_order_by_id(chat_dict['order_id'])
+            should_notify = False
+
+            if order:
+                order_dict = dict(order)
+                order_status = order_dict.get('status', 'open')
+                # Уведомляем только для активных заказов (НЕ завершенных)
+                if order_status in ['open', 'waiting_master_confirmation', 'master_confirmed', 'in_progress']:
+                    should_notify = True
+                else:
+                    logger.info(f"Заказ #{chat_dict['order_id']} имеет статус '{order_status}' - пропускаем уведомление о сообщении")
+
+            if should_notify:
+                try:
+                    # Получаем имя отправителя
+                    if my_role == "client":
+                        client_profile = db.get_client_profile(user_dict['id'])
+                        sender_name = client_profile['name'] if client_profile else "Клиент"
+                    else:
+                        worker_profile = db.get_worker_profile(user_dict['id'])
+                        sender_name = worker_profile['name'] if worker_profile else "Мастер"
+
+                    await context.bot.send_message(
+                        chat_id=other_user_dict['telegram_id'],
+                        text=(
+                            f"💬 <b>Новое сообщение от {sender_name}</b>\n"
+                            f"📋 Заказ #{chat_dict['order_id']}\n\n"
+                            f"{message_text}"
+                        ),
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("💬 Открыть чат", callback_data=f"open_chat_{chat_id}")
+                        ]])
+                    )
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке уведомления: {e}")
 
         # Определяем меню для возврата
         menu_callback = "show_client_menu" if my_role == "client" else "show_worker_menu"
