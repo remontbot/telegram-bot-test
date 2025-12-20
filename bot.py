@@ -497,6 +497,35 @@ def main():
         )
     )
 
+    # Управление фотографиями завершённых работ
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.manage_completed_photos,
+            pattern="^manage_completed_photos$"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.photo_page_navigation,
+            pattern="^photo_page_(prev|next)$"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.view_work_photo,
+            pattern="^view_work_photo_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.confirm_delete_work_photo,
+            pattern="^confirm_delete_photo_"
+        )
+    )
+
     # MessageHandler для приёма фото завершённых работ от мастера
     application.add_handler(
         MessageHandler(

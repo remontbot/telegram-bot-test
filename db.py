@@ -1257,6 +1257,55 @@ def count_worker_completed_work_photos(worker_id):
         return 0
 
 
+def get_all_worker_completed_photos(worker_id):
+    """
+    Получает все фотографии завершенных работ мастера с информацией о заказах.
+
+    Args:
+        worker_id: ID мастера
+
+    Returns:
+        List of dicts: Список фотографий с информацией о заказах
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT
+                cwp.id,
+                cwp.photo_id,
+                cwp.order_id,
+                cwp.verified,
+                cwp.created_at,
+                o.title as order_title,
+                o.description as order_description
+            FROM completed_work_photos cwp
+            JOIN orders o ON cwp.order_id = o.id
+            WHERE cwp.worker_id = ?
+            ORDER BY cwp.created_at DESC
+        """, (worker_id,))
+        return cursor.fetchall()
+
+
+def delete_completed_work_photo(photo_db_id):
+    """
+    Удаляет фотографию завершенной работы по её ID в базе данных.
+
+    Args:
+        photo_db_id: ID записи в таблице completed_work_photos
+
+    Returns:
+        bool: True если удалено успешно, False иначе
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            DELETE FROM completed_work_photos
+            WHERE id = ?
+        """, (photo_db_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
 def get_order_by_id(order_id):
     """
     Получает заказ по ID со всей информацией о клиенте.
