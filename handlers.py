@@ -8242,19 +8242,28 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
 
             # ВАЖНО: фильтруем мастеров по городу И категории
             workers = db.get_all_workers(city=order_city, category=category)
+            logger.info(f"📢 Найдено {len(workers)} мастеров для уведомления (город: {order_city}, категория: {category})")
+
+            notified_count = 0
             for worker in workers:
                 worker_dict = dict(worker)
 
                 worker_user = db.get_user_by_id(worker_dict['user_id'])
                 if worker_user:
                     # Проверяем включены ли уведомления у мастера
-                    if db.are_notifications_enabled(worker_dict['user_id']):
+                    notifications_enabled = db.are_notifications_enabled(worker_dict['user_id'])
+                    logger.info(f"🔔 Мастер {worker_dict['user_id']}: уведомления {'включены' if notifications_enabled else 'отключены'}")
+
+                    if notifications_enabled:
                         await notify_worker_new_order(
                             context,
                             worker_user['telegram_id'],
-                            worker_dict['user_id'],  # Добавляем worker_user_id для системы обновляемых уведомлений
+                            worker_dict['user_id'],
                             order_dict
                         )
+                        notified_count += 1
+
+            logger.info(f"✅ Отправлено уведомлений: {notified_count} из {len(workers)} мастеров")
 
         categories_text = context.user_data["order_category"]
         photos_count = len(context.user_data.get("order_photos", []))
