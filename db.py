@@ -5851,6 +5851,11 @@ def update_suggestion_status(suggestion_id, status, admin_notes=None):
         conn.commit()
 
 
+def get_suggestions_by_status(status):
+    """Получает предложения по конкретному статусу (alias для get_all_suggestions)"""
+    return get_all_suggestions(status=status)
+
+
 def get_suggestions_count(status='new'):
     """Получает количество предложений по статусу"""
     with get_db_connection() as conn:
