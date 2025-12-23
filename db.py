@@ -1134,6 +1134,7 @@ def add_completed_work_photo(order_id, worker_id, photo_id):
 def verify_completed_work_photo(photo_id):
     """
     Подтверждает фотографию завершённой работы клиентом.
+    ВАЖНО: Также добавляет фото в портфолио мастера.
 
     Args:
         photo_id: ID фотографии в таблице completed_work_photos
@@ -1145,15 +1146,54 @@ def verify_completed_work_photo(photo_id):
         cursor = get_cursor(conn)
         verified_at = datetime.now().isoformat()
         try:
+            # 1. Получаем информацию о фото
+            cursor.execute("""
+                SELECT photo_id, worker_id FROM completed_work_photos
+                WHERE id = ?
+            """, (photo_id,))
+            photo_info = cursor.fetchone()
+
+            if not photo_info:
+                logger.error(f"Фото {photo_id} не найдено в completed_work_photos")
+                return False
+
+            photo_file_id = photo_info['photo_id']
+            worker_id = photo_info['worker_id']
+
+            # 2. Подтверждаем фото
             cursor.execute("""
                 UPDATE completed_work_photos
                 SET verified = 1, verified_at = ?
                 WHERE id = ?
             """, (verified_at, photo_id))
+
+            # 3. Добавляем фото в портфолио мастера
+            cursor.execute("""
+                SELECT portfolio_photos FROM workers WHERE id = ?
+            """, (worker_id,))
+            worker = cursor.fetchone()
+
+            if worker:
+                current_portfolio = worker['portfolio_photos'] or ""
+                portfolio_list = [p.strip() for p in current_portfolio.split(',') if p.strip()]
+
+                # Добавляем фото если его ещё нет
+                if photo_file_id not in portfolio_list:
+                    portfolio_list.append(photo_file_id)
+                    new_portfolio = ",".join(portfolio_list)
+
+                    cursor.execute("""
+                        UPDATE workers
+                        SET portfolio_photos = ?
+                        WHERE id = ?
+                    """, (new_portfolio, worker_id))
+
+                    logger.info(f"✅ Подтверждённое фото {photo_file_id} добавлено в портфолио мастера {worker_id}")
+
             conn.commit()
             return cursor.rowcount > 0
         except Exception as e:
-            logger.error(f"Ошибка при подтверждении фото: {e}")
+            logger.error(f"Ошибка при подтверждении фото: {e}", exc_info=True)
             return False
 
 

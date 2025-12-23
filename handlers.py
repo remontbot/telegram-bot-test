@@ -5476,7 +5476,8 @@ async def client_check_work_photos(update: Update, context: ContextTypes.DEFAULT
 
 async def client_verify_work_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    НОВОЕ: Подтверждение фото работы клиентом.
+    ИСПРАВЛЕНО: Подтверждение фото работы клиентом.
+    После подтверждения фото добавляется в портфолио мастера.
     """
     query = update.callback_query
     await query.answer("✅ Фото подтверждено!")
@@ -5484,16 +5485,25 @@ async def client_verify_work_photo(update: Update, context: ContextTypes.DEFAULT
     try:
         photo_id = int(query.data.replace("verify_photo_", ""))
 
-        # Подтверждаем фото в БД
+        # Подтверждаем фото в БД (также добавляет в портфолио мастера)
         success = db.verify_completed_work_photo(photo_id)
 
         if success:
+            # Определяем роль для кнопки возврата
+            user = db.get_user(query.from_user.id)
+            is_worker = db.get_worker_profile(user['id']) if user else None
+            menu_callback = "show_worker_menu" if is_worker else "show_client_menu"
+
+            keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data=menu_callback)]]
+
             await query.edit_message_caption(
                 caption="✅ <b>Фото подтверждено клиентом</b>\n\n"
-                        "Это фото теперь будет отображаться в профиле мастера с отметкой о подтверждении.",
-                parse_mode="HTML"
+                        "Это фото добавлено в портфолио мастера с отметкой о подтверждении.\n\n"
+                        "Теперь другие заказчики смогут видеть эту проверенную работу в профиле мастера.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
-            logger.info(f"Клиент подтвердил фото {photo_id}")
+            logger.info(f"✅ Клиент подтвердил фото {photo_id}, добавлено в портфолио")
         else:
             await query.answer("❌ Ошибка при подтверждении фото", show_alert=True)
 
@@ -8696,22 +8706,66 @@ async def show_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # Извлекаем user_id из callback_data (формат: show_reviews_worker_123 или show_reviews_client_123)
-    parts = query.data.split("_")
-    role = parts[2]  # worker или client
-    profile_user_id = int(parts[3])
+    try:
+        # Извлекаем user_id из callback_data (формат: show_reviews_worker_123 или show_reviews_client_123)
+        parts = query.data.split("_")
+        role = parts[2]  # worker или client
+        profile_user_id = int(parts[3])
 
-    # Получаем текущего пользователя для проверки, смотрит ли он свой профиль
-    current_user = db.get_user(query.from_user.id)
-    is_own_profile = False
-    if current_user:
-        current_user_dict = dict(current_user)
-        is_own_profile = (current_user_dict['id'] == profile_user_id)
+        logger.info(f"Показываю отзывы для user_id={profile_user_id}, role={role}")
 
-    # Получаем отзывы
-    reviews = db.get_reviews_for_user(profile_user_id, role)
+        # Получаем текущего пользователя для проверки, смотрит ли он свой профиль
+        current_user = db.get_user(query.from_user.id)
+        is_own_profile = False
+        if current_user:
+            current_user_dict = dict(current_user)
+            is_own_profile = (current_user_dict['id'] == profile_user_id)
 
-    if not reviews:
+        # Получаем отзывы
+        reviews = db.get_reviews_for_user(profile_user_id, role)
+        logger.info(f"Найдено {len(reviews) if reviews else 0} отзывов")
+
+        if not reviews:
+            # Определяем callback для кнопки "Назад"
+            if is_own_profile:
+                # Если смотрим свой профиль - возврат в меню
+                back_callback = "show_worker_menu" if role == "worker" else "show_client_menu"
+            else:
+                # Если смотрим чужой профиль - возврат в профиль
+                back_callback = "worker_profile" if role == "worker" else "show_client_menu"
+
+            await query.edit_message_text(
+                "📊 <b>Отзывы</b>\n\n"
+                "Пока нет отзывов.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)
+                ]])
+            )
+            return
+
+        # Формируем текст с отзывами
+        message_text = "📊 <b>Отзывы</b>\n\n"
+
+        for review in reviews[:10]:  # Показываем первые 10 отзывов
+            review_dict = dict(review)
+            rating = review_dict['rating']
+            stars = "⭐" * rating
+            reviewer_name = review_dict.get('reviewer_name', 'Аноним')
+            comment = review_dict.get('comment', '')
+
+            message_text += f"👤 <b>{reviewer_name}</b>\n"
+            message_text += f"{stars} ({rating}/5)\n"
+            if comment:
+                # Обрезаем длинные комментарии
+                if len(comment) > 150:
+                    comment = comment[:150] + "..."
+                message_text += f"💬 {comment}\n"
+            message_text += "\n"
+
+        if len(reviews) > 10:
+            message_text += f"<i>Показано 10 из {len(reviews)} отзывов</i>\n"
+
         # Определяем callback для кнопки "Назад"
         if is_own_profile:
             # Если смотрим свой профиль - возврат в меню
@@ -8721,52 +8775,24 @@ async def show_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE):
             back_callback = "worker_profile" if role == "worker" else "show_client_menu"
 
         await query.edit_message_text(
-            "📊 <b>Отзывы</b>\n\n"
-            "Пока нет отзывов.",
+            message_text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)
             ]])
         )
-        return
 
-    # Формируем текст с отзывами
-    message_text = "📊 <b>Отзывы</b>\n\n"
-
-    for review in reviews[:10]:  # Показываем первые 10 отзывов
-        review_dict = dict(review)
-        rating = review_dict['rating']
-        stars = "⭐" * rating
-        reviewer_name = review_dict.get('reviewer_name', 'Аноним')
-        comment = review_dict.get('comment', '')
-
-        message_text += f"👤 <b>{reviewer_name}</b>\n"
-        message_text += f"{stars} ({rating}/5)\n"
-        if comment:
-            # Обрезаем длинные комментарии
-            if len(comment) > 150:
-                comment = comment[:150] + "..."
-            message_text += f"💬 {comment}\n"
-        message_text += "\n"
-
-    if len(reviews) > 10:
-        message_text += f"<i>Показано 10 из {len(reviews)} отзывов</i>\n"
-
-    # Определяем callback для кнопки "Назад"
-    if is_own_profile:
-        # Если смотрим свой профиль - возврат в меню
-        back_callback = "show_worker_menu" if role == "worker" else "show_client_menu"
-    else:
-        # Если смотрим чужой профиль - возврат в профиль
-        back_callback = "worker_profile" if role == "worker" else "show_client_menu"
-
-    await query.edit_message_text(
-        message_text,
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)
-        ]])
-    )
+    except Exception as e:
+        logger.error(f"Ошибка при показе отзывов: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ <b>Ошибка при загрузке отзывов</b>\n\n"
+            f"К сожалению, произошла ошибка: {str(e)}\n\n"
+            "Попробуйте позже или обратитесь к администратору.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data="show_worker_menu")
+            ]])
+        )
 
 
 # ============================================
