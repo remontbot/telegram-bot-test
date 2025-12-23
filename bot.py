@@ -103,6 +103,9 @@ def main():
     # --- Команда /start (ОТДЕЛЬНО от ConversationHandler) ---
     application.add_handler(CommandHandler("start", handlers.start_command))
 
+    # --- Глобальный handler для noop (заглушки) ---
+    application.add_handler(CallbackQueryHandler(handlers.noop_callback, pattern="^noop$"))
+
     # --- ConversationHandler для регистрации ---
 
     reg_conv_handler = ConversationHandler(
@@ -972,11 +975,13 @@ def main():
                 CallbackQueryHandler(handlers.admin_export_data, pattern="^admin_export_"),
                 CallbackQueryHandler(handlers.admin_users_menu, pattern="^admin_users$"),
                 CallbackQueryHandler(handlers.admin_users_list, pattern="^admin_users_list_"),
+                CallbackQueryHandler(handlers.admin_users_page, pattern="^admin_users_page_"),
                 CallbackQueryHandler(handlers.admin_user_view, pattern="^admin_user_view_"),
                 CallbackQueryHandler(handlers.admin_user_ban_start, pattern="^admin_user_ban_start_"),
                 CallbackQueryHandler(handlers.admin_user_unban, pattern="^admin_user_unban_"),
                 CallbackQueryHandler(handlers.admin_user_search_start, pattern="^admin_user_search_start$"),
                 CallbackQueryHandler(handlers.admin_suggestions, pattern="^admin_suggestions$"),
+                CallbackQueryHandler(handlers.admin_suggestions_filter, pattern="^admin_suggestions_(new|viewed|resolved)$"),
                 CallbackQueryHandler(handlers.admin_close, pattern="^admin_close$"),
                 CallbackQueryHandler(handlers.admin_panel, pattern="^admin_back$"),  # Возврат в меню
             ],

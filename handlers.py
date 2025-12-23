@@ -6568,7 +6568,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     context.user_data.clear()
 
-    keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu_fresh")]]
+    keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")]]
 
     await update.message.reply_text(
         "❌ Действие отменено.\n\n"
@@ -6576,6 +6576,15 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return ConversationHandler.END
+
+
+async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обработчик для заглушек (noop) - кнопки которые ничего не делают.
+    Необходим чтобы не было эффекта "зависания" когда пользователь нажимает такую кнопку.
+    """
+    query = update.callback_query
+    await query.answer()
 
 
 async def cancel_edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -8482,7 +8491,7 @@ async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "ℹ️ Вы уже оставили отзыв по этому заказу.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("⬅️ Назад", callback_data="start")
+                InlineKeyboardButton("⬅️ Назад", callback_data="go_main_menu")
             ]])
         )
         return ConversationHandler.END
@@ -8675,7 +8684,7 @@ async def cancel_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "❌ Отмена. Вы можете оставить отзыв позже.",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("⬅️ В главное меню", callback_data="start")
+            InlineKeyboardButton("⬅️ В главное меню", callback_data="go_main_menu")
         ]])
     )
 
@@ -9454,7 +9463,7 @@ async def check_expired_chats_command(update: Update, context: ContextTypes.DEFA
                     ),
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("📋 Мои заказы", callback_data="my_orders")
+                        InlineKeyboardButton("📋 Мои заказы", callback_data="client_my_orders")
                     ]])
                 )
             except Exception as e:
@@ -10379,6 +10388,29 @@ async def admin_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ADMIN_MENU
 
 
+async def admin_users_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик пагинации списка пользователей"""
+    query = update.callback_query
+    await query.answer()
+
+    # Парсим callback_data: admin_users_page_{filter}_{page}
+    parts = query.data.split("_")
+    # parts[0] = 'admin', parts[1] = 'users', parts[2] = 'page', parts[3] = filter, parts[4] = page
+    filter_type = parts[3]
+    page = int(parts[4])
+
+    # Сохраняем страницу в контекст
+    context.user_data['admin_users_page'] = page
+    context.user_data['admin_users_filter'] = filter_type
+
+    # Создаём фейковый callback для переиспользования admin_users_list
+    # Меняем query.data чтобы он думал что это обычный запрос списка
+    query.data = f"admin_users_list_{filter_type}"
+
+    # Вызываем основной обработчик списка пользователей
+    return await admin_users_list(update, context)
+
+
 async def admin_user_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает детальную информацию о пользователе"""
     query = update.callback_query
@@ -10664,6 +10696,63 @@ async def admin_suggestions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("👁 Просмотренные", callback_data="admin_suggestions_viewed")],
         [InlineKeyboardButton("✅ Решенные", callback_data="admin_suggestions_resolved")],
         [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")],
+    ]
+
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
+async def admin_suggestions_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Просмотр предложений с фильтром по статусу"""
+    query = update.callback_query
+    await query.answer()
+
+    # Извлекаем статус из callback_data: admin_suggestions_new/viewed/resolved
+    status = query.data.split("_")[-1]  # new / viewed / resolved
+
+    # Получаем предложения по статусу
+    suggestions = db.get_suggestions_by_status(status)
+    total_count = len(suggestions) if suggestions else 0
+
+    if not suggestions:
+        await query.edit_message_text(
+            f"💡 <b>Предложения: {status}</b>\n\n"
+            f"Нет предложений с этим статусом.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data="admin_suggestions")
+            ]])
+        )
+        return ADMIN_MENU
+
+    # Формируем текст
+    status_name = {"new": "Новые", "viewed": "Просмотренные", "resolved": "Решенные"}.get(status, status)
+    text = (
+        f"💡 <b>Предложения: {status_name}</b>\n\n"
+        f"Найдено: {total_count}\n\n"
+        f"📝 Список предложений:\n\n"
+    )
+
+    for i, suggestion in enumerate(suggestions[:20], 1):
+        suggestion_dict = dict(suggestion)
+        role_emoji = {"worker": "🔧", "client": "👤", "both": "🔧👤"}.get(suggestion_dict['user_role'], "")
+
+        message_preview = suggestion_dict['message'][:50] + "..." if len(suggestion_dict['message']) > 50 else suggestion_dict['message']
+
+        text += (
+            f"{i}. <b>#{suggestion_dict['id']}</b> {role_emoji}\n"
+            f"<code>{message_preview}</code>\n"
+            f"📅 {suggestion_dict['created_at']}\n\n"
+        )
+
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Назад к предложениям", callback_data="admin_suggestions")],
+        [InlineKeyboardButton("⬅️ Админ меню", callback_data="admin_back")],
     ]
 
     await query.edit_message_text(
