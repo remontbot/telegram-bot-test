@@ -4722,7 +4722,9 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
             notify_user = db.get_user_by_id(notify_user_id)
             if notify_user:
                 notify_user_dict = dict(notify_user)
-                stars = "⭐" * rating
+
+                # ИСПРАВЛЕНО: НЕ показываем рейтинг в уведомлении
+                # Пользователь НЕ должен видеть кто и какую оценку ему поставил
 
                 # Если клиент оценил мастера - предлагаем мастеру загрузить фото И оценить клиента
                 if is_client:
@@ -4751,8 +4753,7 @@ async def submit_order_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
                     chat_id=notify_user_dict['telegram_id'],
                     text=(
                         f"✅ <b>Заказ #{order_id} завершен!</b>\n\n"
-                        f"{notify_text_prefix}:\n"
-                        f"{stars} ({rating}/5)\n\n"
+                        f"Противоположная сторона завершила заказ.\n\n"
                         f"🎉 Поздравляем с успешным {'выполнением работы' if is_client else 'заказом'}!"
                         f"{extra_text}"
                     ),
@@ -7617,14 +7618,15 @@ async def worker_bid_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена создания отклика"""
     query = update.callback_query
     await query.answer()
-    
-    await query.edit_message_text(
+
+    await safe_edit_message(
+        query,
         "❌ Создание отклика отменено.",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("📋 К доступным заказам", callback_data="worker_view_orders")
         ]])
     )
-    
+
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -8288,8 +8290,12 @@ async def create_order_publish(update: Update, context: ContextTypes.DEFAULT_TYP
 
         logger.info(f"✅ Заказ #{order_id} успешно сохранён в БД!")
 
+        # КРИТИЧНО: Логирование для диагностики уведомлений
+        logger.info(f"🔔 НАЧИНАЮ ОТПРАВКУ УВЕДОМЛЕНИЙ для заказа #{order_id}")
+
         # Получаем созданный заказ для отправки уведомлений
         order = db.get_order_by_id(order_id)
+        logger.info(f"🔔 Заказ получен из БД: {order is not None}")
         if order:
             order_dict = dict(order)
 
@@ -8734,7 +8740,8 @@ async def show_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Если смотрим чужой профиль - возврат в профиль
                 back_callback = "worker_profile" if role == "worker" else "show_client_menu"
 
-            await query.edit_message_text(
+            await safe_edit_message(
+                query,
                 "📊 <b>Отзывы</b>\n\n"
                 "Пока нет отзывов.",
                 parse_mode="HTML",
@@ -8774,7 +8781,8 @@ async def show_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Если смотрим чужой профиль - возврат в профиль
             back_callback = "worker_profile" if role == "worker" else "show_client_menu"
 
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             message_text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
@@ -8784,7 +8792,8 @@ async def show_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"Ошибка при показе отзывов: {e}", exc_info=True)
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             "❌ <b>Ошибка при загрузке отзывов</b>\n\n"
             f"К сожалению, произошла ошибка: {str(e)}\n\n"
             "Попробуйте позже или обратитесь к администратору.",
