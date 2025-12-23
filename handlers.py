@@ -1910,6 +1910,10 @@ async def worker_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         user_dict = dict(user)
+
+        # Удаляем уведомление о новых сообщениях (пользователь открыл заказы)
+        db.delete_chat_message_notification(user_dict['id'])
+
         worker_profile = db.get_worker_profile(user_dict["id"])
         if not worker_profile:
             await safe_edit_message(
@@ -4049,6 +4053,9 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        # Удаляем уведомление о новых сообщениях (пользователь открыл заказы)
+        db.delete_chat_message_notification(user['id'])
+
         client_profile = db.get_client_profile(user["id"])
         if not client_profile:
             logger.error(f"Client profile не найден для user_id: {user['id']}")
@@ -4478,11 +4485,12 @@ async def complete_order_handler(update: Update, context: ContextTypes.DEFAULT_T
 
         order_dict = dict(order)
 
-        # Проверяем статус заказа - нельзя завершить уже завершённый или отменённый
-        if order_dict['status'] in ('done', 'completed', 'cancelled'):
+        # Проверяем статус заказа - нельзя оценить отменённый заказ
+        # ВАЖНО: 'completed' разрешён, чтобы обе стороны могли оставить отзыв
+        if order_dict['status'] in ('cancelled',):
             await safe_edit_message(
                 query,
-                f"❌ Этот заказ уже завершён или отменён.\n\n"
+                f"❌ Этот заказ был отменён.\n\n"
                 f"Статус: {order_dict['status']}",
                 parse_mode="HTML"
             )
@@ -6478,27 +6486,57 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
             if should_notify:
                 try:
-                    # Получаем имя отправителя
-                    if my_role == "client":
-                        client_profile = db.get_client_profile(user_dict['id'])
-                        sender_name = client_profile['name'] if client_profile else "Клиент"
-                    else:
-                        worker_profile = db.get_worker_profile(user_dict['id'])
-                        sender_name = worker_profile['name'] if worker_profile else "Мастер"
+                    # Определяем кнопку для возврата в заказы (в зависимости от роли получателя)
+                    other_user_id = other_user_dict['id']
+                    is_client = db.get_client_profile(other_user_id) is not None
+                    orders_callback = "client_my_orders" if is_client else "worker_my_orders"
 
-                    # Отправляем краткое уведомление (без полного текста сообщения)
-                    await context.bot.send_message(
-                        chat_id=other_user_dict['telegram_id'],
-                        text=(
-                            f"💬 <b>Новое сообщение от {sender_name}</b>\n"
-                            f"📋 Заказ #{chat_dict['order_id']}\n\n"
-                            f"Откройте чат, чтобы прочитать сообщение"
-                        ),
-                        parse_mode="HTML",
-                        reply_markup=InlineKeyboardMarkup([[
-                            InlineKeyboardButton("💬 Открыть чат", callback_data=f"open_chat_{chat_id}")
-                        ]])
+                    # ОБНОВЛЯЕМОЕ уведомление - одно сообщение на пользователя
+                    notification_text = (
+                        f"💬 <b>У вас есть новые сообщения!</b>\n\n"
+                        f"Откройте \"Мои заказы\" чтобы прочитать сообщения"
                     )
+
+                    keyboard = [[InlineKeyboardButton("📂 Мои заказы", callback_data=orders_callback)]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+
+                    # Получаем существующее уведомление
+                    existing_notification = db.get_chat_message_notification(other_user_id)
+
+                    try:
+                        if existing_notification and existing_notification['notification_message_id']:
+                            # Пытаемся РЕДАКТИРОВАТЬ существующее сообщение
+                            await context.bot.edit_message_text(
+                                chat_id=existing_notification['notification_chat_id'],
+                                message_id=existing_notification['notification_message_id'],
+                                text=notification_text,
+                                reply_markup=reply_markup,
+                                parse_mode="HTML"
+                            )
+                            # Обновляем timestamp
+                            db.save_chat_message_notification(
+                                other_user_id,
+                                existing_notification['notification_message_id'],
+                                existing_notification['notification_chat_id']
+                            )
+                            logger.info(f"✅ Обновлено уведомление о сообщении для пользователя {other_user_id}")
+                        else:
+                            # Сообщения нет - отправляем НОВОЕ
+                            raise Exception("No existing notification")
+
+                    except Exception as edit_error:
+                        # Не удалось отредактировать (сообщение удалено или не существует) - отправляем новое
+                        logger.info(f"Отправка нового уведомления о сообщении для пользователя {other_user_id}: {edit_error}")
+                        msg = await context.bot.send_message(
+                            chat_id=other_user_dict['telegram_id'],
+                            text=notification_text,
+                            reply_markup=reply_markup,
+                            parse_mode="HTML"
+                        )
+                        # Сохраняем message_id для будущих обновлений
+                        db.save_chat_message_notification(other_user_id, msg.message_id, other_user_dict['telegram_id'])
+                        logger.info(f"✅ Отправлено новое уведомление о сообщении пользователю {other_user_id}")
+
                 except Exception as e:
                     logger.error(f"Ошибка при отправке уведомления: {e}")
 

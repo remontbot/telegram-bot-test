@@ -89,6 +89,7 @@ def main():
     db.migrate_add_ready_in_days_and_notifications()  # Добавляем ready_in_days в bids и worker_notifications
     db.migrate_add_admin_and_ads()  # Добавляем систему админ-панели, broadcast и рекламы
     db.migrate_add_worker_cities()  # Добавляем таблицу для множественного выбора городов мастером
+    db.migrate_add_chat_message_notifications()  # Добавляем таблицу для агрегированных уведомлений о сообщениях в чате
     db.create_indexes()  # Создаем индексы для оптимизации производительности
 
     # Добавляем супер-админа
