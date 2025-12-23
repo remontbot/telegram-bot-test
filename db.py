@@ -4785,6 +4785,54 @@ def delete_client_notification(client_user_id):
         conn.commit()
 
 
+# === CHAT MESSAGE NOTIFICATIONS HELPERS ===
+
+def save_chat_message_notification(user_id, message_id, chat_id):
+    """Сохраняет или обновляет ID уведомления о новых сообщениях в чате"""
+    from datetime import datetime
+
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        timestamp = int(datetime.now().timestamp())
+
+        if USE_POSTGRES:
+            cursor.execute("""
+                INSERT INTO chat_message_notifications
+                (user_id, notification_message_id, notification_chat_id, last_update_timestamp)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    notification_message_id = EXCLUDED.notification_message_id,
+                    notification_chat_id = EXCLUDED.notification_chat_id,
+                    last_update_timestamp = EXCLUDED.last_update_timestamp
+            """, (user_id, message_id, chat_id, timestamp))
+        else:
+            cursor.execute("""
+                INSERT OR REPLACE INTO chat_message_notifications
+                (user_id, notification_message_id, notification_chat_id, last_update_timestamp)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, message_id, chat_id, timestamp))
+        conn.commit()
+
+
+def get_chat_message_notification(user_id):
+    """Получает сохраненное уведомление о сообщениях в чате"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT * FROM chat_message_notifications WHERE user_id = ?
+        """, (user_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def delete_chat_message_notification(user_id):
+    """Удаляет сохраненное уведомление о сообщениях (когда пользователь просмотрел заказы)"""
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("DELETE FROM chat_message_notifications WHERE user_id = ?", (user_id,))
+        conn.commit()
+
+
 def get_orders_with_unread_bids(client_user_id):
     """
     Получает все заказы клиента с количеством откликов.
@@ -5042,6 +5090,35 @@ def migrate_add_worker_cities():
 
         except Exception as e:
             logger.error(f"⚠️ Error in migrate_add_worker_cities: {e}")
+            conn.rollback()
+
+
+def migrate_add_chat_message_notifications():
+    """
+    Добавляет таблицу chat_message_notifications для хранения одного обновляемого
+    уведомления о новых сообщениях в чате для каждого пользователя.
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            # Создаем таблицу chat_message_notifications
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS chat_message_notifications (
+                    user_id INTEGER PRIMARY KEY,
+                    notification_message_id INTEGER,
+                    notification_chat_id INTEGER,
+                    last_update_timestamp INTEGER,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """)
+            logger.info("✅ Таблица chat_message_notifications создана")
+
+            conn.commit()
+            logger.info("✅ Migration completed: chat_message_notifications table!")
+
+        except Exception as e:
+            logger.error(f"⚠️ Error in migrate_add_chat_message_notifications: {e}")
             conn.rollback()
 
 
