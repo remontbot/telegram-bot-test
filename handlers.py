@@ -4237,7 +4237,7 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 1. В ожидании мастера (заказ открыт, но мастер еще не выбран)
         waiting_statuses = ['open']
         # 2. В работе (мастер выбран и работает)
-        in_progress_statuses = ['waiting_master_confirmation', 'master_confirmed', 'in_progress']
+        in_progress_statuses = ['master_selected', 'contact_shared', 'waiting_master_confirmation', 'master_confirmed', 'in_progress']
         # 3. Завершенные
         completed_statuses = ['done', 'completed', 'canceled', 'cancelled']
 
@@ -4382,7 +4382,7 @@ async def client_in_progress_orders(update: Update, context: ContextTypes.DEFAUL
 
         # Получаем заказы в работе (мастер выбран)
         all_orders, _, _ = db.get_client_orders(client_profile["id"], page=1, per_page=1000)
-        in_progress_statuses = ['waiting_master_confirmation', 'master_confirmed', 'in_progress']
+        in_progress_statuses = ['master_selected', 'contact_shared', 'waiting_master_confirmation', 'master_confirmed', 'in_progress']
 
         # DEBUG: Логируем все заказы и их статусы
         logger.info(f"🔍 DEBUG client_in_progress_orders: Всего заказов клиента: {len(all_orders)}")
@@ -4416,11 +4416,15 @@ async def client_in_progress_orders(update: Update, context: ContextTypes.DEFAUL
             order_status = order_dict.get('status', '')
 
             status_emoji = {
+                "master_selected": "👤",
+                "contact_shared": "📞",
                 "waiting_master_confirmation": "⏳",
                 "master_confirmed": "💬",
                 "in_progress": "🔧"
             }
             status_text = {
+                "master_selected": "Мастер выбран",
+                "contact_shared": "Контакт передан",
                 "waiting_master_confirmation": "Ожидает подтверждения",
                 "master_confirmed": "Подтверждено",
                 "in_progress": "В работе"
