@@ -1271,7 +1271,7 @@ def get_worker_verified_photos(worker_id, limit=20):
             FROM completed_work_photos cwp
             JOIN orders o ON cwp.order_id = o.id
             LEFT JOIN reviews r ON o.id = r.order_id AND r.role_to = 'worker'
-            WHERE cwp.worker_id = ? AND cwp.verified = 1
+            WHERE cwp.worker_id = ? AND cwp.verified = TRUE
             ORDER BY cwp.created_at DESC
             LIMIT ?
         """, (worker_id, limit))
@@ -1300,7 +1300,7 @@ def get_unverified_photos_for_client(user_id):
             JOIN orders o ON cwp.order_id = o.id
             JOIN clients c ON o.client_id = c.id
             JOIN workers w ON cwp.worker_id = w.id
-            WHERE c.user_id = ? AND cwp.verified = 0
+            WHERE c.user_id = ? AND cwp.verified = FALSE
             ORDER BY cwp.created_at DESC
         """, (user_id,))
         return cursor.fetchall()
@@ -5229,6 +5229,35 @@ def migrate_add_chat_message_notifications():
 
         except Exception as e:
             logger.error(f"⚠️ Error in migrate_add_chat_message_notifications: {e}")
+            conn.rollback()
+
+
+def migrate_fix_portfolio_photos_size():
+    """
+    ИСПРАВЛЕНИЕ: Увеличивает размер поля portfolio_photos с VARCHAR(1000) на TEXT.
+    Решает проблему "value too long for type character varying(1000)" при добавлении фото.
+    """
+    if not USE_POSTGRES:
+        logger.info("✅ SQLite использует TEXT, миграция не требуется")
+        return
+
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        try:
+            # Изменяем тип колонки portfolio_photos в таблице workers
+            cursor.execute("""
+                ALTER TABLE workers
+                ALTER COLUMN portfolio_photos TYPE TEXT
+            """)
+            logger.info("✅ Колонка portfolio_photos изменена на TEXT")
+
+            conn.commit()
+            logger.info("✅ Migration completed: portfolio_photos size fixed!")
+
+        except Exception as e:
+            # Если колонка уже TEXT или другая ошибка
+            logger.warning(f"⚠️ Migration portfolio_photos size: {e}")
             conn.rollback()
 
 
