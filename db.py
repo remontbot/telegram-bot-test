@@ -1620,7 +1620,8 @@ def update_client_field(user_id, field_name, new_value):
 
 def get_all_workers(city=None, category=None):
     """
-    ИСПРАВЛЕНО: Использует точный поиск по категориям вместо LIKE.
+    ИСПРАВЛЕНО: Использует точный поиск по категориям через worker_categories.
+    FALLBACK: Если категории нет в worker_categories, ищет в поле categories (для старых мастеров).
 
     Получает список всех мастеров с фильтрами.
 
@@ -1632,7 +1633,6 @@ def get_all_workers(city=None, category=None):
         List of worker profiles with user info
     """
     with get_db_connection() as conn:
-
         cursor = get_cursor(conn)
 
         query = """
@@ -1645,27 +1645,41 @@ def get_all_workers(city=None, category=None):
         """
         params = []
 
+        # ИСПРАВЛЕНО: Поиск по городу через worker_cities ИЛИ через city (для старых записей)
         if city:
-            # Точное совпадение города (без LIKE)
-            query += " AND w.city = ?"
+            query += """
+                AND (
+                    EXISTS (
+                        SELECT 1 FROM worker_cities wc
+                        WHERE wc.worker_id = w.id AND wc.city = ?
+                    )
+                    OR w.city = ?
+                )
+            """
+            params.append(city)
             params.append(city)
 
         if category:
-            # ИСПРАВЛЕНО: Точный поиск по категории через worker_categories
-            # Раньше: LIKE '%Электрика%' (находил 'Неэлектрика')
-            # Теперь: EXISTS с точным совпадением
+            # ИСПРАВЛЕНО: Поиск по категории через worker_categories ИЛИ через categories (для старых записей)
             query += """
-                AND EXISTS (
-                    SELECT 1 FROM worker_categories wc
-                    WHERE wc.worker_id = w.id AND wc.category = ?
+                AND (
+                    EXISTS (
+                        SELECT 1 FROM worker_categories wc
+                        WHERE wc.worker_id = w.id AND wc.category = ?
+                    )
+                    OR w.categories LIKE ?
                 )
             """
             params.append(category)
+            params.append(f"%{category}%")
 
         query += " ORDER BY w.rating DESC, w.rating_count DESC"
 
+        logger.info(f"🔍 Поиск мастеров: город={city}, категория={category}")
         cursor.execute(query, params)
-        return cursor.fetchall()
+        results = cursor.fetchall()
+        logger.info(f"🔍 Найдено мастеров: {len(results)}")
+        return results
 
 
 def get_worker_by_id(worker_id):
@@ -4897,8 +4911,8 @@ def get_orders_with_unread_bids(client_user_id):
             LEFT JOIN bids b ON o.id = b.order_id AND b.status = 'active'
             WHERE o.client_id = (SELECT id FROM clients WHERE user_id = ?)
                 AND o.status = 'open'
-            GROUP BY o.id
-            HAVING bid_count > 0
+            GROUP BY o.id, o.city, o.category, o.description, o.status
+            HAVING COUNT(b.id) > 0
         """, (client_user_id,))
 
         return [dict(row) for row in cursor.fetchall()]
