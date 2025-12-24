@@ -5242,13 +5242,15 @@ def migrate_fix_portfolio_photos_size():
         return
 
     with get_db_connection() as conn:
-        cursor = get_cursor(conn)
+        # КРИТИЧНО: Используем RAW cursor, минуя DBCursor который конвертирует TEXT в VARCHAR(1000)
+        raw_cursor = conn.cursor()
 
         try:
-            # Изменяем тип колонки portfolio_photos в таблице workers
-            cursor.execute("""
+            # ИСПРАВЛЕНО: Используем USING для корректного преобразования типа в PostgreSQL
+            raw_cursor.execute("""
                 ALTER TABLE workers
                 ALTER COLUMN portfolio_photos TYPE TEXT
+                USING portfolio_photos::TEXT
             """)
             logger.info("✅ Колонка portfolio_photos изменена на TEXT")
 
@@ -5259,6 +5261,8 @@ def migrate_fix_portfolio_photos_size():
             # Если колонка уже TEXT или другая ошибка
             logger.warning(f"⚠️ Migration portfolio_photos size: {e}")
             conn.rollback()
+        finally:
+            raw_cursor.close()
 
 
 def add_admin_user(telegram_id, role='admin', added_by=None):
