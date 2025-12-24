@@ -9958,7 +9958,7 @@ async def check_expired_chats_command(update: Update, context: ContextTypes.DEFA
 # ============================================
 
 # Состояния для ConversationHandler
-SUGGESTION_TEXT = 1
+SUGGESTION_TEXT = 50  # ИСПРАВЛЕНО: Уникальное значение, не конфликтует с range(50)
 
 
 async def send_suggestion_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
