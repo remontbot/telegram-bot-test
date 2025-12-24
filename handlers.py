@@ -6739,12 +6739,14 @@ async def worker_view_orders(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
         
         worker_dict = dict(worker_profile)
+        worker_id = worker_dict['id']
         categories = worker_dict.get("categories", "").split(", ")
 
         # ИСПРАВЛЕНО: Один запрос для всех категорий вместо N запросов
-        # Раньше: 5 категорий = 5 SQL запросов
-        # Теперь: 5 категорий = 1 SQL запрос
-        all_orders = db.get_orders_by_categories(categories, per_page=30)
+        # ИСПРАВЛЕНО: Фильтрация по городам мастера (worker_id)
+        # Раньше: 5 категорий = 5 SQL запросов, мастер видел заказы из ВСЕХ городов
+        # Теперь: 5 категорий = 1 SQL запрос, мастер видит заказы ТОЛЬКО из своих городов
+        all_orders = db.get_orders_by_categories(categories, per_page=30, worker_id=worker_id)
         all_orders = [dict(order) for order in all_orders]
 
         # Фильтруем заказы - не показываем те, на которые мастер уже откликнулся

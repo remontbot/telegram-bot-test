@@ -3802,21 +3802,25 @@ def get_orders_by_category(category, page=1, per_page=10):
         return orders, total_count, has_next_page
 
 
-def get_orders_by_categories(categories_list, per_page=30):
+def get_orders_by_categories(categories_list, per_page=30, worker_id=None):
     """
     ИСПРАВЛЕНО: Получает заказы для НЕСКОЛЬКИХ категорий ОДНИМ запросом с ТОЧНЫМ поиском.
+    ИСПРАВЛЕНО: Фильтрует заказы по городам мастера (мастер видит только заказы из СВОИХ городов).
 
     Раньше:
     - 5 категорий = 5 SQL запросов (N+1 проблема)
     - LIKE '%Электрика%' находил "Неэлектрика" (ложные совпадения)
+    - Мастер видел заказы из ВСЕХ городов (неправильно)
 
     Теперь:
     - 5 категорий = 1 SQL запрос
     - Точное совпадение через order_categories таблицу
+    - Фильтрация по городам мастера через worker_cities
 
     Args:
         categories_list: Список категорий ["Электрика", "Сантехника"]
         per_page: Максимум заказов (по умолчанию 30)
+        worker_id: ID мастера для фильтрации по городам (опционально)
 
     Returns:
         Список заказов, отсортированных по дате (новые первые)
@@ -3831,6 +3835,16 @@ def get_orders_by_categories(categories_list, per_page=30):
         # Используем нормализованную таблицу order_categories
         placeholders = ', '.join(['?' for _ in categories_list])
 
+        # ИСПРАВЛЕНО: Добавлена фильтрация по городам мастера
+        city_filter = ""
+        if worker_id:
+            city_filter = """
+                AND (
+                    o.city IN (SELECT city FROM worker_cities WHERE worker_id = ?)
+                    OR o.city = (SELECT city FROM workers WHERE id = ?)
+                )
+            """
+
         query = f"""
             SELECT DISTINCT
                 o.*,
@@ -3842,15 +3856,25 @@ def get_orders_by_categories(categories_list, per_page=30):
             JOIN order_categories oc ON o.id = oc.order_id
             WHERE o.status = 'open'
             AND oc.category IN ({placeholders})
+            {city_filter}
             ORDER BY o.created_at DESC
             LIMIT ?
         """
 
         params = [cat.strip() for cat in categories_list if cat and cat.strip()]
+
+        # Добавляем worker_id дважды для фильтрации по городам
+        if worker_id:
+            params.append(worker_id)
+            params.append(worker_id)
+
         params.append(per_page)
 
+        logger.info(f"🔍 Поиск заказов: категории={categories_list}, worker_id={worker_id}")
         cursor.execute(query, params)
-        return cursor.fetchall()
+        results = cursor.fetchall()
+        logger.info(f"🔍 Найдено заказов: {len(results)}")
+        return results
 
 
 def get_client_orders(client_id, page=1, per_page=10):
