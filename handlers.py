@@ -1703,6 +1703,10 @@ async def show_worker_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    # ИСПРАВЛЕНИЕ БАГА: Очищаем активный чат при возврате в меню
+    # Это предотвращает открытие неправильного чата при нажатии "Обновить чат"
+    db.clear_active_chat(update.effective_user.id)
+
     # Получаем текущий статус уведомлений
     user = db.get_user_by_telegram_id(update.effective_user.id)
     notifications_enabled = db.are_notifications_enabled(user['id']) if user else True
@@ -2192,6 +2196,10 @@ def _get_order_status_text(status):
 async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    # ИСПРАВЛЕНИЕ БАГА: Очищаем активный чат при возврате в меню
+    # Это предотвращает открытие неправильного чата при нажатии "Обновить чат"
+    db.clear_active_chat(update.effective_user.id)
 
     # Получаем текущий статус уведомлений для клиента
     user = db.get_user_by_telegram_id(update.effective_user.id)
@@ -2886,8 +2894,22 @@ async def view_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     photo_ids = [p.strip() for p in portfolio_photos.split(",") if p.strip()]
 
+    # НОВОЕ: Проверяем какие фото подтверждены клиентами (из completed_work_photos)
+    worker_id = profile_dict.get("id")
+    verified_photos_info = {}  # photo_id -> True если подтверждено
+
+    if worker_id:
+        # Получаем все подтвержденные фото мастера из completed_work_photos
+        verified_photos = db.get_worker_verified_photos(worker_id, limit=100)
+        for photo_row in verified_photos:
+            photo_dict = dict(photo_row)
+            photo_file_id = photo_dict.get('photo_id')
+            if photo_file_id:
+                verified_photos_info[photo_file_id] = True
+
     # Сохраняем в context для навигации
     context.user_data['portfolio_photos'] = photo_ids
+    context.user_data['verified_photos'] = verified_photos_info
     context.user_data['current_portfolio_index'] = 0
 
     # Показываем первое фото
@@ -2904,11 +2926,16 @@ async def view_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard.append([InlineKeyboardButton("⬅️ К профилю", callback_data="worker_profile")])
 
+    # НОВОЕ: Добавляем галочку если фото подтверждено клиентом
+    first_photo_id = photo_ids[0]
+    is_verified = verified_photos_info.get(first_photo_id, False)
+    verified_mark = " ✅ <i>Подтверждено клиентом</i>" if is_verified else ""
+
     try:
         await query.message.delete()
         await query.message.reply_photo(
             photo=photo_ids[0],
-            caption=f"📸 <b>Фото работ</b>\n\n1 из {len(photo_ids)}",
+            caption=f"📸 <b>Фото работ</b>\n\n1 из {len(photo_ids)}{verified_mark}",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -2924,6 +2951,7 @@ async def portfolio_navigate(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     photo_ids = context.user_data.get('portfolio_photos', [])
     current_index = context.user_data.get('current_portfolio_index', 0)
+    verified_photos = context.user_data.get('verified_photos', {})  # НОВОЕ
 
     if not photo_ids:
         return
@@ -2935,6 +2963,11 @@ async def portfolio_navigate(update: Update, context: ContextTypes.DEFAULT_TYPE)
         current_index = (current_index + 1) % len(photo_ids)
 
     context.user_data['current_portfolio_index'] = current_index
+
+    # НОВОЕ: Проверяем подтверждено ли текущее фото
+    current_photo_id = photo_ids[current_index]
+    is_verified = verified_photos.get(current_photo_id, False)
+    verified_mark = "\n✅ <i>Подтверждено клиентом</i>" if is_verified else ""
 
     # Формируем keyboard
     keyboard = []
@@ -2960,7 +2993,7 @@ async def portfolio_navigate(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await context.bot.send_photo(
                 chat_id=query.from_user.id,
                 photo=photo_ids[current_index],
-                caption=f"📸 <b>Фото работ</b>\n\n{current_index + 1} из {len(photo_ids)}",
+                caption=f"📸 <b>Фото работ</b>\n\n{current_index + 1} из {len(photo_ids)}{verified_mark}",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
@@ -7004,8 +7037,11 @@ async def worker_view_orders(update: Update, context: ContextTypes.DEFAULT_TYPE)
         all_orders = [dict(order) for order in all_orders]
 
         # Фильтруем заказы - не показываем те, на которые мастер уже откликнулся
+        # НОВОЕ: Также не показываем заказы, от которых мастер отказался
         worker_user_id = user["id"]
-        all_orders = [order for order in all_orders if not db.check_worker_bid_exists(order['id'], worker_user_id)]
+        all_orders = [order for order in all_orders
+                     if not db.check_worker_bid_exists(order['id'], worker_user_id)
+                     and not db.check_order_declined(worker_user_id, order['id'])]
         
         if not all_orders:
             keyboard = [
@@ -7159,6 +7195,8 @@ async def worker_view_order_details(update: Update, context: ContextTypes.DEFAUL
                     keyboard.append([InlineKeyboardButton("✅ Вы уже откликнулись", callback_data="noop")])
                 else:
                     keyboard.append([InlineKeyboardButton("💰 Откликнуться", callback_data=f"bid_on_order_{order_id}")])
+                    # НОВОЕ: Кнопка "Отказаться от заказа" (не показывать этот заказ больше)
+                    keyboard.append([InlineKeyboardButton("🚫 Отказаться от заказа", callback_data=f"decline_order_{order_id}")])
 
             # ИСПРАВЛЕНО: Если мастер откликнулся на заказ - возвращаем в "Мои отклики", иначе в "Доступные заказы"
             back_callback = "worker_my_bids" if already_bid else "worker_view_orders"
@@ -7189,6 +7227,8 @@ async def worker_view_order_details(update: Update, context: ContextTypes.DEFAUL
                     keyboard.append([InlineKeyboardButton("✅ Вы уже откликнулись", callback_data="noop")])
                 else:
                     keyboard.append([InlineKeyboardButton("💰 Откликнуться", callback_data=f"bid_on_order_{order_id}")])
+                    # НОВОЕ: Кнопка "Отказаться от заказа" (не показывать этот заказ больше)
+                    keyboard.append([InlineKeyboardButton("🚫 Отказаться от заказа", callback_data=f"decline_order_{order_id}")])
 
             # ИСПРАВЛЕНО: Если мастер откликнулся на заказ - возвращаем в "Мои отклики", иначе в "Доступные заказы"
             back_callback = "worker_my_bids" if already_bid else "worker_view_orders"
@@ -7202,6 +7242,129 @@ async def worker_view_order_details(update: Update, context: ContextTypes.DEFAUL
             
     except Exception as e:
         logger.error(f"Ошибка при просмотре деталей заказа: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Произошла ошибка.\n\nПопробуйте позже.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data="worker_view_orders")
+            ]])
+        )
+
+
+async def worker_decline_order_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """НОВОЕ: Подтверждение отказа от заказа (шаг 1)"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # Извлекаем order_id из callback_data: "decline_order_123"
+        order_id = int(query.data.replace("decline_order_", ""))
+
+        # Получаем заказ
+        order = db.get_order_by_id(order_id)
+        if not order:
+            await query.edit_message_text("❌ Заказ не найден.")
+            return
+
+        order_dict = dict(order)
+
+        # Спрашиваем подтверждение
+        text = (
+            f"🚫 <b>Отказаться от заказа?</b>\n\n"
+            f"Заказ #{order_id} больше не будет отображаться в списке доступных заказов.\n\n"
+            f"📍 <b>Город:</b> {order_dict.get('city', 'Не указан')}\n"
+            f"🔧 <b>Категория:</b> {order_dict.get('category', 'Не указана')}\n\n"
+            f"Вы уверены, что хотите отказаться от этого заказа?"
+        )
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Да, отказаться", callback_data=f"decline_order_yes_{order_id}"),
+                InlineKeyboardButton("❌ Нет, вернуться", callback_data=f"decline_order_no_{order_id}")
+            ]
+        ]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка при подтверждении отказа: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Произошла ошибка.\n\nПопробуйте позже.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data="worker_view_orders")
+            ]])
+        )
+
+
+async def worker_decline_order_yes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """НОВОЕ: Подтверждение отказа - ДА (шаг 2)"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # Извлекаем order_id из callback_data: "decline_order_yes_123"
+        order_id = int(query.data.replace("decline_order_yes_", ""))
+
+        # Получаем user_id
+        user = db.get_user(query.from_user.id)
+        if not user:
+            await query.edit_message_text("❌ Ошибка: пользователь не найден.")
+            return
+
+        worker_user_id = user["id"]
+
+        # Сохраняем отказ в БД
+        success = db.decline_order(worker_user_id, order_id)
+
+        if success:
+            text = (
+                f"✅ <b>Заказ скрыт</b>\n\n"
+                f"Заказ #{order_id} больше не будет отображаться в списке доступных заказов.\n\n"
+                f"Вы можете продолжить просмотр других заказов."
+            )
+        else:
+            text = "❌ Не удалось скрыть заказ. Попробуйте позже."
+
+        keyboard = [
+            [InlineKeyboardButton("📋 К списку заказов", callback_data="worker_view_orders")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="show_worker_menu")]
+        ]
+
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка при отказе от заказа: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Произошла ошибка.\n\nПопробуйте позже.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data="worker_view_orders")
+            ]])
+        )
+
+
+async def worker_decline_order_no(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """НОВОЕ: Отмена отказа - НЕТ, вернуться к заказу"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # Извлекаем order_id из callback_data: "decline_order_no_123"
+        order_id = int(query.data.replace("decline_order_no_", ""))
+
+        # Возвращаемся к просмотру заказа (симулируем callback)
+        # Создаем новый query с правильным callback_data
+        query.data = f"view_order_{order_id}"
+        await worker_view_order_details(update, context)
+
+    except Exception as e:
+        logger.error(f"Ошибка при отмене отказа: {e}", exc_info=True)
         await query.edit_message_text(
             "❌ Произошла ошибка.\n\nПопробуйте позже.",
             reply_markup=InlineKeyboardMarkup([[

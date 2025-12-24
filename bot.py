@@ -707,6 +707,28 @@ def main():
         )
     )
 
+    # НОВОЕ: Отказ от заказа мастером
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_decline_order_confirm,
+            pattern="^decline_order_\d+$"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_decline_order_yes,
+            pattern="^decline_order_yes_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            handlers.worker_decline_order_no,
+            pattern="^decline_order_no_"
+        )
+    )
+
     # --- Обработчики для листания мастеров ---
     
     application.add_handler(
