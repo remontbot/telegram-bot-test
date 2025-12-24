@@ -5558,7 +5558,18 @@ def get_worker_cities(worker_id):
         cursor.execute("""
             SELECT city FROM worker_cities WHERE worker_id = ? ORDER BY id
         """, (worker_id,))
-        return [row[0] for row in cursor.fetchall()]
+        rows = cursor.fetchall()
+
+        # ИСПРАВЛЕНО: Поддержка PostgreSQL (dict) и SQLite (tuple)
+        if not rows:
+            return []
+
+        if isinstance(rows[0], dict):
+            # PostgreSQL возвращает dict
+            return [row['city'] for row in rows]
+        else:
+            # SQLite возвращает tuple
+            return [row[0] for row in rows]
 
 
 def clear_worker_cities(worker_id):
