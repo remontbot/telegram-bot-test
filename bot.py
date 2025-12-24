@@ -357,8 +357,12 @@ def main():
         ],
         allow_reentry=True,
     )
-    
+
     application.add_handler(edit_profile_handler)
+
+    # === Глобальные обработчики для управления городами (вне ConversationHandler) ===
+    application.add_handler(CallbackQueryHandler(handlers.remove_city_menu, pattern="^remove_city_menu$"))
+    application.add_handler(CallbackQueryHandler(handlers.remove_city_confirm, pattern="^remove_city_"))
 
     # --- ConversationHandler для откликов мастеров ---
     
