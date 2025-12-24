@@ -1708,8 +1708,20 @@ async def show_worker_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     notifications_enabled = db.are_notifications_enabled(user['id']) if user else True
     notification_status = "🔔 Вкл" if notifications_enabled else "🔕 Выкл"
 
+    # НОВОЕ: Получаем количество непрочитанных заказов
+    unread_orders_count = 0
+    if user:
+        notification = db.get_worker_notification(user['id'])
+        if notification:
+            unread_orders_count = notification.get('available_orders_count', 0)
+
+    # Формируем текст кнопки с бейджем
+    orders_button_text = "📋 Доступные заказы"
+    if unread_orders_count > 0:
+        orders_button_text = f"📋 Доступные заказы 🔴 {unread_orders_count}"
+
     keyboard = [
-        [InlineKeyboardButton("📋 Доступные заказы", callback_data="worker_view_orders")],
+        [InlineKeyboardButton(orders_button_text, callback_data="worker_view_orders")],
         [InlineKeyboardButton("💼 Мои отклики", callback_data="worker_my_bids")],
         [InlineKeyboardButton("📦 Мои заказы", callback_data="worker_my_orders")],
         [InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
@@ -2186,9 +2198,21 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     notifications_enabled = db.are_client_notifications_enabled(user['id']) if user else True
     notification_status = "🔔 Вкл" if notifications_enabled else "🔕 Выкл"
 
+    # НОВОЕ: Получаем количество непрочитанных откликов
+    unread_bids_count = 0
+    if user:
+        notification = db.get_client_notification(user['id'])
+        if notification:
+            unread_bids_count = notification.get('unread_bids_count', 0)
+
+    # Формируем текст кнопки с бейджем
+    orders_button_text = "📂 Мои заказы"
+    if unread_bids_count > 0:
+        orders_button_text = f"📂 Мои заказы 🔴 {unread_bids_count}"
+
     keyboard = [
         [InlineKeyboardButton("📝 Создать заказ", callback_data="client_create_order")],
-        [InlineKeyboardButton("📂 Мои заказы", callback_data="client_my_orders")],
+        [InlineKeyboardButton(orders_button_text, callback_data="client_my_orders")],
         # [InlineKeyboardButton("💳 Мои платежи", callback_data="client_my_payments")],  # Скрыто до внедрения платной версии
         [InlineKeyboardButton(f"{notification_status} Уведомления", callback_data="toggle_client_notifications")],
         [InlineKeyboardButton("💡 Предложения", callback_data="send_suggestion")],
@@ -4207,6 +4231,9 @@ async def client_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Удаляем уведомление о новых сообщениях (пользователь открыл заказы)
         db.delete_chat_message_notification(user['id'])
+
+        # НОВОЕ: Обнуляем счётчик непрочитанных откликов (пользователь их просматривает)
+        db.save_client_notification(user['id'], None, None, 0)
 
         client_profile = db.get_client_profile(user["id"])
         if not client_profile:
@@ -6957,8 +6984,8 @@ async def worker_view_orders(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await query.edit_message_text("❌ Ошибка: пользователь не найден.")
             return
 
-        # Уведомление НЕ удаляется автоматически - оно висит и напоминает о заказах
-        # Мастер может отключить уведомления в настройках если захочет
+        # НОВОЕ: Обнуляем счётчик непрочитанных заказов (пользователь их просматривает)
+        db.save_worker_notification(user['id'], None, None, 0)
 
         worker_profile = db.get_worker_profile(user["id"])
         if not worker_profile:
@@ -9091,39 +9118,32 @@ async def notify_worker_new_order(context, worker_telegram_id, worker_user_id, o
         notification = db.get_worker_notification(worker_user_id)
 
         try:
+            # НОВАЯ ЛОГИКА: Удаляем старое уведомление, отправляем новое (всегда со звуком!)
             if notification and notification['notification_message_id']:
-                # Пытаемся РЕДАКТИРОВАТЬ существующее сообщение
-                await context.bot.edit_message_text(
-                    chat_id=notification['notification_chat_id'],
-                    message_id=notification['notification_message_id'],
-                    text=text,
-                    reply_markup=reply_markup,
-                    parse_mode="HTML"
-                )
-                # Обновляем счетчик
-                db.save_worker_notification(
-                    worker_user_id,
-                    notification['notification_message_id'],
-                    notification['notification_chat_id'],
-                    available_orders_count
-                )
-                logger.info(f"✅ Обновлено уведомление для мастера {worker_user_id}: {available_orders_count} заказов")
-            else:
-                # Сообщения нет - отправляем НОВОЕ
-                raise Exception("No existing notification")
+                try:
+                    # Удаляем старое уведомление
+                    await context.bot.delete_message(
+                        chat_id=notification['notification_chat_id'],
+                        message_id=notification['notification_message_id']
+                    )
+                    logger.info(f"🗑 Удалено старое уведомление для мастера {worker_user_id}")
+                except Exception as delete_error:
+                    logger.warning(f"Не удалось удалить старое уведомление: {delete_error}")
 
-        except Exception as edit_error:
-            # Не удалось отредактировать (сообщение удалено или не существует) - отправляем новое
-            logger.info(f"Отправка нового уведомления для мастера {worker_user_id}: {edit_error}")
+            # Отправляем НОВОЕ уведомление (всегда со звуком!)
             msg = await context.bot.send_message(
                 chat_id=worker_telegram_id,
                 text=text,
                 reply_markup=reply_markup,
                 parse_mode="HTML"
             )
-            # Сохраняем message_id для будущих обновлений
+            # Сохраняем message_id для следующего удаления
             db.save_worker_notification(worker_user_id, msg.message_id, worker_telegram_id, available_orders_count)
-            logger.info(f"✅ Отправлено новое уведомление мастеру {worker_user_id}")
+            logger.info(f"✅ Отправлено новое уведомление мастеру {worker_user_id}: {available_orders_count} заказов")
+
+        except Exception as send_error:
+            logger.error(f"Ошибка при отправке нового уведомления: {send_error}")
+            return False
 
         return True
     except Exception as e:
@@ -9159,39 +9179,32 @@ async def notify_client_new_bid(context, client_telegram_id, client_user_id, ord
         notification = db.get_client_notification(client_user_id)
 
         try:
+            # НОВАЯ ЛОГИКА: Удаляем старое уведомление, отправляем новое (всегда со звуком!)
             if notification and notification.get('notification_message_id'):
-                # Пытаемся РЕДАКТИРОВАТЬ существующее сообщение
-                await context.bot.edit_message_text(
-                    chat_id=notification['notification_chat_id'],
-                    message_id=notification['notification_message_id'],
-                    text=text,
-                    reply_markup=reply_markup,
-                    parse_mode="HTML"
-                )
-                # Обновляем счетчик
-                db.save_client_notification(
-                    client_user_id,
-                    notification['notification_message_id'],
-                    notification['notification_chat_id'],
-                    total_bids
-                )
-                logger.info(f"✅ Обновлено уведомление для клиента {client_user_id}: {total_bids} откликов")
-            else:
-                # Сообщения нет - отправляем НОВОЕ
-                raise Exception("No existing notification")
+                try:
+                    # Удаляем старое уведомление
+                    await context.bot.delete_message(
+                        chat_id=notification['notification_chat_id'],
+                        message_id=notification['notification_message_id']
+                    )
+                    logger.info(f"🗑 Удалено старое уведомление для клиента {client_user_id}")
+                except Exception as delete_error:
+                    logger.warning(f"Не удалось удалить старое уведомление: {delete_error}")
 
-        except Exception as edit_error:
-            # Не удалось отредактировать (сообщение удалено или не существует) - отправляем новое
-            logger.info(f"Отправка нового уведомления для клиента {client_user_id}: {edit_error}")
+            # Отправляем НОВОЕ уведомление (всегда со звуком!)
             msg = await context.bot.send_message(
                 chat_id=client_telegram_id,
                 text=text,
                 reply_markup=reply_markup,
                 parse_mode="HTML"
             )
-            # Сохраняем message_id для будущих обновлений
+            # Сохраняем message_id для следующего удаления
             db.save_client_notification(client_user_id, msg.message_id, client_telegram_id, total_bids)
-            logger.info(f"✅ Отправлено новое уведомление клиенту {client_user_id}")
+            logger.info(f"✅ Отправлено новое уведомление клиенту {client_user_id}: {total_bids} откликов")
+
+        except Exception as send_error:
+            logger.error(f"Ошибка при отправке нового уведомления: {send_error}")
+            return False
 
         return True
     except Exception as e:
