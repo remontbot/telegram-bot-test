@@ -713,31 +713,44 @@ def create_user(telegram_id, role):
 
 def delete_user_profile(telegram_id):
     """
-    ИСПРАВЛЕНО: Полностью удаляет профиль пользователя из базы данных.
-    Удаляет ОБА профиля (мастер И заказчик) если они есть.
+    Удаляет ТЕКУЩИЙ активный профиль пользователя (мастер ИЛИ заказчик).
+    Если у пользователя два профиля, удаляет тот, который соответствует role.
     Возвращает True, если удаление прошло успешно, False если пользователь не найден.
     """
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
-        # Сначала получаем user_id
-        cursor.execute("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,))
+        # Получаем user_id и role
+        cursor.execute("SELECT id, role FROM users WHERE telegram_id = ?", (telegram_id,))
         user_row = cursor.fetchone()
 
         if not user_row:
             return False
 
         user_id = user_row['id']
+        role = user_row['role']
 
-        # ИСПРАВЛЕНО: Удаляем ОБА профиля (если есть)
-        cursor.execute("DELETE FROM workers WHERE user_id = ?", (user_id,))
-        cursor.execute("DELETE FROM clients WHERE user_id = ?", (user_id,))
+        # Удаляем только ТЕКУЩИЙ профиль (worker ИЛИ client)
+        if role == "worker":
+            cursor.execute("DELETE FROM workers WHERE user_id = ?", (user_id,))
+            logger.info(f"✅ Удален профиль мастера для user_id={user_id}")
+        elif role == "client":
+            cursor.execute("DELETE FROM clients WHERE user_id = ?", (user_id,))
+            logger.info(f"✅ Удален профиль заказчика для user_id={user_id}")
 
-        # Удаляем пользователя из таблицы users
-        cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        # Проверяем, остались ли другие профили
+        cursor.execute("SELECT COUNT(*) as count FROM workers WHERE user_id = ?", (user_id,))
+        has_worker = cursor.fetchone()['count'] > 0
+
+        cursor.execute("SELECT COUNT(*) as count FROM clients WHERE user_id = ?", (user_id,))
+        has_client = cursor.fetchone()['count'] > 0
+
+        # Если НЕТ других профилей - удаляем пользователя из users
+        if not has_worker and not has_client:
+            cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            logger.info(f"✅ Удален пользователь {telegram_id} (user_id={user_id}) - нет других профилей")
 
         conn.commit()
-        logger.info(f"✅ Профиль пользователя {telegram_id} (user_id={user_id}) полностью удалён")
         return True
 
 
