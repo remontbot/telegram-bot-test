@@ -5311,7 +5311,13 @@ async def worker_finish_work_photos(update: Update, context: ContextTypes.DEFAUL
                     except Exception as e:
                         logger.warning(f"Не удалось уведомить клиента о фото: {e}")
 
-        # Подтверждаем мастеру
+        # Подтверждаем мастеру (ИСПРАВЛЕНО: добавлены кнопки навигации)
+        keyboard = [
+            [InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile")],
+            [InlineKeyboardButton("📦 Мои заказы", callback_data="worker_my_orders")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="show_worker_menu")]
+        ]
+
         await safe_edit_message(
             query,
             f"✅ <b>Фотографии загружены!</b>\n\n"
@@ -5319,7 +5325,8 @@ async def worker_finish_work_photos(update: Update, context: ContextTypes.DEFAUL
             f"📨 Клиент получил уведомление и сможет подтвердить подлинность фото.\n"
             f"Подтверждённые фото будут отмечены значком ✅ в вашем профиле."
             f"{warning_text}",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
         # Очищаем context
@@ -5669,10 +5676,47 @@ async def client_verify_work_photo(update: Update, context: ContextTypes.DEFAULT
     try:
         photo_id = int(query.data.replace("verify_photo_", ""))
 
+        # Получаем информацию о фото перед подтверждением (для уведомления мастера)
+        photo_info = db.get_completed_work_photo_by_id(photo_id)
+
         # Подтверждаем фото в БД (также добавляет в портфолио мастера)
         success = db.verify_completed_work_photo(photo_id)
 
         if success:
+            # НОВОЕ: Уведомляем мастера о подтверждении фото
+            if photo_info:
+                photo_dict = dict(photo_info)
+                worker_id = photo_dict.get('worker_id')
+                order_id = photo_dict.get('order_id')
+
+                if worker_id:
+                    worker_profile = db.get_worker_profile_by_id(worker_id)
+                    if worker_profile:
+                        worker_dict = dict(worker_profile)
+                        worker_user = db.get_user_by_id(worker_dict['user_id'])
+
+                        if worker_user:
+                            worker_user_dict = dict(worker_user)
+                            try:
+                                # Отправляем уведомление мастеру
+                                await context.bot.send_message(
+                                    chat_id=worker_user_dict['telegram_id'],
+                                    text=(
+                                        f"✅ <b>Клиент подтвердил ваше фото!</b>\n\n"
+                                        f"Ваше фото работы по заказу #{order_id} подтверждено клиентом.\n\n"
+                                        f"🎉 Фото добавлено в ваш профиль с отметкой ✅ «Подтверждено клиентом».\n\n"
+                                        f"💡 Подтверждённые фото повышают доверие новых клиентов!"
+                                    ),
+                                    parse_mode="HTML",
+                                    reply_markup=InlineKeyboardMarkup([[
+                                        InlineKeyboardButton("👤 Мой профиль", callback_data="worker_profile"),
+                                        InlineKeyboardButton("🏠 Главное меню", callback_data="show_worker_menu")
+                                    ]])
+                                )
+                                logger.info(f"✅ Отправлено уведомление мастеру {worker_id} о подтверждении фото {photo_id}")
+                            except Exception as e:
+                                logger.warning(f"Не удалось уведомить мастера о подтверждении фото: {e}")
+
             # Определяем роль для кнопки возврата
             user = db.get_user(query.from_user.id)
             is_worker = db.get_worker_profile(user['id']) if user else None

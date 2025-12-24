@@ -1160,10 +1160,10 @@ def verify_completed_work_photo(photo_id):
             photo_file_id = photo_info['photo_id']
             worker_id = photo_info['worker_id']
 
-            # 2. Подтверждаем фото
+            # 2. Подтверждаем фото (ИСПРАВЛЕНО: PostgreSQL boolean совместимость)
             cursor.execute("""
                 UPDATE completed_work_photos
-                SET verified = 1, verified_at = ?
+                SET verified = TRUE, verified_at = ?
                 WHERE id = ?
             """, (verified_at, photo_id))
 
@@ -1215,6 +1215,25 @@ def get_completed_work_photos(order_id):
             ORDER BY created_at DESC
         """, (order_id,))
         return cursor.fetchall()
+
+
+def get_completed_work_photo_by_id(photo_id):
+    """
+    НОВОЕ: Получает информацию о фотографии работы по её ID.
+
+    Args:
+        photo_id: ID фотографии в таблице completed_work_photos
+
+    Returns:
+        dict|None: Информация о фото или None если не найдено
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        cursor.execute("""
+            SELECT * FROM completed_work_photos
+            WHERE id = ?
+        """, (photo_id,))
+        return cursor.fetchone()
 
 
 def get_worker_verified_photos(worker_id, limit=20):
