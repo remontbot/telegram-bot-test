@@ -3554,7 +3554,7 @@ async def edit_phone_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def edit_city_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало редактирования города - выбор региона"""
+    """ИСПРАВЛЕНО: Редактирование городов - теперь поддерживает НЕСКОЛЬКО городов"""
     query = update.callback_query
     await query.answer()
 
@@ -3565,9 +3565,30 @@ async def edit_city_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     worker_profile = db.get_worker_profile(user_id)
     profile_dict = dict(worker_profile)
-    current_city = profile_dict.get("city") or "—"
+    worker_id = profile_dict['id']
 
-    # Показываем регионы Беларуси
+    # Получаем ВСЕ города мастера из worker_cities
+    worker_cities = db.get_worker_cities(worker_id)
+
+    # Если городов нет в worker_cities, берём из старого поля city
+    if not worker_cities:
+        current_city = profile_dict.get("city")
+        if current_city:
+            worker_cities = [current_city]
+            # Мигрируем в worker_cities
+            db.add_worker_city(worker_id, current_city)
+
+    # Сохраняем worker_id в context для последующих шагов
+    context.user_data["edit_worker_id"] = worker_id
+    context.user_data["current_cities"] = worker_cities
+
+    # Формируем текст с текущими городами
+    if worker_cities:
+        cities_text = "\n".join([f"  • {city}" for city in worker_cities])
+    else:
+        cities_text = "  (не указаны)"
+
+    # Показываем регионы Беларуси для ДОБАВЛЕНИЯ нового города
     keyboard = []
     for region_name, region_data in BELARUS_REGIONS.items():
         keyboard.append([InlineKeyboardButton(
@@ -3575,12 +3596,16 @@ async def edit_city_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             callback_data=f"editregion_{region_name}"
         )])
 
-    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="worker_profile")])
+    # Кнопки управления городами
+    if worker_cities:
+        keyboard.append([InlineKeyboardButton("🗑 Удалить город", callback_data="remove_city_menu")])
+
+    keyboard.append([InlineKeyboardButton("✅ Готово", callback_data="worker_profile")])
 
     await query.edit_message_text(
-        f"🏙 <b>Изменение города</b>\n\n"
-        f"Текущий город: <b>{current_city}</b>\n\n"
-        f"Выберите регион или город:",
+        f"🏙 <b>Редактирование городов</b>\n\n"
+        f"📍 <b>Ваши города:</b>\n{cities_text}\n\n"
+        f"➕ Выберите регион чтобы ДОБАВИТЬ новый город:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -3590,7 +3615,7 @@ async def edit_city_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def edit_region_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора региона при редактировании города"""
+    """ИСПРАВЛЕНО: ДОБАВЛЕНИЕ города (не замена)"""
     query = update.callback_query
     await query.answer()
 
@@ -3603,20 +3628,34 @@ async def edit_region_select(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     context.user_data["edit_region"] = region
 
-    # Если выбран Минск или "Вся Беларусь" - сразу сохраняем
+    # Если выбран Минск или "Вся Беларусь" - сразу добавляем
     if region_data["type"] in ["city", "country"]:
         telegram_id = query.from_user.id
         user = db.get_user(telegram_id)
         user_dict = dict(user)
         user_id = user_dict.get("id")
 
+        # ИСПРАВЛЕНО: ДОБАВЛЯЕМ город в worker_cities
+        worker_id = context.user_data.get("edit_worker_id")
+        if worker_id:
+            db.add_worker_city(worker_id, region)
+
+        # Также обновляем старое поле city для обратной совместимости
         db.update_worker_field(user_id, "city", region)
         db.update_worker_field(user_id, "regions", region)
 
-        keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
+        # Показываем обновлённый список городов
+        worker_cities = db.get_worker_cities(worker_id) if worker_id else [region]
+        cities_text = "\n".join([f"  • {c}" for c in worker_cities])
+
+        keyboard = [
+            [InlineKeyboardButton("➕ Добавить ещё город", callback_data="edit_city")],
+            [InlineKeyboardButton("✅ Готово", callback_data="worker_profile")]
+        ]
 
         await query.edit_message_text(
-            f"✅ Город успешно изменён на: <b>{region_data['display']}</b>",
+            f"✅ Город <b>{region_data['display']}</b> добавлен!\n\n"
+            f"📍 <b>Ваши города:</b>\n{cities_text}",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML",
         )
@@ -3652,7 +3691,7 @@ async def edit_region_select(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def edit_city_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора города из списка при редактировании"""
+    """ИСПРАВЛЕНО: ДОБАВЛЕНИЕ города (не замена)"""
     query = update.callback_query
     await query.answer()
 
@@ -3664,20 +3703,36 @@ async def edit_city_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return EDIT_CITY
     else:
-        # Сохраняем город
+        # ИСПРАВЛЕНО: ДОБАВЛЯЕМ город в worker_cities
+        worker_id = context.user_data.get("edit_worker_id")
+        if not worker_id:
+            await query.edit_message_text("❌ Ошибка: не найден worker_id")
+            return ConversationHandler.END
+
+        # Добавляем город
+        db.add_worker_city(worker_id, city)
+
+        # Также обновляем старое поле city для обратной совместимости
         telegram_id = query.from_user.id
         user = db.get_user(telegram_id)
         user_dict = dict(user)
         user_id = user_dict.get("id")
-
         region = context.user_data.get("edit_region", city)
         db.update_worker_field(user_id, "city", city)
         db.update_worker_field(user_id, "regions", region)
 
-        keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
+        # Показываем обновлённый список городов
+        worker_cities = db.get_worker_cities(worker_id)
+        cities_text = "\n".join([f"  • {c}" for c in worker_cities])
+
+        keyboard = [
+            [InlineKeyboardButton("➕ Добавить ещё город", callback_data="edit_city")],
+            [InlineKeyboardButton("✅ Готово", callback_data="worker_profile")]
+        ]
 
         await query.edit_message_text(
-            f"✅ Город успешно изменён на: <b>{city}</b>",
+            f"✅ Город <b>{city}</b> добавлен!\n\n"
+            f"📍 <b>Ваши города:</b>\n{cities_text}",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML",
         )
@@ -3686,30 +3741,121 @@ async def edit_city_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def edit_city_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохранение нового города"""
+    """ИСПРАВЛЕНО: ДОБАВЛЕНИЕ нового города (не замена)"""
     new_city = update.message.text.strip()
-    
+
     if len(new_city) < 2:
         await update.message.reply_text(
             "❌ Слишком короткое название города.\n\n"
             "Попробуйте ещё раз или /cancel для отмены"
         )
         return EDIT_CITY
-    
+
     telegram_id = update.effective_user.id
     user = db.get_user(telegram_id)
     user_dict = dict(user)
     user_id = user_dict.get("id")
-    
+
+    # ИСПРАВЛЕНО: ДОБАВЛЯЕМ город в worker_cities
+    worker_id = context.user_data.get("edit_worker_id")
+    if worker_id:
+        db.add_worker_city(worker_id, new_city)
+
+    # Также обновляем старое поле city для обратной совместимости
     db.update_worker_field(user_id, "city", new_city)
     db.update_worker_field(user_id, "regions", new_city)
-    
-    keyboard = [[InlineKeyboardButton("👤 Вернуться к профилю", callback_data="worker_profile")]]
-    
+
+    # Показываем обновлённый список городов
+    worker_cities = db.get_worker_cities(worker_id) if worker_id else [new_city]
+    cities_text = "\n".join([f"  • {c}" for c in worker_cities])
+
+    keyboard = [
+        [InlineKeyboardButton("➕ Добавить ещё город", callback_data="edit_city")],
+        [InlineKeyboardButton("✅ Готово", callback_data="worker_profile")]
+    ]
+
     await update.message.reply_text(
-        f"✅ Город успешно изменён на: <b>{new_city}</b>",
+        f"✅ Город <b>{new_city}</b> добавлен!\n\n"
+        f"📍 <b>Ваши города:</b>\n{cities_text}",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
+    )
+    return ConversationHandler.END
+
+
+async def remove_city_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает меню удаления города"""
+    query = update.callback_query
+    await query.answer()
+
+    worker_id = context.user_data.get("edit_worker_id")
+    if not worker_id:
+        await query.edit_message_text("❌ Ошибка: не найден worker_id")
+        return ConversationHandler.END
+
+    # Получаем все города мастера
+    worker_cities = db.get_worker_cities(worker_id)
+
+    if not worker_cities:
+        await query.edit_message_text(
+            "❌ У вас нет городов для удаления.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад", callback_data="edit_city")
+            ]])
+        )
+        return ConversationHandler.END
+
+    # Создаём кнопки для каждого города
+    keyboard = []
+    for city in worker_cities:
+        keyboard.append([InlineKeyboardButton(
+            f"🗑 Удалить {city}",
+            callback_data=f"remove_city_{city}"
+        )])
+
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="edit_city")])
+
+    await query.edit_message_text(
+        "🗑 <b>Удаление города</b>\n\n"
+        "Выберите город для удаления:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return ConversationHandler.END
+
+
+async def remove_city_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удаляет выбранный город"""
+    query = update.callback_query
+    await query.answer()
+
+    city_to_remove = query.data.replace("remove_city_", "")
+    worker_id = context.user_data.get("edit_worker_id")
+
+    if not worker_id:
+        await query.edit_message_text("❌ Ошибка: не найден worker_id")
+        return ConversationHandler.END
+
+    # Удаляем город
+    db.remove_worker_city(worker_id, city_to_remove)
+
+    # Показываем обновлённый список
+    worker_cities = db.get_worker_cities(worker_id)
+    if worker_cities:
+        cities_text = "\n".join([f"  • {c}" for c in worker_cities])
+    else:
+        cities_text = "  (не указаны)"
+
+    keyboard = [
+        [InlineKeyboardButton("➕ Добавить город", callback_data="edit_city")],
+        [InlineKeyboardButton("✅ Готово", callback_data="worker_profile")]
+    ]
+
+    await query.edit_message_text(
+        f"✅ Город <b>{city_to_remove}</b> удалён!\n\n"
+        f"📍 <b>Ваши города:</b>\n{cities_text}",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return ConversationHandler.END
 
