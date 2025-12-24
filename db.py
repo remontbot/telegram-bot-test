@@ -713,31 +713,31 @@ def create_user(telegram_id, role):
 
 def delete_user_profile(telegram_id):
     """
-    Полностью удаляет профиль пользователя из базы данных.
+    ИСПРАВЛЕНО: Полностью удаляет профиль пользователя из базы данных.
+    Удаляет ОБА профиля (мастер И заказчик) если они есть.
     Возвращает True, если удаление прошло успешно, False если пользователь не найден.
     """
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
-        
+
         # Сначала получаем user_id
-        cursor.execute("SELECT id, role FROM users WHERE telegram_id = ?", (telegram_id,))
+        cursor.execute("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,))
         user_row = cursor.fetchone()
-        
+
         if not user_row:
             return False
-        
-        user_id, role = user_row
-        
-        # Удаляем из таблицы профиля (workers или clients)
-        if role == "worker":
-            cursor.execute("DELETE FROM workers WHERE user_id = ?", (user_id,))
-        elif role == "client":
-            cursor.execute("DELETE FROM clients WHERE user_id = ?", (user_id,))
-        
+
+        user_id = user_row['id']
+
+        # ИСПРАВЛЕНО: Удаляем ОБА профиля (если есть)
+        cursor.execute("DELETE FROM workers WHERE user_id = ?", (user_id,))
+        cursor.execute("DELETE FROM clients WHERE user_id = ?", (user_id,))
+
         # Удаляем пользователя из таблицы users
         cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
-        
+
         conn.commit()
+        logger.info(f"✅ Профиль пользователя {telegram_id} (user_id={user_id}) полностью удалён")
         return True
 
 
