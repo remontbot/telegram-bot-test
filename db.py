@@ -533,6 +533,19 @@ def init_db():
             );
         """)
 
+        # НОВОЕ: Отказы мастеров от заказов
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS declined_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                worker_id INTEGER NOT NULL,
+                order_id INTEGER NOT NULL,
+                declined_at TEXT NOT NULL,
+                UNIQUE (worker_id, order_id),
+                FOREIGN KEY (worker_id) REFERENCES workers(id),
+                FOREIGN KEY (order_id) REFERENCES orders(id)
+            );
+        """)
+
         # Оплата за доступ к контактам
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS contacts_access (
@@ -5968,7 +5981,7 @@ def get_suggestions_count(status='new'):
     """Получает количество предложений по статусу"""
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
-        
+
         if USE_POSTGRES:
             cursor.execute("""
                 SELECT COUNT(*) as count FROM suggestions WHERE status = %s
@@ -5977,9 +5990,113 @@ def get_suggestions_count(status='new'):
             cursor.execute("""
                 SELECT COUNT(*) as count FROM suggestions WHERE status = ?
             """, (status,))
-        
+
         result = cursor.fetchone()
         if isinstance(result, dict):
             return result.get('count', 0)
         else:
             return result[0] if result else 0
+
+
+# ============================================================
+# НОВОЕ: Функции для отказа мастеров от заказов
+# ============================================================
+
+def decline_order(worker_id, order_id):
+    """
+    Мастер отказывается от заказа (больше не будет его видеть)
+
+    Args:
+        worker_id: ID мастера (из таблицы workers или users, зависит от контекста)
+        order_id: ID заказа
+
+    Returns:
+        True если успешно, False если ошибка
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+        declined_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        try:
+            if USE_POSTGRES:
+                cursor.execute("""
+                    INSERT INTO declined_orders (worker_id, order_id, declined_at)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (worker_id, order_id) DO NOTHING
+                """, (worker_id, order_id, declined_at))
+            else:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO declined_orders (worker_id, order_id, declined_at)
+                    VALUES (?, ?, ?)
+                """, (worker_id, order_id, declined_at))
+
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при отказе от заказа: {e}", exc_info=True)
+            conn.rollback()
+            return False
+
+
+def check_order_declined(worker_id, order_id):
+    """
+    Проверяет, отказался ли мастер от этого заказа
+
+    Args:
+        worker_id: ID мастера
+        order_id: ID заказа
+
+    Returns:
+        True если отказался, False если нет
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        if USE_POSTGRES:
+            cursor.execute("""
+                SELECT COUNT(*) as count
+                FROM declined_orders
+                WHERE worker_id = %s AND order_id = %s
+            """, (worker_id, order_id))
+        else:
+            cursor.execute("""
+                SELECT COUNT(*) as count
+                FROM declined_orders
+                WHERE worker_id = ? AND order_id = ?
+            """, (worker_id, order_id))
+
+        result = cursor.fetchone()
+        if isinstance(result, dict):
+            count = result.get('count', 0)
+        else:
+            count = result[0] if result else 0
+
+        return count > 0
+
+
+def get_declined_orders(worker_id):
+    """
+    Получает список ID заказов, от которых отказался мастер
+
+    Args:
+        worker_id: ID мастера
+
+    Returns:
+        Список ID заказов
+    """
+    with get_db_connection() as conn:
+        cursor = get_cursor(conn)
+
+        if USE_POSTGRES:
+            cursor.execute("""
+                SELECT order_id FROM declined_orders
+                WHERE worker_id = %s
+            """, (worker_id,))
+        else:
+            cursor.execute("""
+                SELECT order_id FROM declined_orders
+                WHERE worker_id = ?
+            """, (worker_id,))
+
+        results = cursor.fetchall()
+        return [row['order_id'] if isinstance(row, dict) else row[0] for row in results]
