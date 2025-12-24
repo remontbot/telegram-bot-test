@@ -2147,6 +2147,12 @@ async def worker_completed_orders(update: Update, context: ContextTypes.DEFAULT_
                     callback_data=f"open_chat_{chat_dict['id']}"
                 )])
 
+            # НОВОЕ: Кнопка для загрузки/добавления фото работы
+            keyboard.append([InlineKeyboardButton(
+                f"📸 Добавить фото работы (заказ #{order['order_id']})",
+                callback_data=f"upload_work_photo_{order['order_id']}"
+            )])
+
             text += "\n"
 
         keyboard.append([InlineKeyboardButton("⬅️ Назад к заказам", callback_data="worker_my_orders")])
@@ -5203,11 +5209,22 @@ async def worker_finish_work_photos(update: Update, context: ContextTypes.DEFAUL
         photos = context.user_data.get('uploaded_work_photos', [])
 
         if not photos:
+            # ИСПРАВЛЕНО: Добавлены кнопки для повторной попытки или пропуска
+            keyboard = [
+                [InlineKeyboardButton("📸 Попробовать снова", callback_data=f"upload_work_photo_{order_id}")],
+                [InlineKeyboardButton("➡️ Пропустить (добавить позже)", callback_data=f"skip_work_photo_{order_id}")],
+                [InlineKeyboardButton("⬅️ К моим заказам", callback_data="worker_my_orders")]
+            ]
             await safe_edit_message(
                 query,
-                "❌ Вы не загрузили ни одного фото.\n\n"
-                "Нажмите «Загрузить фото работы» чтобы попробовать снова.",
-                parse_mode="HTML"
+                "❌ <b>Вы не загрузили ни одного фото</b>\n\n"
+                "Чтобы загрузить фото:\n"
+                "1️⃣ Нажмите «Попробовать снова»\n"
+                "2️⃣ Отправьте фотографии (до 3 шт)\n"
+                "3️⃣ Нажмите «Завершить загрузку»\n\n"
+                "💡 Вы также можете пропустить и добавить фото позже через раздел «Мои заказы».",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
 
@@ -9747,7 +9764,13 @@ async def receive_suggestion_text(update: Update, context: ContextTypes.DEFAULT_
     message = update.message
     text = message.text
 
-    logger.info(f"🔍 receive_suggestion_text вызван. Текст: '{text[:50]}...'")
+    logger.info(f"🔍 receive_suggestion_text вызван пользователем {update.effective_user.id}. Текст: '{text[:50]}...'")
+
+    # ИСПРАВЛЕНО: Показываем индикатор "печатает..." для визуальной обратной связи
+    try:
+        await message.chat.send_action(action="typing")
+    except Exception as e:
+        logger.warning(f"Не удалось отправить typing action: {e}")
 
     # Проверка длины
     if len(text) > 1000:
@@ -9792,8 +9815,11 @@ async def receive_suggestion_text(update: Update, context: ContextTypes.DEFAULT_
         # Определяем правильное меню для возврата
         menu_callback = "show_worker_menu" if user_role in ['worker', 'both'] else "show_client_menu"
 
-        await message.reply_text(
+        logger.info(f"📤 Отправка подтверждения пользователю {update.effective_user.id} о получении предложения #{suggestion_id}")
+
+        sent_message = await message.reply_text(
             "✅ <b>Спасибо за ваше предложение!</b>\n\n"
+            f"📝 <b>Ваше предложение #{suggestion_id} получено!</b>\n\n"
             "Мы обязательно рассмотрим его и постараемся сделать платформу лучше!\n\n"
             "💡 Вы можете отправить еще предложения в любое время через меню.",
             parse_mode="HTML",
@@ -9801,6 +9827,8 @@ async def receive_suggestion_text(update: Update, context: ContextTypes.DEFAULT_
                 InlineKeyboardButton("🏠 В главное меню", callback_data=menu_callback)
             ]])
         )
+
+        logger.info(f"✅ Подтверждение успешно отправлено. Message ID: {sent_message.message_id}")
 
         return ConversationHandler.END
 
