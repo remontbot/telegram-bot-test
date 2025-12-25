@@ -713,15 +713,15 @@ def create_user(telegram_id, role):
 
 def delete_user_profile(telegram_id):
     """
-    ИСПРАВЛЕНО: Удаляет ТЕКУЩИЙ активный профиль пользователя (мастер ИЛИ заказчик).
+    КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Удаляет ВСЕ профили пользователя (и мастер, и клиент).
     Вручную удаляет ВСЕ связанные данные для обхода foreign key constraints.
     """
     with get_db_connection() as conn:
         cursor = get_cursor(conn)
 
         try:
-            # Получаем user_id и role
-            cursor.execute("SELECT id, role FROM users WHERE telegram_id = ?", (telegram_id,))
+            # Получаем user_id
+            cursor.execute("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,))
             user_row = cursor.fetchone()
 
             if not user_row:
@@ -729,88 +729,85 @@ def delete_user_profile(telegram_id):
                 return False
 
             user_id = user_row['id']
-            role = user_row['role']
 
-            logger.info(f"🗑️ Начинаем удаление профиля: telegram_id={telegram_id}, user_id={user_id}, role={role}")
+            logger.info(f"🗑️ Начинаем ПОЛНОЕ удаление профиля: telegram_id={telegram_id}, user_id={user_id}")
 
-            # === УДАЛЕНИЕ ДЛЯ МАСТЕРА ===
-            if role == "worker":
-                # Получаем worker_id
-                cursor.execute("SELECT id FROM workers WHERE user_id = ?", (user_id,))
-                worker_row = cursor.fetchone()
+            # === УДАЛЕНИЕ ПРОФИЛЯ МАСТЕРА (если существует) ===
+            cursor.execute("SELECT id FROM workers WHERE user_id = ?", (user_id,))
+            worker_row = cursor.fetchone()
 
-                if worker_row:
-                    worker_id = worker_row['id']
-                    logger.info(f"🔍 Найден worker_id={worker_id}")
+            if worker_row:
+                worker_id = worker_row['id']
+                logger.info(f"🔍 Найден профиль мастера: worker_id={worker_id}")
 
-                    # 1. Удаляем категории мастера
-                    cursor.execute("DELETE FROM worker_categories WHERE worker_id = ?", (worker_id,))
-                    logger.info(f"✅ Удалены категории мастера")
+                # 1. Удаляем категории мастера
+                cursor.execute("DELETE FROM worker_categories WHERE worker_id = ?", (worker_id,))
+                logger.info(f"✅ Удалены категории мастера")
 
-                    # 2. Удаляем города мастера
-                    cursor.execute("DELETE FROM worker_cities WHERE worker_id = ?", (worker_id,))
-                    logger.info(f"✅ Удалены города мастера")
+                # 2. Удаляем города мастера
+                cursor.execute("DELETE FROM worker_cities WHERE worker_id = ?", (worker_id,))
+                logger.info(f"✅ Удалены города мастера")
 
-                    # 3. Удаляем фотографии завершённых работ
-                    cursor.execute("DELETE FROM completed_work_photos WHERE worker_id = ?", (worker_id,))
-                    logger.info(f"✅ Удалены фотографии работ")
+                # 3. Удаляем фотографии завершённых работ
+                cursor.execute("DELETE FROM completed_work_photos WHERE worker_id = ?", (worker_id,))
+                logger.info(f"✅ Удалены фотографии работ")
 
-                    # 4. Удаляем отклики мастера
-                    cursor.execute("DELETE FROM bids WHERE worker_id = ?", (worker_id,))
-                    logger.info(f"✅ Удалены отклики мастера")
+                # 4. Удаляем отклики мастера
+                cursor.execute("DELETE FROM bids WHERE worker_id = ?", (worker_id,))
+                logger.info(f"✅ Удалены отклики мастера")
 
-                    # 5. Удаляем отзывы мастера
-                    cursor.execute("DELETE FROM reviews WHERE worker_id = ?", (worker_id,))
-                    logger.info(f"✅ Удалены отзывы мастера")
+                # 5. Удаляем настройки уведомлений
+                cursor.execute("DELETE FROM worker_notifications WHERE worker_id = ?", (worker_id,))
+                logger.info(f"✅ Удалены настройки уведомлений")
 
-                    # 6. Удаляем настройки уведомлений
-                    cursor.execute("DELETE FROM worker_notifications WHERE worker_id = ?", (worker_id,))
-                    logger.info(f"✅ Удалены настройки уведомлений")
+                # 6. Удаляем профиль мастера
+                cursor.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
+                logger.info(f"✅ Удалён профиль мастера worker_id={worker_id}")
 
-                    # 7. Удаляем профиль мастера
-                    cursor.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
-                    logger.info(f"✅ Удалён профиль мастера worker_id={worker_id}")
+            # === УДАЛЕНИЕ ПРОФИЛЯ КЛИЕНТА (если существует) ===
+            cursor.execute("SELECT id FROM clients WHERE user_id = ?", (user_id,))
+            client_row = cursor.fetchone()
 
-            # === УДАЛЕНИЕ ДЛЯ ЗАКАЗЧИКА ===
-            elif role == "client":
-                # Получаем client_id
-                cursor.execute("SELECT id FROM clients WHERE user_id = ?", (user_id,))
-                client_row = cursor.fetchone()
+            if client_row:
+                client_id = client_row['id']
+                logger.info(f"🔍 Найден профиль клиента: client_id={client_id}")
 
-                if client_row:
-                    client_id = client_row['id']
-                    logger.info(f"🔍 Найден client_id={client_id}")
+                # 1. Получаем все заказы клиента
+                cursor.execute("SELECT id FROM orders WHERE client_id = ?", (client_id,))
+                orders = cursor.fetchall()
 
-                    # 1. Получаем все заказы клиента
-                    cursor.execute("SELECT id FROM orders WHERE client_id = ?", (client_id,))
-                    orders = cursor.fetchall()
+                for order in orders:
+                    order_id = order['id']
+                    logger.info(f"🔍 Удаляем заказ order_id={order_id}")
 
-                    for order in orders:
-                        order_id = order['id']
-                        logger.info(f"🔍 Удаляем заказ order_id={order_id}")
+                    # Удаляем отклики на заказ
+                    cursor.execute("DELETE FROM bids WHERE order_id = ?", (order_id,))
 
-                        # Удаляем отклики на заказ
-                        cursor.execute("DELETE FROM bids WHERE order_id = ?", (order_id,))
+                    # Удаляем отзывы на заказ
+                    cursor.execute("DELETE FROM reviews WHERE order_id = ?", (order_id,))
 
-                        # Удаляем отзывы на заказ
-                        cursor.execute("DELETE FROM reviews WHERE order_id = ?", (order_id,))
+                    # Удаляем фотографии завершённых работ
+                    cursor.execute("DELETE FROM completed_work_photos WHERE order_id = ?", (order_id,))
 
-                        # Удаляем фотографии завершённых работ
-                        cursor.execute("DELETE FROM completed_work_photos WHERE order_id = ?", (order_id,))
+                    # Удаляем сообщения чата
+                    cursor.execute("DELETE FROM chat_messages WHERE order_id = ?", (order_id,))
 
-                        # Удаляем сообщения чата
-                        cursor.execute("DELETE FROM chat_messages WHERE order_id = ?", (order_id,))
+                    # Удаляем чаты
+                    cursor.execute("DELETE FROM chats WHERE order_id = ?", (order_id,))
 
-                        # Удаляем чаты
-                        cursor.execute("DELETE FROM chats WHERE order_id = ?", (order_id,))
+                # 2. Удаляем все заказы
+                cursor.execute("DELETE FROM orders WHERE client_id = ?", (client_id,))
+                logger.info(f"✅ Удалены заказы клиента")
 
-                    # 2. Удаляем все заказы
-                    cursor.execute("DELETE FROM orders WHERE client_id = ?", (client_id,))
-                    logger.info(f"✅ Удалены заказы клиента")
+                # 3. Удаляем профиль клиента
+                cursor.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+                logger.info(f"✅ Удалён профиль клиента client_id={client_id}")
 
-                    # 3. Удаляем профиль клиента
-                    cursor.execute("DELETE FROM clients WHERE id = ?", (client_id,))
-                    logger.info(f"✅ Удалён профиль клиента client_id={client_id}")
+            # === УДАЛЕНИЕ ОТЗЫВОВ ПОЛЬЗОВАТЕЛЯ ===
+            # ИСПРАВЛЕНО: Таблица reviews не имеет поля worker_id!
+            # Удаляем все отзывы, где пользователь - отправитель или получатель
+            cursor.execute("DELETE FROM reviews WHERE from_user_id = ? OR to_user_id = ?", (user_id, user_id))
+            logger.info(f"✅ Удалены отзывы пользователя")
 
             # === УДАЛЕНИЕ ОБЩИХ ДАННЫХ ===
             # Удаляем уведомления о сообщениях
@@ -825,22 +822,12 @@ def delete_user_profile(telegram_id):
             # Удаляем предложения
             cursor.execute("DELETE FROM suggestions WHERE user_id = ?", (user_id,))
 
-            # Проверяем, остались ли другие профили
-            cursor.execute("SELECT COUNT(*) as count FROM workers WHERE user_id = ?", (user_id,))
-            has_worker = cursor.fetchone()['count'] > 0
-
-            cursor.execute("SELECT COUNT(*) as count FROM clients WHERE user_id = ?", (user_id,))
-            has_client = cursor.fetchone()['count'] > 0
-
-            # Если НЕТ других профилей - удаляем пользователя из users
-            if not has_worker and not has_client:
-                cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
-                logger.info(f"✅ Удалён пользователь {telegram_id} (user_id={user_id}) - нет других профилей")
-            else:
-                logger.info(f"ℹ️ Пользователь {telegram_id} имеет другой профиль - запись в users сохранена")
+            # === УДАЛЕНИЕ ПОЛЬЗОВАТЕЛЯ ИЗ USERS ===
+            cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            logger.info(f"✅ Удалён пользователь {telegram_id} (user_id={user_id})")
 
             conn.commit()
-            logger.info(f"🎉 Профиль успешно удалён: telegram_id={telegram_id}, role={role}")
+            logger.info(f"🎉 ВСЕ профили успешно удалены: telegram_id={telegram_id}")
             return True
 
         except Exception as e:
