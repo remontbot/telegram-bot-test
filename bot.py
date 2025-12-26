@@ -979,14 +979,15 @@ def main():
     )
 
     # Глобальный обработчик сообщений для чатов
-    # КРИТИЧНО: Группа -1 чтобы выполнялось РАНЬШЕ ConversationHandler
-    # Это позволяет обрабатывать сообщения в активном чате до того, как ConversationHandler их перехватит
+    # ИСПРАВЛЕНО: Группа 1 чтобы выполнялось ПОСЛЕ ConversationHandler
+    # Это позволяет ConversationHandler обработать текст первым (группа 0 по умолчанию)
+    # Если ConversationHandler не обработал сообщение, то handle_chat_message обработает его для активных чатов
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handlers.handle_chat_message
         ),
-        group=-1
+        group=1
     )
 
     # --- ConversationHandler для админ-панели ---
