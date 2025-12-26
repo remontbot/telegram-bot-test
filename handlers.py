@@ -7215,6 +7215,111 @@ async def add_test_workers_command(update: Update, context: ContextTypes.DEFAULT
     await update.message.reply_text(message)
 
 
+async def add_test_bids_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Команда для добавления тестовых откликов на заказ
+    Использование: /add_test_bids order_id
+    """
+    telegram_id = update.effective_user.id
+
+    if len(context.args) < 1:
+        await update.message.reply_text(
+            "📋 <b>Использование команды /add_test_bids</b>\n\n"
+            "<code>/add_test_bids order_id</code>\n\n"
+            "Пример:\n"
+            "<code>/add_test_bids 123</code>\n\n"
+            "Эта команда добавит несколько тестовых откликов от мастеров на указанный заказ.",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        order_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ ID заказа должен быть числом")
+        return
+
+    # Проверяем существование заказа
+    order = db.get_order(order_id)
+    if not order:
+        await update.message.reply_text(f"❌ Заказ с ID {order_id} не найден")
+        return
+
+    # Получаем всех мастеров
+    all_workers = db.get_all_workers()
+    if not all_workers or len(all_workers) == 0:
+        await update.message.reply_text(
+            "❌ В системе нет мастеров.\n\n"
+            "Сначала создайте профили мастеров или используйте команду /add_test_workers"
+        )
+        return
+
+    # Создаем отклики от первых 5 мастеров (или меньше, если мастеров мало)
+    workers_to_use = list(all_workers)[:5]
+    created_count = 0
+
+    base_price = 100
+    comments = [
+        "Готов выполнить качественно и в срок!",
+        "Большой опыт работы, есть примеры",
+        "Сделаю быстро и недорого",
+        "Работаю с гарантией качества",
+        "Могу приступить уже сегодня"
+    ]
+
+    for i, worker in enumerate(workers_to_use):
+        worker_dict = dict(worker)
+        worker_id = worker_dict['id']
+
+        # Генерируем разные цены
+        price = base_price + (i * 50)  # 100, 150, 200, 250, 300
+        comment = comments[i % len(comments)]
+        ready_days = 3 + i  # 3, 4, 5, 6, 7 дней
+
+        try:
+            # Проверяем, не откликался ли уже этот мастер
+            if db.check_worker_bid_exists(order_id, worker_dict['user_id']):
+                continue
+
+            # Создаем отклик (обходим rate limiting через прямую вставку в БД)
+            with db.get_db_connection() as conn:
+                cursor = db.get_cursor(conn)
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                cursor.execute("""
+                    INSERT INTO bids (
+                        order_id, worker_id, proposed_price, currency,
+                        comment, ready_in_days, created_at, status
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'active')
+                """, (order_id, worker_id, price, 'BYN', comment, ready_days, now))
+
+                conn.commit()
+                created_count += 1
+                logger.info(f"✅ Создан тестовый отклик от мастера {worker_id} на заказ {order_id}")
+
+        except Exception as e:
+            logger.error(f"Ошибка создания тестового отклика: {e}")
+            continue
+
+    if created_count > 0:
+        await update.message.reply_text(
+            f"✅ Создано тестовых откликов: {created_count}\n\n"
+            f"📋 Заказ ID: {order_id}\n"
+            f"Откликов добавлено: {created_count}\n\n"
+            "Теперь вы можете проверить сортировку откликов!",
+            parse_mode="HTML"
+        )
+    else:
+        await update.message.reply_text(
+            f"⚠️ Не удалось создать отклики.\n\n"
+            f"Возможные причины:\n"
+            f"• Все мастера уже откликнулись на этот заказ\n"
+            f"• Произошла ошибка при создании",
+            parse_mode="HTML"
+        )
+
+
 # ------- ПРОСМОТР ЗАКАЗОВ ДЛЯ МАСТЕРОВ -------
 
 async def worker_view_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -9723,10 +9828,8 @@ async def enable_premium_command(update: Update, context: ContextTypes.DEFAULT_T
     user_telegram_id = update.effective_user.id
 
     # Проверка прав администратора
-    ADMIN_IDS = [user_telegram_id]  # По умолчанию только создатель команды
-
-    if user_telegram_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+    if not db.is_admin(user_telegram_id):
+        await update.message.reply_text("❌ У вас нет прав администратора.")
         return
 
     # Включаем premium функции
@@ -9750,10 +9853,8 @@ async def disable_premium_command(update: Update, context: ContextTypes.DEFAULT_
     user_telegram_id = update.effective_user.id
 
     # Проверка прав администратора
-    ADMIN_IDS = [user_telegram_id]  # По умолчанию только создатель команды
-
-    if user_telegram_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+    if not db.is_admin(user_telegram_id):
+        await update.message.reply_text("❌ У вас нет прав администратора.")
         return
 
     # Выключаем premium функции
@@ -9774,10 +9875,8 @@ async def premium_status_command(update: Update, context: ContextTypes.DEFAULT_T
     user_telegram_id = update.effective_user.id
 
     # Проверка прав администратора
-    ADMIN_IDS = [user_telegram_id]  # По умолчанию только создатель команды
-
-    if user_telegram_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+    if not db.is_admin(user_telegram_id):
+        await update.message.reply_text("❌ У вас нет прав администратора.")
         return
 
     is_enabled = db.is_premium_enabled()
@@ -9804,10 +9903,8 @@ async def ban_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_telegram_id = update.effective_user.id
 
     # Проверка прав администратора
-    ADMIN_IDS = [user_telegram_id]
-
-    if user_telegram_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+    if not db.is_admin(user_telegram_id):
+        await update.message.reply_text("❌ У вас нет прав администратора.")
         return
 
     if len(context.args) < 2:
@@ -9866,10 +9963,8 @@ async def unban_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_telegram_id = update.effective_user.id
 
     # Проверка прав администратора
-    ADMIN_IDS = [user_telegram_id]
-
-    if user_telegram_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+    if not db.is_admin(user_telegram_id):
+        await update.message.reply_text("❌ У вас нет прав администратора.")
         return
 
     if len(context.args) < 1:
@@ -9914,10 +10009,8 @@ async def banned_users_command(update: Update, context: ContextTypes.DEFAULT_TYP
     user_telegram_id = update.effective_user.id
 
     # Проверка прав администратора
-    ADMIN_IDS = [user_telegram_id]
-
-    if user_telegram_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+    if not db.is_admin(user_telegram_id):
+        await update.message.reply_text("❌ У вас нет прав администратора.")
         return
 
     banned_users = db.get_banned_users()
@@ -9953,10 +10046,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_telegram_id = update.effective_user.id
 
     # Проверка прав администратора
-    ADMIN_IDS = [user_telegram_id]
-
-    if user_telegram_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+    if not db.is_admin(user_telegram_id):
+        await update.message.reply_text("❌ У вас нет прав администратора.")
         return
 
     stats = db.get_analytics_stats()
@@ -9991,11 +10082,9 @@ async def announce_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     user_telegram_id = update.effective_user.id
 
-    # Проверка прав администратора (можно заменить на список админов)
-    ADMIN_IDS = [user_telegram_id]  # По умолчанию только создатель команды
-
-    if user_telegram_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+    # Проверка прав администратора
+    if not db.is_admin(user_telegram_id):
+        await update.message.reply_text("❌ У вас нет прав администратора.")
         return
 
     # Извлекаем текст сообщения
@@ -10058,11 +10147,9 @@ async def check_expired_chats_command(update: Update, context: ContextTypes.DEFA
     """
     user_telegram_id = update.effective_user.id
 
-    # Проверка прав администратора (можно заменить на список админов)
-    ADMIN_IDS = [user_telegram_id]  # По умолчанию только создатель команды
-
-    if user_telegram_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+    # Проверка прав администратора
+    if not db.is_admin(user_telegram_id):
+        await update.message.reply_text("❌ У вас нет прав администратора.")
         return
 
     # Получаем все просроченные чаты (где мастер не ответил в течение 24 часов)
@@ -10357,10 +10444,46 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ADMIN_MENU
 
 
+async def admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат в главное меню админ-панели (для callback query)"""
+    query = update.callback_query
+    await query.answer()
+
+    telegram_id = update.effective_user.id
+
+    if not db.is_admin(telegram_id):
+        await query.edit_message_text("❌ У вас нет прав администратора.")
+        return ConversationHandler.END
+
+    keyboard = [
+        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton("📈 Отчеты по категориям", callback_data="admin_category_reports")],
+        [InlineKeyboardButton("📢 Рассылка сообщений", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("📺 Создать рекламу", callback_data="admin_create_ad")],
+        [InlineKeyboardButton("👥 Управление пользователями", callback_data="admin_users")],
+        [InlineKeyboardButton("💡 Предложения", callback_data="admin_suggestions")],
+        [InlineKeyboardButton("❌ Закрыть", callback_data="admin_close")],
+    ]
+
+    await query.edit_message_text(
+        "🔧 <b>АДМИН-ПАНЕЛЬ</b>\n\n"
+        "Выберите действие:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADMIN_MENU
+
+
 async def admin_broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало создания broadcast"""
     query = update.callback_query
     await query.answer()
+
+    # Проверка прав администратора
+    if not db.is_admin(update.effective_user.id):
+        await query.edit_message_text("❌ У вас нет прав администратора.")
+        return ConversationHandler.END
 
     keyboard = [
         [InlineKeyboardButton("👥 Всем", callback_data="broadcast_all")],
@@ -10383,6 +10506,11 @@ async def admin_broadcast_select_audience(update: Update, context: ContextTypes.
     """Выбор аудитории для broadcast"""
     query = update.callback_query
     await query.answer()
+
+    # Проверка прав администратора
+    if not db.is_admin(update.effective_user.id):
+        await query.edit_message_text("❌ У вас нет прав администратора.")
+        return ConversationHandler.END
 
     audience = query.data.replace("broadcast_", "")
     context.user_data['broadcast_audience'] = audience
@@ -10407,6 +10535,11 @@ async def admin_broadcast_select_audience(update: Update, context: ContextTypes.
 
 async def admin_broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отправка broadcast сообщения"""
+    # Проверка прав администратора
+    if not db.is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ У вас нет прав администратора.")
+        return ConversationHandler.END
+
     message_text = update.message.text
     audience = context.user_data.get('broadcast_audience', 'all')
     telegram_id = update.effective_user.id
@@ -10423,6 +10556,10 @@ async def admin_broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYP
     # Фильтруем по аудитории и отправляем
     for user in users:
         user_dict = dict(user)
+
+        # Пропускаем забаненных пользователей
+        if user_dict.get('is_banned'):
+            continue
 
         # Проверяем аудиторию
         if audience == 'workers':

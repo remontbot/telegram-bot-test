@@ -930,6 +930,11 @@ def main():
         CommandHandler("add_test_workers", handlers.add_test_workers_command)
     )
 
+    # Команда для добавления тестовых откликов
+    application.add_handler(
+        CommandHandler("add_test_bids", handlers.add_test_bids_command)
+    )
+
     # === ADMIN КОМАНДЫ ===
 
     # Команды управления premium функциями (только для администратора)
@@ -1010,11 +1015,11 @@ def main():
                 CallbackQueryHandler(handlers.admin_suggestions, pattern="^admin_suggestions$"),
                 CallbackQueryHandler(handlers.admin_suggestions_filter, pattern="^admin_suggestions_(new|viewed|resolved)$"),
                 CallbackQueryHandler(handlers.admin_close, pattern="^admin_close$"),
-                CallbackQueryHandler(handlers.admin_panel, pattern="^admin_back$"),  # Возврат в меню
+                CallbackQueryHandler(handlers.admin_back, pattern="^admin_back$"),  # Возврат в меню
             ],
             handlers.BROADCAST_SELECT_AUDIENCE: [
                 CallbackQueryHandler(handlers.admin_broadcast_select_audience, pattern="^broadcast_"),
-                CallbackQueryHandler(handlers.admin_panel, pattern="^admin_back$"),
+                CallbackQueryHandler(handlers.admin_back, pattern="^admin_back$"),
             ],
             handlers.BROADCAST_ENTER_MESSAGE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_broadcast_send),
