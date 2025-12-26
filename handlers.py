@@ -10258,6 +10258,17 @@ async def check_expired_chats_command(update: Update, context: ContextTypes.DEFA
 
 
 # ============================================
+# КОНСТАНТЫ ДЛЯ CONVERSATION HANDLERS
+# ============================================
+
+# Состояния для админ-панели
+ADMIN_MENU = 100
+ADMIN_BAN_REASON = 101
+ADMIN_SEARCH = 102
+BROADCAST_SELECT_AUDIENCE = 103
+BROADCAST_ENTER_MESSAGE = 104
+
+# ============================================
 # СИСТЕМА ПРЕДЛОЖЕНИЙ
 # ============================================
 
@@ -10650,7 +10661,12 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Получаем статистику из БД
     stats = db.get_analytics_stats()
 
-    text = "📊 <b>СТАТИСТИКА ПЛАТФОРМЫ</b>\n\n"
+    # Добавляем timestamp для обновления
+    from datetime import datetime
+    current_time = datetime.now().strftime("%H:%M:%S")
+
+    text = f"📊 <b>СТАТИСТИКА ПЛАТФОРМЫ</b>\n"
+    text += f"🕐 Обновлено: {current_time}\n\n"
 
     # Пользователи
     text += "👥 <b>ПОЛЬЗОВАТЕЛИ:</b>\n"
@@ -10937,7 +10953,7 @@ async def admin_category_reports(update: Update, context: ContextTypes.DEFAULT_T
         if reports['top_specializations']:
             for i, row in enumerate(reports['top_specializations'][:10], 1):
                 row_dict = dict(row)
-                spec = row_dict.get('specialization', 'Неизвестно')
+                spec = row_dict.get('categories', 'Неизвестно')
                 count = row_dict.get('count', 0)
                 text += f"{i}. {spec}: <b>{count}</b>\n"
         else:
