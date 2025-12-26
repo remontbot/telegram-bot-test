@@ -3741,7 +3741,7 @@ def get_analytics_stats():
         if USE_POSTGRES:
             cursor.execute("""
                 SELECT COUNT(*) FROM orders
-                WHERE created_at >= NOW() - INTERVAL '1 day'
+                WHERE TO_TIMESTAMP(created_at, 'YYYY-MM-DD HH24:MI:SS') >= NOW() - INTERVAL '1 day'
             """)
         else:
             cursor.execute("""
@@ -3754,7 +3754,7 @@ def get_analytics_stats():
         if USE_POSTGRES:
             cursor.execute("""
                 SELECT COUNT(*) FROM users
-                WHERE created_at >= NOW() - INTERVAL '7 days'
+                WHERE TO_TIMESTAMP(created_at, 'YYYY-MM-DD HH24:MI:SS') >= NOW() - INTERVAL '7 days'
             """)
         else:
             cursor.execute("""
@@ -5592,12 +5592,12 @@ def get_category_reports():
         """)
         reports['top_cities_orders'] = cursor.fetchall()
 
-        # === ТОП СПЕЦИАЛИЗАЦИЙ МАСТЕРОВ ===
+        # === ТОП КАТЕГОРИЙ МАСТЕРОВ ===
         cursor.execute("""
-            SELECT specialization, COUNT(*) as count
+            SELECT categories, COUNT(*) as count
             FROM workers
-            WHERE specialization IS NOT NULL AND specialization != ''
-            GROUP BY specialization
+            WHERE categories IS NOT NULL AND categories != ''
+            GROUP BY categories
             ORDER BY count DESC
             LIMIT 10
         """)
