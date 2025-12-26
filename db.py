@@ -3741,7 +3741,7 @@ def get_analytics_stats():
         if USE_POSTGRES:
             cursor.execute("""
                 SELECT COUNT(*) FROM orders
-                WHERE TO_TIMESTAMP(created_at, 'YYYY-MM-DD HH24:MI:SS') >= NOW() - INTERVAL '1 day'
+                WHERE CAST(created_at AS TIMESTAMP) >= NOW() - INTERVAL '1 day'
             """)
         else:
             cursor.execute("""
@@ -3754,7 +3754,7 @@ def get_analytics_stats():
         if USE_POSTGRES:
             cursor.execute("""
                 SELECT COUNT(*) FROM users
-                WHERE TO_TIMESTAMP(created_at, 'YYYY-MM-DD HH24:MI:SS') >= NOW() - INTERVAL '7 days'
+                WHERE CAST(created_at AS TIMESTAMP) >= NOW() - INTERVAL '7 days'
             """)
         else:
             cursor.execute("""
@@ -5667,7 +5667,7 @@ def get_category_reports():
             FROM bids b
             INNER JOIN orders o ON b.order_id = o.id
             WHERE b.proposed_price IS NOT NULL
-              AND b.proposed_price != ''
+              AND b.proposed_price > 0
               AND b.currency = 'BYN'
             GROUP BY o.category
             HAVING bid_count >= 3
