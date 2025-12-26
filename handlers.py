@@ -6232,11 +6232,11 @@ async def show_bid_card(update: Update, context: ContextTypes.DEFAULT_TYPE, quer
             current_sort = context.user_data.get('bids_sort_order', 'default')
             sort_buttons = [
                 InlineKeyboardButton(
-                    "💰⬆️" if current_sort == "price_low" else "💰⬆️",
+                    "✅ Цена ⬆️" if current_sort == "price_low" else "Цена ⬆️",
                     callback_data=f"sort_bids_{bid_data['order_id']}_price_low"
                 ),
                 InlineKeyboardButton(
-                    "💰⬇️" if current_sort == "price_high" else "💰⬇️",
+                    "✅ Цена ⬇️" if current_sort == "price_high" else "Цена ⬇️",
                     callback_data=f"sort_bids_{bid_data['order_id']}_price_high"
                 ),
             ]
@@ -6244,11 +6244,11 @@ async def show_bid_card(update: Update, context: ContextTypes.DEFAULT_TYPE, quer
 
             sort_buttons2 = [
                 InlineKeyboardButton(
-                    "⭐" if current_sort == "rating" else "⭐",
+                    "✅ По рейтингу" if current_sort == "rating" else "⭐ По рейтингу",
                     callback_data=f"sort_bids_{bid_data['order_id']}_rating"
                 ),
                 InlineKeyboardButton(
-                    "⏱" if current_sort == "timeline" else "⏱",
+                    "✅ По сроку" if current_sort == "timeline" else "⏱ По сроку",
                     callback_data=f"sort_bids_{bid_data['order_id']}_timeline"
                 ),
             ]
@@ -7278,7 +7278,8 @@ async def add_test_bids_command(update: Update, context: ContextTypes.DEFAULT_TY
 
         try:
             # Проверяем, не откликался ли уже этот мастер
-            if db.check_worker_bid_exists(order_id, worker_dict['user_id']):
+            # ИСПРАВЛЕНО: используем worker_id (ID профиля мастера), а не worker_dict['user_id']
+            if db.check_worker_bid_exists(order_id, worker_id):
                 continue
 
             # Создаем отклик (обходим rate limiting через прямую вставку в БД)
@@ -7355,10 +7356,10 @@ async def worker_view_orders(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         # Фильтруем заказы - не показываем те, на которые мастер уже откликнулся
         # НОВОЕ: Также не показываем заказы, от которых мастер отказался
-        worker_user_id = user["id"]
+        # ИСПРАВЛЕНО: Используем worker_id (ID профиля мастера), а не user["id"] (ID пользователя)
         all_orders = [order for order in all_orders
-                     if not db.check_worker_bid_exists(order['id'], worker_user_id)
-                     and not db.check_order_declined(worker_user_id, order['id'])]
+                     if not db.check_worker_bid_exists(order['id'], worker_id)
+                     and not db.check_order_declined(user["id"], order['id'])]
         
         if not all_orders:
             keyboard = [
