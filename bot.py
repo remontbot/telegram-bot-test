@@ -1034,6 +1034,25 @@ def main():
                 CallbackQueryHandler(handlers.admin_users_menu, pattern="^admin_users$"),
                 CallbackQueryHandler(handlers.admin_user_search_start, pattern="^admin_user_search_start$"),
             ],
+            handlers.AD_TITLE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_ad_title),
+            ],
+            handlers.AD_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_ad_text),
+            ],
+            handlers.AD_URL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_ad_url),
+            ],
+            handlers.AD_BUTTON_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_ad_button_text),
+            ],
+            handlers.AD_PLACEMENT: [
+                CallbackQueryHandler(handlers.admin_ad_placement, pattern="^ad_placement_"),
+                CallbackQueryHandler(handlers.admin_back, pattern="^admin_back$"),
+            ],
+            handlers.AD_CONFIRM: [
+                CallbackQueryHandler(handlers.admin_ad_confirm, pattern="^ad_confirm_"),
+            ],
         },
         fallbacks=[
             CommandHandler("cancel", handlers.cancel_from_command),

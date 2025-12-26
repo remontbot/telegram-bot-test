@@ -10276,6 +10276,14 @@ ADMIN_SEARCH = 102
 BROADCAST_SELECT_AUDIENCE = 103
 BROADCAST_ENTER_MESSAGE = 104
 
+# Состояния для создания рекламы
+AD_TITLE = 105
+AD_TEXT = 106
+AD_URL = 107
+AD_BUTTON_TEXT = 108
+AD_PLACEMENT = 109
+AD_CONFIRM = 110
+
 # ============================================
 # СИСТЕМА ПРЕДЛОЖЕНИЙ
 # ============================================
@@ -10659,31 +10667,226 @@ async def admin_broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def admin_create_ad_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Упрощенное создание рекламы через текстовую команду"""
+    """Начало пошагового создания рекламы"""
     query = update.callback_query
     await query.answer()
 
-    keyboard = [
-        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
-    ]
+    logger.info(f"[ADMIN] admin_create_ad_start вызвана пользователем {update.effective_user.id}")
+
+    # Очищаем данные рекламы
+    context.user_data['ad_data'] = {}
 
     await query.edit_message_text(
-        "📺 <b>СОЗДАНИЕ РЕКЛАМЫ</b>\n\n"
-        "Для создания рекламы используйте команду:\n\n"
-        "<code>/createad</code>\n\n"
-        "Формат:\n"
-        "• Заголовок\n"
-        "• Описание\n"
-        "• URL кнопки\n"
-        "• Текст кнопки\n"
-        "• Placement (menu_banner/morning_digest)\n\n"
-        "Или отправьте фото с описанием в виде:\n"
-        "Заголовок | Описание | URL | Текст кнопки | Placement",
+        "📺 <b>СОЗДАНИЕ РЕКЛАМЫ - Шаг 1/5</b>\n\n"
+        "📝 <b>Введите заголовок рекламы</b>\n\n"
+        "Заголовок должен быть коротким и привлекательным.\n"
+        "Максимум 100 символов.\n\n"
+        "Пример: <code>Скидка 20% на все услуги!</code>\n\n"
+        "Или отправьте /cancel для отмены",
+        parse_mode="HTML"
+    )
+
+    return AD_TITLE
+
+
+async def admin_ad_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение заголовка рекламы"""
+    title = update.message.text
+
+    if len(title) > 100:
+        await update.message.reply_text(
+            "❌ Заголовок слишком длинный. Максимум 100 символов.\n\n"
+            "Попробуйте еще раз:"
+        )
+        return AD_TITLE
+
+    context.user_data['ad_data']['title'] = title
+
+    await update.message.reply_text(
+        "📺 <b>СОЗДАНИЕ РЕКЛАМЫ - Шаг 2/5</b>\n\n"
+        "📝 <b>Введите текст рекламы</b>\n\n"
+        "Опишите ваше предложение подробнее.\n"
+        "Максимум 500 символов.\n\n"
+        "Пример: <code>Только до конца месяца! Воспользуйтесь промокодом REMONT20</code>",
+        parse_mode="HTML"
+    )
+
+    return AD_TEXT
+
+
+async def admin_ad_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение текста рекламы"""
+    text = update.message.text
+
+    if len(text) > 500:
+        await update.message.reply_text(
+            "❌ Текст слишком длинный. Максимум 500 символов.\n\n"
+            "Попробуйте еще раз:"
+        )
+        return AD_TEXT
+
+    context.user_data['ad_data']['text'] = text
+
+    await update.message.reply_text(
+        "📺 <b>СОЗДАНИЕ РЕКЛАМЫ - Шаг 3/5</b>\n\n"
+        "🔗 <b>Введите URL ссылки</b>\n\n"
+        "Куда будет вести кнопка рекламы?\n\n"
+        "Пример: <code>https://example.com/promo</code>\n\n"
+        "Или отправьте <code>-</code> если ссылка не нужна",
+        parse_mode="HTML"
+    )
+
+    return AD_URL
+
+
+async def admin_ad_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение URL рекламы"""
+    url = update.message.text
+
+    if url != "-" and not url.startswith(("http://", "https://")):
+        await update.message.reply_text(
+            "❌ Неверный формат URL. Должен начинаться с http:// или https://\n\n"
+            "Попробуйте еще раз или отправьте <code>-</code> если ссылка не нужна:",
+            parse_mode="HTML"
+        )
+        return AD_URL
+
+    context.user_data['ad_data']['url'] = None if url == "-" else url
+
+    await update.message.reply_text(
+        "📺 <b>СОЗДАНИЕ РЕКЛАМЫ - Шаг 4/5</b>\n\n"
+        "🔘 <b>Введите текст кнопки</b>\n\n"
+        "Что будет написано на кнопке?\n"
+        "Максимум 30 символов.\n\n"
+        "Пример: <code>Узнать подробнее</code>\n\n"
+        "Или отправьте <code>-</code> если кнопка не нужна",
+        parse_mode="HTML"
+    )
+
+    return AD_BUTTON_TEXT
+
+
+async def admin_ad_button_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение текста кнопки"""
+    button_text = update.message.text
+
+    if button_text != "-" and len(button_text) > 30:
+        await update.message.reply_text(
+            "❌ Текст кнопки слишком длинный. Максимум 30 символов.\n\n"
+            "Попробуйте еще раз:"
+        )
+        return AD_BUTTON_TEXT
+
+    context.user_data['ad_data']['button_text'] = None if button_text == "-" else button_text
+
+    keyboard = [
+        [InlineKeyboardButton("🏠 Баннер в меню", callback_data="ad_placement_menu_banner")],
+        [InlineKeyboardButton("☀️ Утренняя рассылка", callback_data="ad_placement_morning_digest")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="admin_back")]
+    ]
+
+    await update.message.reply_text(
+        "📺 <b>СОЗДАНИЕ РЕКЛАМЫ - Шаг 5/5</b>\n\n"
+        "📍 <b>Выберите размещение рекламы:</b>\n\n"
+        "• <b>Баннер в меню</b> - показывается в главном меню пользователей\n"
+        "• <b>Утренняя рассылка</b> - отправляется утром активным пользователям",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-    return ADMIN_MENU
+    return AD_PLACEMENT
+
+
+async def admin_ad_placement(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор размещения рекламы"""
+    query = update.callback_query
+    await query.answer()
+
+    placement = query.data.replace("ad_placement_", "")
+    context.user_data['ad_data']['placement'] = placement
+
+    ad_data = context.user_data['ad_data']
+    placement_text = "🏠 Баннер в меню" if placement == "menu_banner" else "☀️ Утренняя рассылка"
+
+    # Формируем превью
+    preview = (
+        "📺 <b>ПРЕДПРОСМОТР РЕКЛАМЫ</b>\n\n"
+        f"<b>{ad_data['title']}</b>\n\n"
+        f"{ad_data['text']}\n\n"
+    )
+
+    if ad_data.get('url') and ad_data.get('button_text'):
+        preview += f"🔘 Кнопка: {ad_data['button_text']}\n"
+        preview += f"🔗 URL: {ad_data['url']}\n\n"
+
+    preview += f"📍 Размещение: {placement_text}\n\n"
+    preview += "Создать эту рекламу?"
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Создать", callback_data="ad_confirm_yes")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="ad_confirm_no")]
+    ]
+
+    await query.edit_message_text(
+        preview,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return AD_CONFIRM
+
+
+async def admin_ad_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение создания рекламы"""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "ad_confirm_no":
+        await query.edit_message_text(
+            "❌ Создание рекламы отменено.",
+            parse_mode="HTML"
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    # Создаем рекламу
+    ad_data = context.user_data['ad_data']
+
+    try:
+        ad_id = db.create_ad(
+            title=ad_data['title'],
+            text=ad_data['text'],
+            url=ad_data.get('url'),
+            button_text=ad_data.get('button_text'),
+            placement=ad_data['placement'],
+            created_by=update.effective_user.id
+        )
+
+        await query.edit_message_text(
+            f"✅ <b>Реклама создана!</b>\n\n"
+            f"ID рекламы: #{ad_id}\n"
+            f"Размещение: {ad_data['placement']}\n\n"
+            "Реклама будет показана пользователям согласно выбранному размещению.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Админ-панель", callback_data="admin_panel")
+            ]])
+        )
+
+        logger.info(f"✅ Реклама #{ad_id} создана пользователем {update.effective_user.id}")
+
+    except Exception as e:
+        logger.error(f"Ошибка создания рекламы: {e}")
+        await query.edit_message_text(
+            f"❌ Ошибка при создании рекламы:\n{str(e)}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Админ-панель", callback_data="admin_panel")
+            ]])
+        )
+
+    context.user_data.clear()
+    return ConversationHandler.END
 
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
