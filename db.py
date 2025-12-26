@@ -5670,7 +5670,7 @@ def get_category_reports():
               AND b.proposed_price > 0
               AND b.currency = 'BYN'
             GROUP BY o.category
-            HAVING bid_count >= 3
+            HAVING COUNT(b.id) >= 3
             ORDER BY avg_price DESC
             LIMIT 10
         """)
