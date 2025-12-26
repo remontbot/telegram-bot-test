@@ -11563,7 +11563,11 @@ async def admin_suggestions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_emoji = {"new": "🆕", "viewed": "👁", "resolved": "✅"}.get(suggestion_dict['status'], "")
         role_emoji = {"worker": "🔧", "client": "👤", "both": "🔧👤"}.get(suggestion_dict['user_role'], "")
 
-        message_preview = suggestion_dict['message'][:50] + "..." if len(suggestion_dict['message']) > 50 else suggestion_dict['message']
+        message_preview = (
+            suggestion_dict["message"][:50] + "..."
+            if len(suggestion_dict["message"]) > 50
+            else suggestion_dict["message"]
+        )
 
         text += (
             f"{status_emoji} <b>#{suggestion_dict['id']}</b> {role_emoji}\n"
@@ -11622,7 +11626,11 @@ async def admin_suggestions_filter(update: Update, context: ContextTypes.DEFAULT
         suggestion_dict = dict(suggestion)
         role_emoji = {"worker": "🔧", "client": "👤", "both": "🔧👤"}.get(suggestion_dict['user_role'], "")
 
-        message_preview = suggestion_dict['message'][:50] + "..." if len(suggestion_dict['message']) > 50 else suggestion_dict['message']
+        message_preview = (
+            suggestion_dict["message"][:50] + "..."
+            if len(suggestion_dict["message"]) > 50
+            else suggestion_dict["message"]
+        )
 
         text += (
             f"{i}. <b>#{suggestion_dict['id']}</b> {role_emoji}\n"
