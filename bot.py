@@ -992,7 +992,8 @@ def main():
     # --- ConversationHandler для админ-панели ---
     admin_conv_handler = ConversationHandler(
         entry_points=[
-            CommandHandler("admin", handlers.admin_panel)
+            CommandHandler("admin", handlers.admin_panel),
+            CallbackQueryHandler(handlers.admin_panel, pattern="^admin_panel$"),
         ],
         states={
             handlers.ADMIN_MENU: [

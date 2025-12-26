@@ -1925,6 +1925,10 @@ async def show_worker_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🏠 Главное меню", callback_data="go_main_menu")],
     ]
 
+    # Добавляем кнопку админки только для админов
+    if db.is_admin(update.effective_user.id):
+        keyboard.insert(0, [InlineKeyboardButton("🔧 Админ-панель", callback_data="admin_panel")])
+
     # Удаляем старое сообщение и отправляем новое
     # (работает с любым типом сообщения: текст, фото, медиа)
     try:
@@ -2417,6 +2421,10 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("💡 Предложения", callback_data="send_suggestion")],
         [InlineKeyboardButton("🧰 Главное меню", callback_data="go_main_menu")],
     ]
+
+    # Добавляем кнопку админки только для админов
+    if db.is_admin(update.effective_user.id):
+        keyboard.insert(0, [InlineKeyboardButton("🔧 Админ-панель", callback_data="admin_panel")])
 
     # Удаляем старое сообщение и отправляем новое
     # (работает с любым типом сообщения: текст, фото, медиа)
@@ -10429,11 +10437,18 @@ async def cancel_suggestion(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Админ-панель - доступна только админам"""
+    """Админ-панель - доступна только админам (работает с командой /admin и callback)"""
     telegram_id = update.effective_user.id
 
+    logger.info(f"[ADMIN] admin_panel вызвана пользователем {telegram_id}")
+
     if not db.is_admin(telegram_id):
-        await update.message.reply_text("❌ У вас нет прав администратора.")
+        # Проверяем откуда пришел запрос - команда или callback
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.edit_message_text("❌ У вас нет прав администратора.")
+        else:
+            await update.message.reply_text("❌ У вас нет прав администратора.")
         return ConversationHandler.END
 
     keyboard = [
@@ -10446,13 +10461,28 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("❌ Закрыть", callback_data="admin_close")],
     ]
 
-    await update.message.reply_text(
+    text = (
         "🔧 <b>АДМИН-ПАНЕЛЬ</b>\n\n"
-        "Выберите действие:",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "Выберите действие:"
     )
 
+    # Отправляем ответ в зависимости от типа запроса
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        await query.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        await update.message.reply_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    logger.info(f"[ADMIN] Пользователь {telegram_id} вошёл в админ-панель, состояние ADMIN_MENU")
     return ADMIN_MENU
 
 
@@ -10492,8 +10522,11 @@ async def admin_broadcast_start(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
 
+    telegram_id = update.effective_user.id
+    logger.info(f"[ADMIN] admin_broadcast_start вызвана пользователем {telegram_id}")
+
     # Проверка прав администратора
-    if not db.is_admin(update.effective_user.id):
+    if not db.is_admin(telegram_id):
         await query.edit_message_text("❌ У вас нет прав администратора.")
         return ConversationHandler.END
 
@@ -10657,6 +10690,9 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Подробная статистика системы"""
     query = update.callback_query
     await query.answer()
+
+    telegram_id = update.effective_user.id
+    logger.info(f"[ADMIN] admin_stats вызвана пользователем {telegram_id}")
 
     # Получаем статистику из БД
     stats = db.get_analytics_stats()
@@ -10917,6 +10953,9 @@ async def admin_category_reports(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     await query.answer()
 
+    telegram_id = update.effective_user.id
+    logger.info(f"[ADMIN] admin_category_reports вызвана пользователем {telegram_id}")
+
     try:
         reports = db.get_category_reports()
 
@@ -11121,6 +11160,9 @@ async def admin_users_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Меню управления пользователями"""
     query = update.callback_query
     await query.answer()
+
+    telegram_id = update.effective_user.id
+    logger.info(f"[ADMIN] admin_users_menu вызвана пользователем {telegram_id}")
 
     stats = db.get_analytics_stats()
 
