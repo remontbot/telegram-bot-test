@@ -734,6 +734,9 @@ async def register_master_region_select(update: Update, context: ContextTypes.DE
             callback_data="mastercity_other"
         )])
 
+        # Добавляем кнопку "Назад" для возврата к выбору региона
+        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="mastercity_back")])
+
         await query.edit_message_text(
             f"🏙 Выберите город в регионе <b>{region}</b>:",
             parse_mode="HTML",
@@ -748,6 +751,24 @@ async def register_master_city_select(update: Update, context: ContextTypes.DEFA
     await query.answer()
 
     city = query.data.replace("mastercity_", "")
+
+    # Обработка кнопки "Назад" - возврат к выбору региона
+    if city == "back":
+        # Показываем регионы Беларуси
+        keyboard = []
+        for region_name, region_data in BELARUS_REGIONS.items():
+            keyboard.append([InlineKeyboardButton(
+                region_data["display"],
+                callback_data=f"masterregion_{region_name}"
+            )])
+
+        await query.edit_message_text(
+            "🏙 <b>Где вы работаете?</b>\n\n"
+            "Выберите регион или город:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return REGISTER_MASTER_REGION_SELECT
 
     if city == "other":
         region = context.user_data.get("region", "")
@@ -1458,7 +1479,7 @@ async def finalize_master_registration(update, context):
 async def register_client_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text.strip()
     await update.message.reply_text(
-        "📱 Какой ваш номер телефона? (например: +375 29 123 45 67)\n"
+        "📱 Укажите свой номер телефона (в формате: +375 29 123 45 67)\n\n"
         "Он необходим для регистрации и не будет виден всем подряд."
     )
     return REGISTER_CLIENT_PHONE
@@ -1629,6 +1650,9 @@ async def register_client_region_select(update: Update, context: ContextTypes.DE
             callback_data="clientcity_other"
         )])
 
+        # Добавляем кнопку "Назад" для возврата к выбору региона
+        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="clientcity_back")])
+
         await query.edit_message_text(
             f"🏙 Выберите город в регионе <b>{region}</b>:",
             parse_mode="HTML",
@@ -1643,6 +1667,24 @@ async def register_client_city_select(update: Update, context: ContextTypes.DEFA
     await query.answer()
 
     city = query.data.replace("clientcity_", "")
+
+    # Обработка кнопки "Назад" - возврат к выбору региона
+    if city == "back":
+        # Показываем регионы Беларуси
+        keyboard = []
+        for region_name, region_data in BELARUS_REGIONS.items():
+            keyboard.append([InlineKeyboardButton(
+                region_data["display"],
+                callback_data=f"clientregion_{region_name}"
+            )])
+
+        await query.edit_message_text(
+            "🏙 <b>Где вы находитесь?</b>\n\n"
+            "Выберите регион или город:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return REGISTER_CLIENT_REGION_SELECT
 
     if city == "other":
         region = context.user_data.get("region", "")
