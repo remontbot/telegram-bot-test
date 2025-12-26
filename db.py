@@ -3596,11 +3596,11 @@ def get_user_details_for_admin(telegram_id):
         }
 
         # Профили
-        worker = get_worker_profile_by_user_id(user_dict['id'])
+        worker = get_worker_profile(user_dict['id'])
         if worker:
             details['worker_profile'] = dict(worker)
 
-        client = get_client_profile_by_user_id(user_dict['id'])
+        client = get_client_profile(user_dict['id'])
         if client:
             details['client_profile'] = dict(client)
 
