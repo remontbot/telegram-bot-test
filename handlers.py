@@ -10892,6 +10892,12 @@ async def admin_ad_placement(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     logger.info(f"[ADMIN] admin_ad_placement вызвана пользователем {update.effective_user.id}, callback_data: {query.data}")
 
+    # Проверка наличия данных рекламы
+    if 'ad_data' not in context.user_data:
+        logger.warning(f"[AD] Нет ad_data для пользователя {update.effective_user.id}, пропускаем")
+        await query.edit_message_text("❌ Ошибка: данные рекламы не найдены. Начните создание заново.")
+        return ADMIN_MENU
+
     placement = query.data.replace("ad_placement_", "")
     context.user_data['ad_data']['placement'] = placement
 
@@ -10925,8 +10931,8 @@ async def admin_ad_placement(update: Update, context: ContextTypes.DEFAULT_TYPE)
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-    logger.info(f"[AD] Переход в состояние AD_CONFIRM")
-    return AD_CONFIRM
+    logger.info(f"[AD] Остаемся в состоянии ADMIN_MENU для обработки подтверждения")
+    return ADMIN_MENU
 
 
 async def admin_ad_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -10943,7 +10949,13 @@ async def admin_ad_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
         context.user_data.clear()
-        return ConversationHandler.END
+        return ADMIN_MENU
+
+    # Проверка наличия данных рекламы
+    if 'ad_data' not in context.user_data:
+        logger.warning(f"[AD] Нет ad_data для пользователя {update.effective_user.id}, пропускаем")
+        await query.edit_message_text("❌ Ошибка: данные рекламы не найдены. Начните создание заново.")
+        return ADMIN_MENU
 
     # Создаем рекламу
     ad_data = context.user_data['ad_data']
@@ -11001,7 +11013,7 @@ async def admin_ad_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     context.user_data.clear()
-    return ConversationHandler.END
+    return ADMIN_MENU
 
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
