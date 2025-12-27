@@ -1072,16 +1072,46 @@ def main():
     # Важно: ConversationHandler должен быть в group=0 для приоритета
     application.add_handler(suggestion_conv_handler, group=0)
 
+    # КРИТИЧНО: Прямая маршрутизация ДО ConversationHandlers для FIX B
+    # Это обязательно должно быть в group=-1, чтобы обработать текст ДО того,
+    # как ConversationHandler его "съест" из-за per_message=False
+    async def direct_routing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Прямая маршрутизация для ConversationHandler states (FIX B)"""
+        logger.info(f"[DIRECT-ROUTING] Проверка для пользователя {update.effective_user.id}")
+        logger.info(f"[DIRECT-ROUTING] Флаги: suggestion_active={context.user_data.get('suggestion_active')}, broadcast_active={context.user_data.get('broadcast_active')}")
+
+        # Прямая маршрутизация для предложений
+        if context.user_data.get("suggestion_active"):
+            logger.info(f"[FIX B] Прямая маршрутизация в receive_suggestion_text")
+            return await handlers.receive_suggestion_text(update, context)
+
+        # Прямая маршрутизация для рассылки
+        if context.user_data.get("broadcast_active"):
+            logger.info(f"[FIX B] Прямая маршрутизация в admin_broadcast_send")
+            return await handlers.admin_broadcast_send(update, context)
+
+        # Если нет флагов - не обрабатываем, пропускаем дальше
+        logger.info(f"[DIRECT-ROUTING] Нет активных флагов, пропускаем")
+        return None  # Не обрабатываем, пусть другие handlers попробуют
+
+    logger.info("🔧 [STARTUP] Регистрация direct_routing в group=-1 (ДО ConversationHandlers)")
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            direct_routing
+        ),
+        group=-1
+    )
+
     # Глобальный обработчик сообщений для чатов
-    # ИСПРАВЛЕНО: Регистрируется ПОСЛЕ всех ConversationHandlers в той же группе (group=0)
-    # ConversationHandlers проверяются первыми, если не обработали - handle_chat_message обработает
-    logger.info("🔧 [STARTUP] Регистрация handle_chat_message ПОСЛЕ всех ConversationHandlers в group=0")
+    # Регистрируется ПОСЛЕ ConversationHandlers для обработки активных чатов
+    logger.info("🔧 [STARTUP] Регистрация handle_chat_message в group=1 (ПОСЛЕ ConversationHandlers)")
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handlers.handle_chat_message
         ),
-        group=0
+        group=1
     )
 
     # Обработчик неизвестных команд
