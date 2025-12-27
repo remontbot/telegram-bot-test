@@ -1037,15 +1037,19 @@ def main():
             ],
             handlers.AD_TITLE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_ad_title),
+                CallbackQueryHandler(handlers.admin_back, pattern="^admin_back$"),
             ],
             handlers.AD_TEXT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_ad_text),
+                CallbackQueryHandler(handlers.admin_back, pattern="^admin_back$"),
             ],
             handlers.AD_URL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_ad_url),
+                CallbackQueryHandler(handlers.admin_back, pattern="^admin_back$"),
             ],
             handlers.AD_BUTTON_TEXT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_ad_button_text),
+                CallbackQueryHandler(handlers.admin_back, pattern="^admin_back$"),
             ],
             handlers.AD_PLACEMENT: [
                 CallbackQueryHandler(handlers.admin_ad_placement, pattern="^ad_placement_"),
