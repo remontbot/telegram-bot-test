@@ -10324,6 +10324,8 @@ async def send_suggestion_start(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def receive_suggestion_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение текста предложения"""
+    logger.info(f"[DEBUG] receive_suggestion_text ВЫЗВАН! Пользователь: {update.effective_user.id}")
+
     message = update.message
     text = message.text
 
