@@ -982,6 +982,7 @@ def main():
     # ИСПРАВЛЕНО: Группа 1 чтобы выполнялось ПОСЛЕ ConversationHandler
     # Это позволяет ConversationHandler обработать текст первым (группа 0 по умолчанию)
     # Если ConversationHandler не обработал сообщение, то handle_chat_message обработает его для активных чатов
+    logger.info("🔧 [STARTUP] Регистрация handle_chat_message с group=1 (ПОСЛЕ ConversationHandler)")
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,

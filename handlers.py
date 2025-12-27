@@ -6924,6 +6924,8 @@ async def open_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает сообщения, отправленные в активный чат"""
+    logger.info(f"[DEBUG] handle_chat_message вызван для пользователя {update.effective_user.id}, текст: {update.message.text[:50] if update.message and update.message.text else 'N/A'}")
+
     # КРИТИЧНО: Проверяем, не находится ли пользователь в ConversationHandler
     # Если находится - пропускаем, чтобы ConversationHandler обработал сообщение
     conversation_keys = ['review_order_id', 'review_bid_id', 'review_rating',
@@ -6931,6 +6933,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                         'uploading_work_photo_order_id', 'order_client_id']
     if any(key in context.user_data for key in conversation_keys):
         # Пользователь в ConversationHandler, пропускаем
+        logger.info(f"[DEBUG] handle_chat_message: пользователь в ConversationHandler, пропускаем")
         return
 
     # ИСПРАВЛЕНО: Получаем активный чат из БД вместо user_data
@@ -10596,6 +10599,8 @@ async def admin_broadcast_select_audience(update: Update, context: ContextTypes.
 
 async def admin_broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отправка broadcast сообщения"""
+    logger.info(f"[ADMIN] admin_broadcast_send вызвана пользователем {update.effective_user.id}, текст: {update.message.text[:50] if update.message and update.message.text else 'N/A'}")
+
     # Проверка прав администратора
     if not db.is_admin(update.effective_user.id):
         await update.message.reply_text("❌ У вас нет прав администратора.")
