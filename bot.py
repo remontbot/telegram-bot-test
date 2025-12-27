@@ -1089,6 +1089,24 @@ def main():
         MessageHandler(filters.COMMAND, handlers.unknown_command)
     )
 
+    # ДИАГНОСТИКА: Ловушка для ВСЕХ сообщений, которые не были обработаны
+    async def catch_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Ловит ВСЕ необработанные сообщения для диагностики"""
+        if update.message:
+            logger.warning(f"[CATCH-ALL] Необработанное сообщение от {update.effective_user.id}: "
+                          f"text={update.message.text}, "
+                          f"caption={update.message.caption}, "
+                          f"photo={bool(update.message.photo)}, "
+                          f"document={bool(update.message.document)}, "
+                          f"sticker={bool(update.message.sticker)}")
+        else:
+            logger.warning(f"[CATCH-ALL] Необработанный update: {update}")
+
+    application.add_handler(
+        MessageHandler(filters.ALL, catch_all_messages),
+        group=10  # Самая низкая приоритетность - ловит только то, что никто не обработал
+    )
+
     # --- ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК ---
     async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
