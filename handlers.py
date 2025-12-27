@@ -10882,7 +10882,11 @@ async def admin_ad_button_text(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-    return AD_PLACEMENT
+    # КРИТИЧНО: Возвращаем ADMIN_MENU вместо AD_PLACEMENT, т.к. direct_routing (group=-1)
+    # вызывает эту функцию напрямую и ConversationHandler (group=0) не знает о state change.
+    # Обработчики admin_ad_placement уже зарегистрированы в ADMIN_MENU (bot.py:1016)
+    logger.info(f"[FIX] Возвращаем ADMIN_MENU для обработки callback ad_placement_*")
+    return ADMIN_MENU
 
 
 async def admin_ad_placement(update: Update, context: ContextTypes.DEFAULT_TYPE):
