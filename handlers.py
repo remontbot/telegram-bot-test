@@ -6926,9 +6926,10 @@ async def open_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает сообщения, отправленные в активный чат"""
     logger.info(f"[DEBUG] handle_chat_message вызван для пользователя {update.effective_user.id}, текст: {update.message.text[:50] if update.message and update.message.text else 'N/A'}")
-    logger.info(f"[DEBUG] context.user_data: suggestion_active={context.user_data.get('suggestion_active')}, broadcast_active={context.user_data.get('broadcast_active')}")
+    logger.info(f"[DEBUG] context.user_data: suggestion_active={context.user_data.get('suggestion_active')}, broadcast_active={context.user_data.get('broadcast_active')}, ad_step={context.user_data.get('ad_step')}")
 
     # FIX B: Прямая маршрутизация для гарантированной работы ConversationHandler
+    # (это резервная проверка, основная обработка в direct_routing group=-1)
     if context.user_data.get("suggestion_active"):
         logger.info(f"[FIX B] Прямая маршрутизация в receive_suggestion_text")
         return await receive_suggestion_text(update, context)
@@ -6936,6 +6937,10 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if context.user_data.get("broadcast_active"):
         logger.info(f"[FIX B] Прямая маршрутизация в admin_broadcast_send")
         return await admin_broadcast_send(update, context)
+
+    if context.user_data.get("ad_step"):
+        logger.info(f"[FIX B] Пользователь в процессе создания рекламы, пропускаем")
+        return  # Пропускаем, уже обработано в direct_routing
 
     # КРИТИЧНО: Проверяем, не находится ли пользователь в ConversationHandler
     # Если находится - пропускаем, чтобы ConversationHandler обработал сообщение
@@ -10600,6 +10605,8 @@ async def admin_broadcast_select_audience(update: Update, context: ContextTypes.
         'clients': '📋 Только клиентам'
     }.get(audience, 'Неизвестно')
 
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_broadcast_start")]]
+
     await query.edit_message_text(
         f"📢 <b>РАССЫЛКА СООБЩЕНИЙ</b>\n\n"
         f"Кому: {audience_text}\n\n"
@@ -10612,9 +10619,9 @@ async def admin_broadcast_select_audience(update: Update, context: ContextTypes.
         f"Пример:\n"
         f"<code>⚠️ Завтра с 10:00 до 12:00 технические работы.\n"
         f"Бот может быть временно недоступен.\n"
-        f"Подробнее: https://example.com</code>\n\n"
-        f"Или отправьте /cancel для отмены",
-        parse_mode="HTML"
+        f"Подробнее: https://example.com</code>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
     return BROADCAST_ENTER_MESSAGE
@@ -10689,11 +10696,14 @@ async def admin_broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYP
         """, (now, sent_count, failed_count, broadcast_id))
         conn.commit()
 
+    keyboard = [[InlineKeyboardButton("🔙 В админ панель", callback_data="admin_panel")]]
+
     await update.message.reply_text(
         f"✅ <b>Broadcast отправлен!</b>\n\n"
         f"📊 Отправлено: {sent_count}\n"
         f"❌ Ошибок: {failed_count}",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
     # Флаг уже очищен в начале функции
@@ -10709,15 +10719,20 @@ async def admin_create_ad_start(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Очищаем данные рекламы
     context.user_data['ad_data'] = {}
+    context.user_data['ad_step'] = 'title'  # FIX: Устанавливаем флаг для прямой маршрутизации
+
+    logger.info(f"[FIX B] Установлен ad_step='title' для пользователя {update.effective_user.id}")
+
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_back")]]
 
     await query.edit_message_text(
         "📺 <b>СОЗДАНИЕ РЕКЛАМЫ - Шаг 1/5</b>\n\n"
         "📝 <b>Введите заголовок рекламы</b>\n\n"
         "Заголовок должен быть коротким и привлекательным.\n"
         "Максимум 100 символов.\n\n"
-        "Пример: <code>Скидка 20% на все услуги!</code>\n\n"
-        "Или отправьте /cancel для отмены",
-        parse_mode="HTML"
+        "Пример: <code>Скидка 20% на все услуги!</code>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
     return AD_TITLE
@@ -10725,9 +10740,16 @@ async def admin_create_ad_start(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def admin_ad_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение заголовка рекламы"""
+    logger.info(f"[ADMIN] admin_ad_title вызвана пользователем {update.effective_user.id}")
+
+    # Очищаем флаг текущего шага
+    context.user_data.pop('ad_step', None)
+
     title = update.message.text
 
     if len(title) > 100:
+        # Если ошибка - восстанавливаем флаг
+        context.user_data['ad_step'] = 'title'
         await update.message.reply_text(
             "❌ Заголовок слишком длинный. Максимум 100 символов.\n\n"
             "Попробуйте еще раз:"
@@ -10735,6 +10757,9 @@ async def admin_ad_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AD_TITLE
 
     context.user_data['ad_data']['title'] = title
+    context.user_data['ad_step'] = 'text'  # Устанавливаем флаг для следующего шага
+
+    logger.info(f"[FIX B] Установлен ad_step='text' для пользователя {update.effective_user.id}")
 
     await update.message.reply_text(
         "📺 <b>СОЗДАНИЕ РЕКЛАМЫ - Шаг 2/5</b>\n\n"
@@ -10750,9 +10775,16 @@ async def admin_ad_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_ad_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение текста рекламы"""
+    logger.info(f"[ADMIN] admin_ad_text вызвана пользователем {update.effective_user.id}")
+
+    # Очищаем флаг текущего шага
+    context.user_data.pop('ad_step', None)
+
     text = update.message.text
 
     if len(text) > 500:
+        # Если ошибка - восстанавливаем флаг
+        context.user_data['ad_step'] = 'text'
         await update.message.reply_text(
             "❌ Текст слишком длинный. Максимум 500 символов.\n\n"
             "Попробуйте еще раз:"
@@ -10760,6 +10792,9 @@ async def admin_ad_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AD_TEXT
 
     context.user_data['ad_data']['text'] = text
+    context.user_data['ad_step'] = 'url'  # Устанавливаем флаг для следующего шага
+
+    logger.info(f"[FIX B] Установлен ad_step='url' для пользователя {update.effective_user.id}")
 
     await update.message.reply_text(
         "📺 <b>СОЗДАНИЕ РЕКЛАМЫ - Шаг 3/5</b>\n\n"
@@ -10775,9 +10810,16 @@ async def admin_ad_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_ad_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение URL рекламы"""
+    logger.info(f"[ADMIN] admin_ad_url вызвана пользователем {update.effective_user.id}")
+
+    # Очищаем флаг текущего шага
+    context.user_data.pop('ad_step', None)
+
     url = update.message.text
 
     if url != "-" and not url.startswith(("http://", "https://")):
+        # Если ошибка - восстанавливаем флаг
+        context.user_data['ad_step'] = 'url'
         await update.message.reply_text(
             "❌ Неверный формат URL. Должен начинаться с http:// или https://\n\n"
             "Попробуйте еще раз или отправьте <code>-</code> если ссылка не нужна:",
@@ -10786,6 +10828,9 @@ async def admin_ad_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AD_URL
 
     context.user_data['ad_data']['url'] = None if url == "-" else url
+    context.user_data['ad_step'] = 'button_text'  # Устанавливаем флаг для следующего шага
+
+    logger.info(f"[FIX B] Установлен ad_step='button_text' для пользователя {update.effective_user.id}")
 
     await update.message.reply_text(
         "📺 <b>СОЗДАНИЕ РЕКЛАМЫ - Шаг 4/5</b>\n\n"
@@ -10802,9 +10847,16 @@ async def admin_ad_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_ad_button_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение текста кнопки"""
+    logger.info(f"[ADMIN] admin_ad_button_text вызвана пользователем {update.effective_user.id}")
+
+    # Очищаем флаг текущего шага (последний шаг ввода текста)
+    context.user_data.pop('ad_step', None)
+
     button_text = update.message.text
 
     if button_text != "-" and len(button_text) > 30:
+        # Если ошибка - восстанавливаем флаг
+        context.user_data['ad_step'] = 'button_text'
         await update.message.reply_text(
             "❌ Текст кнопки слишком длинный. Максимум 30 символов.\n\n"
             "Попробуйте еще раз:"
@@ -10812,6 +10864,8 @@ async def admin_ad_button_text(update: Update, context: ContextTypes.DEFAULT_TYP
         return AD_BUTTON_TEXT
 
     context.user_data['ad_data']['button_text'] = None if button_text == "-" else button_text
+
+    logger.info(f"[FIX B] Флаг ad_step очищен, переход к выбору размещения для пользователя {update.effective_user.id}")
 
     keyboard = [
         [InlineKeyboardButton("🏠 Баннер в меню", callback_data="ad_placement_menu_banner")],

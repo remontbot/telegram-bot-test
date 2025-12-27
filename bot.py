@@ -1013,6 +1013,7 @@ def main():
             ],
             handlers.BROADCAST_ENTER_MESSAGE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_broadcast_send),
+                CallbackQueryHandler(handlers.admin_broadcast_start, pattern="^admin_broadcast_start$"),
             ],
             handlers.ADMIN_BAN_REASON: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_user_ban_execute),
@@ -1078,7 +1079,7 @@ def main():
     async def direct_routing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Прямая маршрутизация для ConversationHandler states (FIX B)"""
         logger.info(f"[DIRECT-ROUTING] Проверка для пользователя {update.effective_user.id}")
-        logger.info(f"[DIRECT-ROUTING] Флаги: suggestion_active={context.user_data.get('suggestion_active')}, broadcast_active={context.user_data.get('broadcast_active')}")
+        logger.info(f"[DIRECT-ROUTING] Флаги: suggestion_active={context.user_data.get('suggestion_active')}, broadcast_active={context.user_data.get('broadcast_active')}, ad_step={context.user_data.get('ad_step')}")
 
         # Прямая маршрутизация для предложений
         if context.user_data.get("suggestion_active"):
@@ -1089,6 +1090,19 @@ def main():
         if context.user_data.get("broadcast_active"):
             logger.info(f"[FIX B] Прямая маршрутизация в admin_broadcast_send")
             return await handlers.admin_broadcast_send(update, context)
+
+        # Прямая маршрутизация для рекламы
+        ad_step = context.user_data.get("ad_step")
+        if ad_step:
+            logger.info(f"[FIX B] Прямая маршрутизация для рекламы, шаг: {ad_step}")
+            if ad_step == "title":
+                return await handlers.admin_ad_title(update, context)
+            elif ad_step == "text":
+                return await handlers.admin_ad_text(update, context)
+            elif ad_step == "url":
+                return await handlers.admin_ad_url(update, context)
+            elif ad_step == "button_text":
+                return await handlers.admin_ad_button_text(update, context)
 
         # Если нет флагов - не обрабатываем, пропускаем дальше
         logger.info(f"[DIRECT-ROUTING] Нет активных флагов, пропускаем")
