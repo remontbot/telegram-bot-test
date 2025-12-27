@@ -10865,27 +10865,39 @@ async def admin_ad_button_text(update: Update, context: ContextTypes.DEFAULT_TYP
 
     context.user_data['ad_data']['button_text'] = None if button_text == "-" else button_text
 
-    logger.info(f"[FIX B] Флаг ad_step очищен, переход к выбору размещения для пользователя {update.effective_user.id}")
+    logger.info(f"[УПРОЩЕНИЕ] Автоматически создаем рекламу для 'баннера в меню' (без выбора размещения)")
+
+    # Автоматически устанавливаем размещение = баннер в меню
+    context.user_data['ad_data']['placement'] = 'menu_banner'
+
+    # Формируем превью рекламы
+    ad_data = context.user_data['ad_data']
+
+    preview = (
+        "📺 <b>ПРЕДПРОСМОТР РЕКЛАМЫ</b>\n\n"
+        f"<b>{ad_data['title']}</b>\n\n"
+        f"{ad_data['text']}\n\n"
+    )
+
+    if ad_data.get('url') and ad_data.get('button_text'):
+        preview += f"🔘 Кнопка: {ad_data['button_text']}\n"
+        preview += f"🔗 URL: {ad_data['url']}\n\n"
+
+    preview += f"📍 Размещение: 🏠 Баннер в меню\n\n"
+    preview += "Создать эту рекламу?"
 
     keyboard = [
-        [InlineKeyboardButton("🏠 Баннер в меню", callback_data="ad_placement_menu_banner")],
-        [InlineKeyboardButton("☀️ Утренняя рассылка", callback_data="ad_placement_morning_digest")],
-        [InlineKeyboardButton("❌ Отмена", callback_data="admin_back")]
+        [InlineKeyboardButton("✅ Создать", callback_data="ad_confirm_yes")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="ad_confirm_no")]
     ]
 
     await update.message.reply_text(
-        "📺 <b>СОЗДАНИЕ РЕКЛАМЫ - Шаг 5/5</b>\n\n"
-        "📍 <b>Выберите размещение рекламы:</b>\n\n"
-        "• <b>Баннер в меню</b> - показывается в главном меню пользователей\n"
-        "• <b>Утренняя рассылка</b> - отправляется утром активным пользователям",
+        preview,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-    # КРИТИЧНО: Возвращаем ADMIN_MENU вместо AD_PLACEMENT, т.к. direct_routing (group=-1)
-    # вызывает эту функцию напрямую и ConversationHandler (group=0) не знает о state change.
-    # Обработчики admin_ad_placement уже зарегистрированы в ADMIN_MENU (bot.py:1016)
-    logger.info(f"[FIX] Возвращаем ADMIN_MENU для обработки callback ad_placement_*")
+    logger.info(f"[УПРОЩЕНИЕ] Отправлено подтверждение. Размещение: menu_banner")
     return ADMIN_MENU
 
 
