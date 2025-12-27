@@ -6925,6 +6925,7 @@ async def open_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает сообщения, отправленные в активный чат"""
     logger.info(f"[DEBUG] handle_chat_message вызван для пользователя {update.effective_user.id}, текст: {update.message.text[:50] if update.message and update.message.text else 'N/A'}")
+    logger.info(f"[DEBUG] context.user_data: suggestion_active={context.user_data.get('suggestion_active')}, broadcast_active={context.user_data.get('broadcast_active')}")
 
     # FIX B: Прямая маршрутизация для гарантированной работы ConversationHandler
     if context.user_data.get("suggestion_active"):
@@ -6951,6 +6952,7 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if not active_chat:
         # Нет активного чата, пропускаем
+        logger.info(f"[DEBUG] handle_chat_message: нет активного чата для пользователя {update.effective_user.id}, пропускаем")
         return
 
     chat_id = active_chat['chat_id']
@@ -10574,6 +10576,8 @@ async def admin_broadcast_select_audience(update: Update, context: ContextTypes.
     query = update.callback_query
     await query.answer()
 
+    logger.info(f"[ADMIN] admin_broadcast_select_audience вызвана пользователем {update.effective_user.id}, callback_data: {query.data}")
+
     # Проверка прав администратора
     if not db.is_admin(update.effective_user.id):
         await query.edit_message_text("❌ У вас нет прав администратора.")
@@ -10582,6 +10586,8 @@ async def admin_broadcast_select_audience(update: Update, context: ContextTypes.
     audience = query.data.replace("broadcast_", "")
     context.user_data['broadcast_audience'] = audience
     context.user_data['broadcast_active'] = True  # FIX B: Устанавливаем флаг для прямой маршрутизации
+
+    logger.info(f"[FIX B] Установлен broadcast_active=True для пользователя {update.effective_user.id}, audience={audience}")
 
     audience_text = {
         'all': '👥 Всем пользователям',
