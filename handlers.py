@@ -1,6 +1,7 @@
 import logging
 import re
 import asyncio
+from datetime import datetime
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -10337,6 +10338,12 @@ async def receive_suggestion_text(update: Update, context: ContextTypes.DEFAULT_
     """Получение текста предложения"""
     logger.info(f"[DEBUG] receive_suggestion_text ВЫЗВАН! Пользователь: {update.effective_user.id}")
 
+    # КРИТИЧНО: Очищаем флаг сразу, чтобы предотвратить двойную обработку
+    # Если произойдет ошибка ниже, флаг уже будет очищен и handle_chat_message
+    # в group=1 не обработает это сообщение повторно
+    context.user_data.pop('suggestion_active', None)
+    logger.info(f"[FIX] Флаг suggestion_active очищен для пользователя {update.effective_user.id}")
+
     message = update.message
     text = message.text
 
@@ -10385,8 +10392,7 @@ async def receive_suggestion_text(update: Update, context: ContextTypes.DEFAULT_
         suggestion_id = db.create_suggestion(user_dict['id'], user_role, text)
         logger.info(f"✅ Предложение #{suggestion_id} создано пользователем {user_dict['id']}")
 
-        # Очищаем флаг
-        context.user_data.pop('suggestion_active', None)
+        # Флаг уже очищен в начале функции
 
         # Определяем правильное меню для возврата
         menu_callback = "show_worker_menu" if user_role in ['worker', 'both'] else "show_client_menu"
@@ -10411,8 +10417,7 @@ async def receive_suggestion_text(update: Update, context: ContextTypes.DEFAULT_
     except Exception as e:
         logger.error(f"Ошибка при создании предложения: {e}", exc_info=True)
 
-        # Очищаем флаг
-        context.user_data.pop('suggestion_active', None)
+        # Флаг уже очищен в начале функции
 
         # Определяем правильное меню для возврата
         menu_callback = "show_worker_menu" if user_role in ['worker', 'both'] else "show_client_menu"
@@ -10624,6 +10629,12 @@ async def admin_broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ У вас нет прав администратора.")
         return ConversationHandler.END
 
+    # КРИТИЧНО: Очищаем флаг сразу, чтобы предотвратить двойную обработку
+    # Если произойдет ошибка ниже, флаг уже будет очищен и handle_chat_message
+    # в group=1 не обработает это сообщение повторно
+    context.user_data.pop('broadcast_active', None)
+    logger.info(f"[FIX] Флаг broadcast_active очищен для пользователя {update.effective_user.id}")
+
     message_text = update.message.text
     audience = context.user_data.get('broadcast_audience', 'all')
     telegram_id = update.effective_user.id
@@ -10685,7 +10696,7 @@ async def admin_broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode="HTML"
     )
 
-    context.user_data.clear()
+    # Флаг уже очищен в начале функции
     return ConversationHandler.END
 
 
