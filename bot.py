@@ -978,19 +978,6 @@ def main():
         CommandHandler("check_expired_chats", handlers.check_expired_chats_command)
     )
 
-    # Глобальный обработчик сообщений для чатов
-    # ИСПРАВЛЕНО: Группа 1 чтобы выполнялось ПОСЛЕ ConversationHandler
-    # Это позволяет ConversationHandler обработать текст первым (группа 0 по умолчанию)
-    # Если ConversationHandler не обработал сообщение, то handle_chat_message обработает его для активных чатов
-    logger.info("🔧 [STARTUP] Регистрация handle_chat_message с group=1 (ПОСЛЕ ConversationHandler)")
-    application.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handlers.handle_chat_message
-        ),
-        group=1
-    )
-
     # --- ConversationHandler для админ-панели ---
     admin_conv_handler = ConversationHandler(
         entry_points=[
@@ -1060,6 +1047,7 @@ def main():
             CommandHandler("cancel", handlers.cancel_from_command),
         ],
         allow_reentry=True,
+        per_message=True,  # ИСПРАВЛЕНИЕ: Включаем per_message для корректной работы callback→message переходов
     )
 
     application.add_handler(admin_conv_handler)
@@ -1080,10 +1068,23 @@ def main():
             CommandHandler("cancel", handlers.cancel_from_command),
         ],
         allow_reentry=True,
+        per_message=True,  # ИСПРАВЛЕНИЕ: Включаем per_message для корректной работы callback→message переходов
     )
 
     # Важно: ConversationHandler должен быть в group=0 для приоритета
     application.add_handler(suggestion_conv_handler, group=0)
+
+    # Глобальный обработчик сообщений для чатов
+    # ИСПРАВЛЕНО: Регистрируется ПОСЛЕ всех ConversationHandlers в той же группе (group=0)
+    # ConversationHandlers проверяются первыми, если не обработали - handle_chat_message обработает
+    logger.info("🔧 [STARTUP] Регистрация handle_chat_message ПОСЛЕ всех ConversationHandlers в group=0")
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handlers.handle_chat_message
+        ),
+        group=0
+    )
 
     # Обработчик неизвестных команд
     application.add_handler(
