@@ -6926,10 +6926,19 @@ async def handle_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Обрабатывает сообщения, отправленные в активный чат"""
     logger.info(f"[DEBUG] handle_chat_message вызван для пользователя {update.effective_user.id}, текст: {update.message.text[:50] if update.message and update.message.text else 'N/A'}")
 
+    # FIX B: Прямая маршрутизация для гарантированной работы ConversationHandler
+    if context.user_data.get("suggestion_active"):
+        logger.info(f"[FIX B] Прямая маршрутизация в receive_suggestion_text")
+        return await receive_suggestion_text(update, context)
+
+    if context.user_data.get("broadcast_active"):
+        logger.info(f"[FIX B] Прямая маршрутизация в admin_broadcast_send")
+        return await admin_broadcast_send(update, context)
+
     # КРИТИЧНО: Проверяем, не находится ли пользователь в ConversationHandler
     # Если находится - пропускаем, чтобы ConversationHandler обработал сообщение
     conversation_keys = ['review_order_id', 'review_bid_id', 'review_rating',
-                        'suggestion_active', 'adding_photos', 'bid_order_id',
+                        'adding_photos', 'bid_order_id',
                         'uploading_work_photo_order_id', 'order_client_id']
     if any(key in context.user_data for key in conversation_keys):
         # Пользователь в ConversationHandler, пропускаем
@@ -10572,6 +10581,7 @@ async def admin_broadcast_select_audience(update: Update, context: ContextTypes.
 
     audience = query.data.replace("broadcast_", "")
     context.user_data['broadcast_audience'] = audience
+    context.user_data['broadcast_active'] = True  # FIX B: Устанавливаем флаг для прямой маршрутизации
 
     audience_text = {
         'all': '👥 Всем пользователям',

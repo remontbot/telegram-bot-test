@@ -1047,6 +1047,7 @@ def main():
             CommandHandler("cancel", handlers.cancel_from_command),
         ],
         allow_reentry=True,
+        per_message=True,  # ИСПРАВЛЕНИЕ: Включаем per_message для корректной работы callback→message переходов
     )
 
     application.add_handler(admin_conv_handler)
@@ -1067,6 +1068,7 @@ def main():
             CommandHandler("cancel", handlers.cancel_from_command),
         ],
         allow_reentry=True,
+        per_message=True,  # ИСПРАВЛЕНИЕ: Включаем per_message для корректной работы callback→message переходов
     )
 
     # Важно: ConversationHandler должен быть в group=0 для приоритета
