@@ -16,7 +16,7 @@ import db
 import handlers
 
 # Версия бота
-BOT_VERSION = "1.2.0"  # Обновлено: постоянная PostgreSQL БД
+BOT_VERSION = "1.2.1 - AD PLACEMENT FIX"  # КРИТИЧНО: Исправлена маршрутизация рекламы в ADMIN_MENU
 
 # --- НАЧАЛО ИСПРАВЛЕННОГО БЛОКА ДЛЯ ИМПОРТА CONFIG.PY И ЗАГРУЗКИ ENV ---
 # Попытка импортировать config, если он есть рядом (локально)
@@ -98,6 +98,14 @@ def main():
     db.add_admin_user(SUPER_ADMIN_TELEGRAM_ID, role='super_admin')
 
     token = get_bot_token()
+
+    logger.info("=" * 80)
+    logger.info(f"🚀 ЗАПУСК БОТА - ВЕРСИЯ: {BOT_VERSION}")
+    logger.info("✅ ВКЛЮЧЕНЫ ИСПРАВЛЕНИЯ:")
+    logger.info("   - Обработчики admin_ad_placement и admin_ad_confirm в ADMIN_MENU")
+    logger.info("   - Прямая маршрутизация для broadcast, suggestions, ads")
+    logger.info("   - Автоматическая отметка предложений как 'viewed'")
+    logger.info("=" * 80)
 
     application = ApplicationBuilder().token(token).build()
 
