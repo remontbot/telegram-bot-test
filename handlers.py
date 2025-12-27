@@ -1,7 +1,7 @@
 import logging
 import re
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -10890,8 +10890,12 @@ async def admin_ad_placement(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer()
 
+    logger.info(f"[ADMIN] admin_ad_placement вызвана пользователем {update.effective_user.id}, callback_data: {query.data}")
+
     placement = query.data.replace("ad_placement_", "")
     context.user_data['ad_data']['placement'] = placement
+
+    logger.info(f"[AD] Выбрано размещение: {placement}")
 
     ad_data = context.user_data['ad_data']
     placement_text = "🏠 Баннер в меню" if placement == "menu_banner" else "☀️ Утренняя рассылка"
@@ -10921,6 +10925,7 @@ async def admin_ad_placement(update: Update, context: ContextTypes.DEFAULT_TYPE)
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+    logger.info(f"[AD] Переход в состояние AD_CONFIRM")
     return AD_CONFIRM
 
 
@@ -10929,7 +10934,10 @@ async def admin_ad_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    logger.info(f"[ADMIN] admin_ad_confirm вызвана пользователем {update.effective_user.id}, callback_data: {query.data}")
+
     if query.data == "ad_confirm_no":
+        logger.info(f"[AD] Создание рекламы отменено пользователем {update.effective_user.id}")
         await query.edit_message_text(
             "❌ Создание рекламы отменено.",
             parse_mode="HTML"
@@ -10940,24 +10948,43 @@ async def admin_ad_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Создаем рекламу
     ad_data = context.user_data['ad_data']
 
+    logger.info(f"[AD] Создание рекламы: {ad_data}")
+
     try:
+        # Вычисляем даты
+        now = datetime.now()
+        start_date = now.strftime("%Y-%m-%d %H:%M:%S")
+        end_date = (now + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")  # 30 дней
+
         ad_id = db.create_ad(
             title=ad_data['title'],
-            text=ad_data['text'],
-            url=ad_data.get('url'),
+            description=ad_data['text'],  # ИСПРАВЛЕНО: text -> description
+            photo_file_id=None,  # У нас нет фото в текущей реализации
             button_text=ad_data.get('button_text'),
+            button_url=ad_data.get('url'),  # ИСПРАВЛЕНО: url -> button_url
+            target_audience='all',  # Показываем всем
             placement=ad_data['placement'],
-            created_by=update.effective_user.id
+            start_date=start_date,
+            end_date=end_date,
+            max_views_per_user_per_day=3,  # Максимум 3 показа в день
+            created_by=update.effective_user.id,
+            categories=None  # Без таргетинга по категориям
         )
+
+        placement_text = "🏠 Баннер в меню" if ad_data['placement'] == "menu_banner" else "☀️ Утренняя рассылка"
+
+        logger.info(f"✅ Реклама создана: ID={ad_id}")
 
         await query.edit_message_text(
             f"✅ <b>Реклама создана!</b>\n\n"
-            f"ID рекламы: #{ad_id}\n"
-            f"Размещение: {ad_data['placement']}\n\n"
+            f"📺 ID рекламы: #{ad_id}\n"
+            f"📍 Размещение: {placement_text}\n"
+            f"📅 Действует 30 дней (до {end_date.split()[0]})\n"
+            f"👀 Максимум 3 показа в день на пользователя\n\n"
             "Реклама будет показана пользователям согласно выбранному размещению.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("⬅️ Админ-панель", callback_data="admin_panel")
+                InlineKeyboardButton("🔙 В админ панель", callback_data="admin_panel")
             ]])
         )
 
@@ -11887,12 +11914,29 @@ async def admin_suggestions_filter(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     await query.answer()
 
+    logger.info(f"[ADMIN] admin_suggestions_filter вызвана пользователем {update.effective_user.id}, callback_data: {query.data}")
+
     # Извлекаем статус из callback_data: admin_suggestions_new/viewed/resolved
     status = query.data.split("_")[-1]  # new / viewed / resolved
 
     # Получаем предложения по статусу
     suggestions = db.get_suggestions_by_status(status)
     total_count = len(suggestions) if suggestions else 0
+
+    logger.info(f"[SUGGESTIONS] Найдено {total_count} предложений со статусом '{status}'")
+
+    # КРИТИЧНО: Если просматриваем НОВЫЕ предложения - отмечаем их как ПРОСМОТРЕННЫЕ
+    if status == 'new' and suggestions:
+        marked_count = 0
+        for suggestion in suggestions[:20]:  # Отмечаем только те, что показываем
+            suggestion_dict = dict(suggestion)
+            try:
+                db.update_suggestion_status(suggestion_dict['id'], 'viewed')
+                marked_count += 1
+            except Exception as e:
+                logger.error(f"Ошибка при обновлении статуса предложения #{suggestion_dict['id']}: {e}")
+
+        logger.info(f"✅ Отмечено {marked_count} предложений как 'viewed'")
 
     if not suggestions:
         await query.edit_message_text(
